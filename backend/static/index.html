@@ -1,0 +1,2610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shoonya AI Trade Copilot</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        /* Base Colors & Variables */
+        :root {
+            --bg-deep: #080b11;
+            --bg-panel: #111622;
+            --bg-panel-light: #182030;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(255, 255, 255, 0.15);
+            
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            
+            --color-bullish: #10b981;
+            --color-bearish: #ef4444;
+            --color-neutral: #f59e0b;
+            --color-primary: #6366f1;
+            
+            --glow-bullish: rgba(16, 185, 129, 0.15);
+            --glow-bearish: rgba(239, 68, 68, 0.15);
+            --glow-neutral: rgba(245, 158, 11, 0.15);
+            --glow-primary: rgba(99, 102, 241, 0.2);
+        }
+
+        /* Reset & Layout */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-deep);
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        h1, h2, h3, .font-outfit {
+            font-family: 'Outfit', sans-serif;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        /* App Wrapper */
+        .app-container {
+            display: grid;
+            grid-template-rows: 64px 1fr;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            background-color: var(--bg-panel);
+            border-bottom: 1px solid var(--border-color);
+            z-index: 10;
+        }
+
+        .logo-section {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--color-primary), #a855f7);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            color: white;
+            box-shadow: 0 0 15px var(--glow-primary);
+        }
+
+        .logo-text {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            background: linear-gradient(to right, #ffffff, #93c5fd);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background-color: var(--bg-panel-light);
+            padding: 6px 14px;
+            border-radius: 99px;
+            border: 1px solid var(--border-color);
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-online { background-color: var(--color-bullish); box-shadow: 0 0 8px var(--color-bullish); }
+        .status-offline { background-color: var(--color-bearish); box-shadow: 0 0 8px var(--color-bearish); }
+
+        .balance-val {
+            font-family: 'Outfit', sans-serif;
+            color: #60a5fa;
+            font-weight: 600;
+        }
+
+        /* Main Workspace Grid */
+        main {
+            display: grid;
+            grid-template-columns: 280px 1fr 340px;
+            overflow: hidden;
+            height: 100%;
+        }
+
+        /* Left Sidebar: Market Watch & Search */
+        .sidebar {
+            background-color: var(--bg-panel);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-padding {
+            padding: 16px;
+        }
+
+        .search-container {
+            position: relative;
+            margin-bottom: 16px;
+        }
+
+        .search-input {
+            width: 100%;
+            background-color: var(--bg-panel-light);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 10px 12px 10px 36px;
+            border-radius: 8px;
+            font-size: 13px;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .search-input:focus {
+            border-color: var(--color-primary);
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.15);
+        }
+
+        .search-icon-svg {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 16px;
+            height: 16px;
+            fill: var(--text-secondary);
+            pointer-events: none;
+        }
+
+        /* Search Results Overlay */
+        .search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            width: 100%;
+            background-color: var(--bg-panel-light);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-top: 4px;
+            max-height: 250px;
+            overflow-y: auto;
+            z-index: 20;
+            display: none;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+        }
+
+        .search-item {
+            padding: 10px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+        }
+
+        .search-item:hover {
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .search-symbol {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .search-cname {
+            color: var(--text-muted);
+            font-size: 11px;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 150px;
+        }
+
+        .search-exch-badge {
+            background-color: rgba(99, 102, 241, 0.15);
+            color: #818cf8;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        /* Watchlist list */
+        .watchlist-title {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-muted);
+            font-weight: 700;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .watchlist-scroll {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .watchlist-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .watchlist-item:hover {
+            background-color: rgba(255, 255, 255, 0.03);
+        }
+
+        .watchlist-item.active {
+            background-color: rgba(99, 102, 241, 0.08);
+            border-left: 3px solid var(--color-primary);
+        }
+
+        .wl-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .wl-sym {
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .wl-name {
+            font-size: 11px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 130px;
+        }
+
+        .wl-price-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+        }
+
+        .wl-price {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .wl-change {
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .text-bullish { color: var(--color-bullish); }
+        .text-bearish { color: var(--color-bearish); }
+        .text-neutral { color: var(--color-neutral); }
+
+        /* Center Content: Chart and Portfolio tabs */
+        .center-content {
+            display: grid;
+            grid-template-rows: 3fr 2fr;
+            overflow: hidden;
+            border-right: 1px solid var(--border-color);
+        }
+
+        /* Chart Section */
+        .chart-section {
+            background-color: rgba(8, 11, 17, 0.5);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border-bottom: 1px solid var(--border-color);
+            position: relative;
+        }
+
+        .chart-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background-color: var(--bg-panel);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .chart-title-info {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .chart-active-symbol {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .chart-active-company {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .chart-active-price-info {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+        }
+
+        .chart-active-ltp {
+            font-family: 'Outfit', sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .chart-interval-selector {
+            display: flex;
+            background-color: var(--bg-panel-light);
+            border-radius: 6px;
+            padding: 2px;
+            border: 1px solid var(--border-color);
+        }
+
+        .interval-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .interval-btn.active {
+            background-color: var(--color-primary);
+            color: white;
+            box-shadow: 0 0 8px var(--glow-primary);
+        }
+
+        .chart-container-div {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #candlestickChart {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        /* Tooltip style on Chart */
+        .chart-tooltip-data {
+            position: absolute;
+            top: 10px;
+            left: 15px;
+            background-color: rgba(17, 22, 34, 0.85);
+            backdrop-filter: blur(4px);
+            border: 1px solid var(--border-color);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 10px;
+            display: flex;
+            gap: 12px;
+            z-index: 5;
+            pointer-events: none;
+            color: var(--text-secondary);
+        }
+
+        .tooltip-val {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Portfolio / Tabs section */
+        .portfolio-section {
+            background-color: var(--bg-panel);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .tab-headers {
+            display: flex;
+            background-color: rgba(0, 0, 0, 0.15);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            padding: 14px 24px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            position: relative;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .tab-btn.active {
+            color: var(--text-primary);
+        }
+
+        .tab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background-color: var(--color-primary);
+            box-shadow: 0 0 10px var(--color-primary);
+        }
+
+        .tab-content-container {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .tab-panel {
+            display: none;
+            padding: 12px;
+        }
+
+        .tab-panel.active {
+            display: block;
+        }
+
+        /* Portfolio Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            text-align: left;
+        }
+
+        th {
+            color: var(--text-secondary);
+            font-weight: 500;
+            padding: 10px;
+            border-bottom: 1px solid var(--border-color);
+            background-color: rgba(255, 255, 255, 0.01);
+        }
+
+        td {
+            padding: 12px 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            vertical-align: middle;
+        }
+
+        tr:hover td {
+            background-color: rgba(255, 255, 255, 0.01);
+        }
+
+        .table-badge {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            display: inline-block;
+        }
+
+        .badge-buy { background-color: rgba(16, 185, 129, 0.15); color: var(--color-bullish); }
+        .badge-sell { background-color: rgba(239, 68, 68, 0.15); color: var(--color-bearish); }
+        .badge-pending { background-color: rgba(245, 158, 11, 0.15); color: var(--color-neutral); }
+        .badge-complete { background-color: rgba(99, 102, 241, 0.15); color: #818cf8; }
+        .badge-cancelled { background-color: rgba(255, 255, 255, 0.08); color: var(--text-muted); }
+
+        .btn-table-action {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: var(--color-bearish);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 10px;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        .btn-table-action:hover {
+            background-color: var(--color-bearish);
+            color: white;
+        }
+
+        .empty-portfolio-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+            text-align: center;
+            font-size: 12px;
+        }
+
+        .empty-icon {
+            width: 48px;
+            height: 48px;
+            stroke: var(--text-muted);
+            margin-bottom: 12px;
+            opacity: 0.5;
+        }
+
+        /* Right Panel: AI Analyst and Order Entry */
+        .right-sidebar {
+            background-color: var(--bg-panel);
+            display: grid;
+            grid-template-rows: 1.2fr 1fr;
+            overflow: hidden;
+        }
+
+        /* AI Analysis Card */
+        .ai-panel {
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 14px;
+            font-weight: 700;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .ai-advice-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .ai-card-glow {
+            background-color: var(--bg-panel-light);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .ai-card-glow.glow-BUY {
+            border-color: rgba(16, 185, 129, 0.3);
+            box-shadow: 0 0 25px var(--glow-bullish);
+        }
+
+        .ai-card-glow.glow-SELL {
+            border-color: rgba(239, 68, 68, 0.3);
+            box-shadow: 0 0 25px var(--glow-bearish);
+        }
+
+        .ai-card-glow.glow-HOLD {
+            border-color: rgba(245, 158, 11, 0.3);
+            box-shadow: 0 0 25px var(--glow-neutral);
+        }
+
+        /* Circular confidence meter */
+        .confidence-circle {
+            position: relative;
+            width: 90px;
+            height: 90px;
+            margin-bottom: 12px;
+        }
+
+        .confidence-circle svg {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .conf-track {
+            fill: none;
+            stroke: rgba(255, 255, 255, 0.05);
+            stroke-width: 8;
+        }
+
+        .conf-fill {
+            fill: none;
+            stroke-width: 8;
+            stroke-linecap: round;
+            transition: stroke-dasharray 0.5s ease;
+        }
+
+        .glow-BUY .conf-fill { stroke: var(--color-bullish); }
+        .glow-SELL .conf-fill { stroke: var(--color-bearish); }
+        .glow-HOLD .conf-fill { stroke: var(--color-neutral); }
+
+        .conf-label-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .conf-pct {
+            font-family: 'Outfit', sans-serif;
+            font-size: 20px;
+            font-weight: 800;
+        }
+
+        .conf-caption {
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .recommendation-badge-large {
+            font-family: 'Outfit', sans-serif;
+            font-size: 24px;
+            font-weight: 900;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+
+        /* Targets grid */
+        .ai-targets-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            width: 100%;
+            margin-top: 14px;
+        }
+
+        .target-box {
+            background-color: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            padding: 8px 4px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .target-box-label {
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            margin-bottom: 2px;
+        }
+
+        .target-box-val {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700;
+            font-size: 12px;
+        }
+
+        .ai-rationale-text {
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-secondary);
+            text-align: justify;
+            background-color: var(--bg-panel-light);
+            border: 1px solid var(--border-color);
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .btn-ai-analyze {
+            width: 100%;
+            background: linear-gradient(135deg, var(--color-primary), #4f46e5);
+            border: none;
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 15px var(--glow-primary);
+        }
+
+        .btn-ai-analyze:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+        }
+
+        .btn-ai-analyze:active {
+            transform: translateY(0);
+        }
+
+        .btn-ai-analyze:disabled {
+            background: var(--bg-panel-light);
+            color: var(--text-muted);
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+
+        /* Order Panel */
+        .order-panel {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 16px;
+            background-color: rgba(255, 255, 255, 0.01);
+        }
+
+        .order-title {
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+            color: var(--text-secondary);
+        }
+
+        .order-type-tabs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+
+        .order-action-btn {
+            border: 1px solid var(--border-color);
+            background-color: var(--bg-panel-light);
+            color: var(--text-secondary);
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 12px;
+            transition: all 0.2s ease;
+        }
+
+        .order-action-btn.action-buy.active {
+            background-color: var(--color-bullish);
+            color: white;
+            border-color: var(--color-bullish);
+            box-shadow: 0 0 10px var(--glow-bullish);
+        }
+
+        .order-action-btn.action-sell.active {
+            background-color: var(--color-bearish);
+            color: white;
+            border-color: var(--color-bearish);
+            box-shadow: 0 0 10px var(--glow-bearish);
+        }
+
+        .order-form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .form-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .form-input {
+            background-color: var(--bg-panel-light);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px 10px;
+            color: var(--text-primary);
+            font-family: 'Outfit', sans-serif;
+            font-size: 13px;
+            outline: none;
+            width: 100%;
+        }
+
+        .form-input:focus {
+            border-color: var(--color-primary);
+        }
+
+        .form-select {
+            background-color: var(--bg-panel-light);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px 10px;
+            color: var(--text-primary);
+            font-size: 12px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .form-select:focus {
+            border-color: var(--color-primary);
+        }
+
+        .btn-place-order {
+            width: 100%;
+            background-color: var(--color-primary);
+            border: none;
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: auto;
+        }
+
+        .btn-place-order.btn-buy {
+            background-color: var(--color-bullish);
+            box-shadow: 0 4px 15px var(--glow-bullish);
+        }
+
+        .btn-place-order.btn-sell {
+            background-color: var(--color-bearish);
+            box-shadow: 0 4px 15px var(--glow-bearish);
+        }
+
+        /* Config Modal Overlay */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .modal-box {
+            background-color: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            width: 500px;
+            max-width: 90%;
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            transform: scale(0.95);
+            transition: transform 0.2s ease;
+        }
+
+        .modal-overlay.active .modal-box {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .btn-close-modal {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 20px;
+            line-height: 1;
+        }
+
+        .modal-body {
+            padding: 20px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        /* Form styling inside Modal */
+        .modal-form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .modal-form-full {
+            grid-column: span 2;
+        }
+
+        .toggle-switch-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: var(--bg-panel-light);
+            border: 1px solid var(--border-color);
+            padding: 10px 14px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+
+        .toggle-label-group {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .toggle-title {
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .toggle-desc {
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+
+        /* Switch UI */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 22px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #374151;
+            transition: .3s;
+            border-radius: 34px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: var(--color-primary);
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(22px);
+        }
+
+        .btn-modal-save {
+            width: 100%;
+            background-color: var(--color-primary);
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            border: none;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px var(--glow-primary);
+        }
+
+        .btn-modal-save:hover {
+            background-color: #4f46e5;
+        }
+
+        /* Loading spinner overlays */
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(8, 11, 17, 0.7);
+            backdrop-filter: blur(2px);
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        .loading-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid rgba(99, 102, 241, 0.1);
+            border-radius: 50%;
+            border-top-color: var(--color-primary);
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        /* Confirmation Order Modal specific */
+        .confirm-detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            font-size: 13px;
+        }
+
+        .confirm-val-bold {
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header>
+            <div class="logo-section">
+                <div class="logo-icon">S</div>
+                <div class="logo-text">Shoonya AI Trade Copilot</div>
+            </div>
+            
+            <div class="status-bar">
+                <div class="status-pill">
+                    <span id="connectionDot" class="status-indicator status-offline"></span>
+                    <span id="connectionLabel">Shoonya Disconnected</span>
+                </div>
+                
+                <div class="status-pill">
+                    <span>Balance: </span>
+                    <span id="headerBalance" class="balance-val">₹0.00</span>
+                </div>
+
+                <button id="btnOpenSettings" class="status-pill" style="cursor:pointer; hover:background:rgba(255,255,255,0.05)">
+                    <svg style="width:16px; height:16px; fill:var(--text-secondary);" viewBox="0 0 24 24">
+                        <path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/>
+                    </svg>
+                    <span>Config Settings</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main>
+            <!-- Left Sidebar: Watchlist & Search -->
+            <div class="sidebar">
+                <div class="panel-padding" style="padding-bottom:8px;">
+                    <div class="search-container">
+                        <svg class="search-icon-svg" viewBox="0 0 24 24">
+                            <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                        </svg>
+                        <input id="searchInput" type="text" placeholder="Search stock (e.g. RELIANCE)..." class="search-input" autocomplete="off">
+                        
+                        <!-- Search Dropdown -->
+                        <div id="searchResults" class="search-results"></div>
+                    </div>
+                </div>
+
+                <div class="panel-padding wl-title-container" style="padding-top:0; padding-bottom:8px;">
+                    <div class="watchlist-title">
+                        <span>Markets Watch</span>
+                        <span style="font-size:10px; color:var(--color-primary)">NSE</span>
+                    </div>
+                </div>
+
+                <!-- Watchlist Items -->
+                <div class="watchlist-scroll" id="watchlistList">
+                    <!-- Dynamic Items loaded here -->
+                </div>
+            </div>
+
+            <!-- Center Content: Chart and Portfolio -->
+            <div class="center-content">
+                <!-- Candlestick Chart -->
+                <div class="chart-section">
+                    <div class="chart-header">
+                        <div class="chart-title-info">
+                            <span id="activeSym" class="chart-active-symbol">RELIANCE-EQ</span>
+                            <span id="activeCname" class="chart-active-company">Reliance Industries Limited</span>
+                        </div>
+                        <div class="chart-active-price-info">
+                            <span id="activeLtp" class="chart-active-ltp text-bullish">₹2194.20</span>
+                            <span id="activeChange" class="wl-change text-bullish">+0.81%</span>
+                        </div>
+                        <div class="chart-interval-selector">
+                            <button class="interval-btn" data-val="1">1M</button>
+                            <button class="interval-btn active" data-val="5">5M</button>
+                            <button class="interval-btn" data-val="15">15M</button>
+                            <button class="interval-btn" data-val="60">1H</button>
+                        </div>
+                    </div>
+                    
+                    <div class="chart-container-div" id="chartContainer">
+                        <!-- Canvas Chart Tooltip -->
+                        <div id="chartTooltip" class="chart-tooltip-data" style="display:none;">
+                            <div>O: <span class="tooltip-val" id="tooltipO">-</span></div>
+                            <div>H: <span class="tooltip-val" id="tooltipH">-</span></div>
+                            <div>L: <span class="tooltip-val" id="tooltipL">-</span></div>
+                            <div>C: <span class="tooltip-val" id="tooltipC">-</span></div>
+                            <div>RSI: <span class="tooltip-val" id="tooltipRsi">-</span></div>
+                            <div>MACD: <span class="tooltip-val" id="tooltipMacd">-</span></div>
+                        </div>
+                        
+                        <canvas id="candlestickChart"></canvas>
+                        
+                        <div id="chartLoader" class="loading-overlay">
+                            <div class="spinner"></div>
+                            <div class="loading-text">Loading market data charts...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Portfolio & Tracker Section -->
+                <div class="portfolio-section">
+                    <div class="tab-headers">
+                        <button class="tab-btn active" onclick="switchTab('orders')">Order Book</button>
+                        <button class="tab-btn" onclick="switchTab('positions')">Net Positions</button>
+                        <button class="tab-btn" onclick="switchTab('holdings')">Demat Holdings</button>
+                    </div>
+
+                    <div class="tab-content-container">
+                        <!-- Orders Tab -->
+                        <div id="tabPanel-orders" class="tab-panel active">
+                            <table id="tableOrders">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Symbol</th>
+                                        <th>Type</th>
+                                        <th>Product</th>
+                                        <th>Qty</th>
+                                        <th>Price</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="bodyOrders">
+                                    <!-- Dynamic rows -->
+                                </tbody>
+                            </table>
+                            <div id="emptyOrders" class="empty-portfolio-state">
+                                <svg class="empty-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+                                </svg>
+                                <p>No orders placed yet. Find a stock and start trading.</p>
+                            </div>
+                        </div>
+
+                        <!-- Positions Tab -->
+                        <div id="tabPanel-positions" class="tab-panel">
+                            <table id="tablePositions">
+                                <thead>
+                                    <tr>
+                                        <th>Symbol</th>
+                                        <th>Product</th>
+                                        <th>Net Qty</th>
+                                        <th>Avg Price</th>
+                                        <th>LTP</th>
+                                        <th>M2M Profit</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="bodyPositions">
+                                    <!-- Dynamic rows -->
+                                </tbody>
+                            </table>
+                            <div id="emptyPositions" class="empty-portfolio-state">
+                                <svg class="empty-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                </svg>
+                                <p>No open net positions. Place orders to start paper/live trading.</p>
+                            </div>
+                        </div>
+
+                        <!-- Holdings Tab -->
+                        <div id="tabPanel-holdings" class="tab-panel">
+                            <table id="tableHoldings">
+                                <thead>
+                                    <tr>
+                                        <th>Company</th>
+                                        <th>Symbol</th>
+                                        <th>Holding Qty</th>
+                                        <th>Avg Cost</th>
+                                        <th>LTP</th>
+                                        <th>Total P&L</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="bodyHoldings">
+                                    <!-- Dynamic rows -->
+                                </tbody>
+                            </table>
+                            <div id="emptyHoldings" class="empty-portfolio-state">
+                                <svg class="empty-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                                </svg>
+                                <p>No equity holdings in Demat.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Sidebar: AI Advice and Order Entry -->
+            <div class="right-sidebar">
+                <!-- AI Advice Panel -->
+                <div class="ai-panel">
+                    <div class="panel-header">
+                        <span>AI Analyst Copilot</span>
+                        <span id="aiModelBadge" style="font-size:9px; background:rgba(99,102,241,0.15); color:#818cf8; padding:3px 6px; border-radius:4px; font-weight:600;">GEMINI-1.5</span>
+                    </div>
+
+                    <div class="ai-advice-scroll">
+                        <button id="btnAiAnalyze" class="btn-ai-analyze">
+                            <svg style="width:16px; height:16px; fill:currentColor" viewBox="0 0 24 24">
+                                <path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7zm2.85 11.1l-.85.6V16h-4v-2.3l-.85-.6C8.8 12.1 8 10.61 8 9c0-2.21 1.79-4 4-4s4 1.79 4 4c0 1.61-.8 3.1-2.15 4.1z"/>
+                            </svg>
+                            <span>Analyze Stock with AI</span>
+                        </button>
+
+                        <!-- AI Advice Card Container -->
+                        <div id="aiCardContainer" class="ai-card-glow glow-HOLD" style="display:none;">
+                            <div class="confidence-circle">
+                                <svg>
+                                    <circle class="conf-track" cx="45" cy="45" r="38"></circle>
+                                    <circle id="confFill" class="conf-fill" cx="45" cy="45" r="38" stroke-dasharray="238.7" stroke-dashoffset="119.3"></circle>
+                                </svg>
+                                <div class="conf-label-center">
+                                    <span id="confPct" class="conf-pct">50%</span>
+                                    <span class="conf-caption">Conf.</span>
+                                </div>
+                            </div>
+                            
+                            <div class="recommendation-badge-large" id="aiRecommendText">HOLD</div>
+                            
+                            <div class="ai-targets-grid">
+                                <div class="target-box">
+                                    <div class="target-box-label">Entry</div>
+                                    <div id="aiEntryVal" class="target-box-val">--</div>
+                                </div>
+                                <div class="target-box" style="border-color:rgba(16,185,129,0.2); color:var(--color-bullish)">
+                                    <div class="target-box-label">Target</div>
+                                    <div id="aiTargetVal" class="target-box-val">--</div>
+                                </div>
+                                <div class="target-box" style="border-color:rgba(239,68,68,0.2); color:var(--color-bearish)">
+                                    <div class="target-box-label">StopLoss</div>
+                                    <div id="aiSlVal" class="target-box-val">--</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Rationale text -->
+                        <div id="aiRationale" class="ai-rationale-text" style="display:none;">
+                            Click "Analyze Stock with AI" to let Gemini search candle patterns and technical indicators for recommendations.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Order Ticket Entry -->
+                <div class="order-panel">
+                    <div class="order-title">Place Order Ticket</div>
+                    
+                    <div class="order-type-tabs">
+                        <button id="orderActionB" class="order-action-btn action-buy active" onclick="setOrderAction('B')">BUY</button>
+                        <button id="orderActionS" class="order-action-btn action-sell" onclick="setOrderAction('S')">SELL</button>
+                    </div>
+
+                    <div class="order-form-grid">
+                        <div class="form-group">
+                            <label class="form-label">Order Type</label>
+                            <select id="orderPriceType" class="form-select" onchange="togglePriceField()">
+                                <option value="MKT">MARKET</option>
+                                <option value="LMT">LIMIT</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Product</label>
+                            <select id="orderProduct" class="form-select">
+                                <option value="I">INTRADAY (MIS)</option>
+                                <option value="C">DELIVERY (CNC)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Quantity</label>
+                            <input id="orderQty" type="number" value="1" min="1" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Price (₹)</label>
+                            <input id="orderPrice" type="number" step="0.05" value="0.00" class="form-input" disabled>
+                        </div>
+                    </div>
+
+                    <button id="btnPlaceOrder" class="btn-place-order btn-buy" onclick="clickPlaceOrderButton()">BUY RELIANCE-EQ</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Credentials Config Modal -->
+    <div id="settingsModal" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <span class="modal-title font-outfit">Credentials & App Settings</span>
+                <button id="btnSettingsClose" class="btn-close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Modes Toggle -->
+                <div class="toggle-switch-container">
+                    <div class="toggle-label-group">
+                        <span class="toggle-title">Paper Trading Mode</span>
+                        <span class="toggle-desc">Simulate trades locally without risking capital.</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="configMockMode" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+
+                <!-- Shoonya API Settings -->
+                <h3 style="font-size:12px; text-transform:uppercase; color:var(--text-secondary); margin-bottom:10px; margin-top:14px; letter-spacing:0.5px;">Shoonya Credentials</h3>
+                <div class="modal-form-grid">
+                    <div class="form-group">
+                        <label class="form-label">User ID</label>
+                        <input type="text" id="configUserId" class="form-input" placeholder="User ID">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Password</label>
+                        <input type="password" id="configPassword" class="form-input" placeholder="Password">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Vendor Code</label>
+                        <input type="text" id="configVendorCode" class="form-input" placeholder="e.g. USER_U">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">API Key</label>
+                        <input type="password" id="configApiKey" class="form-input" placeholder="API Key Hash">
+                    </div>
+                    <div class="form-group modal-form-full">
+                        <label class="form-label">TOTP Secret Key (2FA)</label>
+                        <input type="password" id="configTotpSecret" class="form-input" placeholder="Base32 alphanumeric secret">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">IMEI / Device MAC</label>
+                        <input type="text" id="configImei" class="form-input" placeholder="abc1234">
+                    </div>
+                </div>
+
+                <!-- Gemini AI Settings -->
+                <h3 style="font-size:12px; text-transform:uppercase; color:var(--text-secondary); margin-bottom:10px; margin-top:14px; letter-spacing:0.5px;">AI Settings</h3>
+                <div class="form-group" style="margin-bottom:20px;">
+                    <label class="form-label">Google Gemini API Key</label>
+                    <input type="password" id="configGeminiApiKey" class="form-input" placeholder="AI API Key (Leave blank to use rules engine)">
+                </div>
+
+                <button id="btnSaveConfig" class="btn-modal-save">Save Settings & Authenticate</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Order Place Confirmation Modal -->
+    <div id="confirmOrderModal" class="modal-overlay">
+        <div class="modal-box" style="width:360px;">
+            <div class="modal-header">
+                <span class="modal-title font-outfit" id="confirmTitle">Confirm Order</span>
+                <button id="btnConfirmClose" class="btn-close-modal">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:16px;">
+                <div style="text-align:center; padding:10px 0; margin-bottom:12px;">
+                    <span id="confirmActionBadge" class="table-badge badge-buy" style="font-size:14px; padding:6px 16px; border-radius:6px;">BUY</span>
+                    <h2 id="confirmSymbol" style="font-size:22px; font-weight:800; margin-top:10px;">RELIANCE-EQ</h2>
+                    <p id="confirmCompany" style="font-size:12px; color:var(--text-secondary); margin-top:2px;">Reliance Industries Ltd</p>
+                </div>
+                
+                <div class="confirm-detail-row">
+                    <span style="color:var(--text-secondary)">Product Type</span>
+                    <span id="confirmProduct" class="confirm-val-bold">INTRADAY (MIS)</span>
+                </div>
+                <div class="confirm-detail-row">
+                    <span style="color:var(--text-secondary)">Order Price Type</span>
+                    <span id="confirmPriceType" class="confirm-val-bold">MARKET</span>
+                </div>
+                <div class="confirm-detail-row">
+                    <span style="color:var(--text-secondary)">Quantity</span>
+                    <span id="confirmQty" class="confirm-val-bold">1</span>
+                </div>
+                <div class="confirm-detail-row">
+                    <span style="color:var(--text-secondary)">Limit Price</span>
+                    <span id="confirmPrice" class="confirm-val-bold">₹0.00</span>
+                </div>
+                <div class="confirm-detail-row" style="border-bottom:none; margin-top:8px;">
+                    <span style="color:var(--text-secondary)">Estimated Margin</span>
+                    <span id="confirmEstimateCost" class="confirm-val-bold" style="color:#60a5fa">₹0.00</span>
+                </div>
+
+                <button id="btnConfirmExecute" class="btn-place-order btn-buy" style="margin-top:20px;" onclick="executeConfirmedOrder()">EXECUTE ORDER</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JS Logic -->
+    <script>
+        const API_BASE = ""; // Relative URL, proxies automatically
+        
+        // App State
+        let state = {
+            watchlist: [
+                { token: "2885", exch: "NSE", tsym: "RELIANCE-EQ", cname: "RELIANCE INDUSTRIES LTD", lp: "2194.20", pc: "0.81" },
+                { token: "1594", exch: "NSE", tsym: "INFY-EQ", cname: "INFOSYS LIMITED", lp: "1420.50", pc: "-1.01" },
+                { token: "11536", exch: "NSE", tsym: "TCS-EQ", cname: "TATA CONSULTANCY SERV LT", lp: "3850.10", pc: "0.52" },
+                { token: "3045", exch: "NSE", tsym: "SBIN-EQ", cname: "STATE BANK OF INDIA", lp: "742.80", pc: "1.25" },
+                { token: "1333", exch: "NSE", tsym: "HDFCBANK-EQ", cname: "HDFC BANK LIMITED", lp: "1480.20", pc: "-0.22" },
+                { token: "3456", exch: "NSE", tsym: "TATAMOTORS-EQ", cname: "TATA MOTORS LIMITED", lp: "965.40", pc: "2.14" },
+                { token: "26000", exch: "NSE", tsym: "NIFTY-50", cname: "NIFTY 50 INDEX", lp: "22450.00", pc: "0.45" }
+            ],
+            activeScrip: { token: "2885", exch: "NSE", tsym: "RELIANCE-EQ", cname: "RELIANCE INDUSTRIES LTD", lp: "2194.20", pc: "0.81" },
+            candles: [],
+            interval: 5,
+            portfolio: { orders: [], positions: [], holdings: [], balance: 0, mock_mode: true },
+            orderForm: { action: "B", priceType: "MKT", product: "I", qty: 1, price: 0.0 }
+        };
+
+        // DOM elements
+        const searchInput = document.getElementById("searchInput");
+        const searchResults = document.getElementById("searchResults");
+        const watchlistList = document.getElementById("watchlistList");
+        const activeSym = document.getElementById("activeSym");
+        const activeCname = document.getElementById("activeCname");
+        const activeLtp = document.getElementById("activeLtp");
+        const activeChange = document.getElementById("activeChange");
+        const connectionDot = document.getElementById("connectionDot");
+        const connectionLabel = document.getElementById("connectionLabel");
+        const headerBalance = document.getElementById("headerBalance");
+        const chartLoader = document.getElementById("chartLoader");
+        const chartTooltip = document.getElementById("chartTooltip");
+        const canvas = document.getElementById("candlestickChart");
+        const ctx = canvas.getContext("2d");
+
+        // Tabs DOM
+        const bodyOrders = document.getElementById("bodyOrders");
+        const bodyPositions = document.getElementById("bodyPositions");
+        const bodyHoldings = document.getElementById("bodyHoldings");
+        const emptyOrders = document.getElementById("emptyOrders");
+        const emptyPositions = document.getElementById("emptyPositions");
+        const emptyHoldings = document.getElementById("emptyHoldings");
+
+        // AI DOM
+        const btnAiAnalyze = document.getElementById("btnAiAnalyze");
+        const aiCardContainer = document.getElementById("aiCardContainer");
+        const aiRationale = document.getElementById("aiRationale");
+        const confFill = document.getElementById("confFill");
+        const confPct = document.getElementById("confPct");
+        const aiRecommendText = document.getElementById("aiRecommendText");
+        const aiEntryVal = document.getElementById("aiEntryVal");
+        const aiTargetVal = document.getElementById("aiTargetVal");
+        const aiSlVal = document.getElementById("aiSlVal");
+        const aiModelBadge = document.getElementById("aiModelBadge");
+
+        // Settings modal DOM
+        const settingsModal = document.getElementById("settingsModal");
+        const btnOpenSettings = document.getElementById("btnOpenSettings");
+        const btnSettingsClose = document.getElementById("btnSettingsClose");
+        const btnSaveConfig = document.getElementById("btnSaveConfig");
+
+        // Confirm modal DOM
+        const confirmOrderModal = document.getElementById("confirmOrderModal");
+        const btnConfirmClose = document.getElementById("btnConfirmClose");
+        const btnConfirmExecute = document.getElementById("btnConfirmExecute");
+
+        // Initialize App
+        window.addEventListener("load", async () => {
+            setupCanvasResizing();
+            setupEventListeners();
+            loadSettings();
+            await fetchPortfolio();
+            selectScrip(state.activeScrip);
+            
+            // Poll for quotes and portfolio updates every 4 seconds to make the app dynamic!
+            setInterval(pollMarketData, 4000);
+        });
+
+        // Set up event listeners
+        function setupEventListeners() {
+            // Search Stock
+            searchInput.addEventListener("input", debounce(handleSearchInput, 300));
+            
+            // Close search dropdown on click outside
+            document.addEventListener("click", (e) => {
+                if (e.target !== searchInput) {
+                    searchResults.style.display = "none";
+                }
+            });
+
+            // Interval selectors
+            document.querySelectorAll(".interval-btn").forEach(btn => {
+                btn.addEventListener("click", (e) => {
+                    document.querySelectorAll(".interval-btn").forEach(b => b.classList.remove("active"));
+                    btn.classList.add("active");
+                    state.interval = parseInt(btn.dataset.val);
+                    fetchChartData();
+                });
+            });
+
+            // Settings Modal triggers
+            btnOpenSettings.addEventListener("click", openSettingsModal);
+            btnSettingsClose.addEventListener("click", () => settingsModal.classList.remove("active"));
+            btnSaveConfig.addEventListener("click", saveSettings);
+
+            // Confirm Modal trigger
+            btnConfirmClose.addEventListener("click", () => confirmOrderModal.classList.remove("active"));
+
+            // Canvas mouse hover tooltip
+            canvas.addEventListener("mousemove", handleCanvasHover);
+            canvas.addEventListener("mouseleave", () => {
+                chartTooltip.style.display = "none";
+                drawChart();
+            });
+        }
+
+        // Debounce helper
+        function debounce(func, wait) {
+            let timeout;
+            return function(...args) {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(this, args), wait);
+            };
+        }
+
+        // Setup canvas sizing & auto-resize
+        function setupCanvasResizing() {
+            const container = document.getElementById("chartContainer");
+            const resizeObserver = new ResizeObserver(entries => {
+                for (let entry of entries) {
+                    canvas.width = entry.contentRect.width;
+                    canvas.height = entry.contentRect.height;
+                    drawChart();
+                }
+            });
+            resizeObserver.observe(container);
+        }
+
+        // Poll market quotes for active scrip & watchlist
+        async function pollMarketData() {
+            // Update watchlist items
+            for (let item of state.watchlist) {
+                try {
+                    const res = await fetch(`/api/quote?exch=${item.exch}&token=${item.token}`);
+                    const data = await res.json();
+                    if (data.stat === "Ok") {
+                        item.lp = data.lp;
+                        item.pc = data.pc;
+                    }
+                } catch(e) {}
+            }
+            renderWatchlist();
+
+            // Update active symbol LTP
+            try {
+                const res = await fetch(`/api/quote?exch=${state.activeScrip.exch}&token=${state.activeScrip.token}`);
+                const data = await res.json();
+                if (data.stat === "Ok") {
+                    state.activeScrip.lp = data.lp;
+                    state.activeScrip.pc = data.pc;
+                    updateActiveScripHeader();
+                }
+            } catch(e) {}
+
+            // Update portfolio positions
+            await fetchPortfolio();
+        }
+
+        // Render watchlist
+        function renderWatchlist() {
+            watchlistList.innerHTML = "";
+            state.watchlist.forEach(item => {
+                const isSelected = item.token === state.activeScrip.token;
+                const changeNum = parseFloat(item.pc);
+                const colorClass = changeNum >= 0 ? "text-bullish" : "text-bearish";
+                const plusSign = changeNum >= 0 ? "+" : "";
+
+                const div = document.createElement("div");
+                div.className = `watchlist-item ${isSelected ? 'active' : ''}`;
+                div.innerHTML = `
+                    <div class="wl-meta">
+                        <span class="wl-sym">${item.tsym}</span>
+                        <span class="wl-name">${item.cname}</span>
+                    </div>
+                    <div class="wl-price-info">
+                        <span class="wl-price">₹${parseFloat(item.lp).toFixed(2)}</span>
+                        <span class="wl-change ${colorClass}">${plusSign}${changeNum.toFixed(2)}%</span>
+                    </div>
+                `;
+                div.addEventListener("click", () => selectScrip(item));
+                watchlistList.appendChild(div);
+            });
+        }
+
+        // Select a scrip
+        function selectScrip(scrip) {
+            state.activeScrip = scrip;
+            renderWatchlist();
+            updateActiveScripHeader();
+            
+            // Clear AI advice until analyzed
+            aiCardContainer.style.display = "none";
+            aiRationale.style.display = "none";
+            
+            // Update order button text
+            const btn = document.getElementById("btnPlaceOrder");
+            btn.innerText = `${state.orderForm.action === 'B' ? 'BUY' : 'SELL'} ${scrip.tsym}`;
+            
+            fetchChartData();
+        }
+
+        // Update selected scrip details
+        function updateActiveScripHeader() {
+            activeSym.innerText = state.activeScrip.tsym;
+            activeCname.innerText = state.activeScrip.cname;
+            
+            const lpNum = parseFloat(state.activeScrip.lp);
+            activeLtp.innerText = `₹${lpNum.toFixed(2)}`;
+            
+            const pcNum = parseFloat(state.activeScrip.pc);
+            activeChange.className = `wl-change ${pcNum >= 0 ? 'text-bullish' : 'text-bearish'}`;
+            activeChange.innerText = `${pcNum >= 0 ? '+' : ''}${pcNum.toFixed(2)}%`;
+        }
+
+        // Fetch historical candle chart data
+        async function fetchChartData() {
+            chartLoader.classList.add("active");
+            try {
+                const res = await fetch(`/api/candles?exch=${state.activeScrip.exch}&token=${state.activeScrip.token}&interval=${state.interval}`);
+                const data = await res.json();
+                if (data.stat === "Ok" && data.candles) {
+                    state.candles = data.candles;
+                    drawChart();
+                }
+            } catch (e) {
+                console.error("Error fetching chart data:", e);
+            } finally {
+                chartLoader.classList.remove("active");
+            }
+        }
+
+        // Custom Canvas Chart Engine
+        function drawChart() {
+            if (!state.candles || state.candles.length === 0) return;
+
+            // Clear Canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const paddingLeft = 10;
+            const paddingRight = 60;
+            const paddingTop = 25;
+            const paddingBottom = 60; // Extra room for indicator panels at bottom
+            
+            const chartWidth = canvas.width - paddingLeft - paddingRight;
+            const chartHeight = canvas.height - paddingTop - paddingBottom;
+
+            // Indicator heights
+            const rsiHeight = 40;
+            const macdHeight = 40;
+            const gap = 15;
+            
+            const mainChartHeight = chartHeight - rsiHeight - macdHeight - (gap * 2);
+
+            // Find price bounds (Main Chart)
+            let maxPrice = -Infinity;
+            let minPrice = Infinity;
+
+            // Consider SMA/EMA in price bounds
+            state.candles.forEach(c => {
+                maxPrice = Math.max(maxPrice, c.high, c.sma_20 || c.high, c.ema_50 || c.high);
+                minPrice = Math.min(minPrice, c.low, c.sma_20 || c.low, c.ema_50 || c.low);
+            });
+
+            const priceDiff = maxPrice - minPrice;
+            maxPrice += priceDiff * 0.05; // 5% padding
+            minPrice -= priceDiff * 0.05;
+            const priceRange = maxPrice - minPrice;
+
+            // Grid Line coordinates
+            const gridLinesCount = 5;
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.02)";
+            ctx.lineWidth = 1;
+            ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+            ctx.font = "9px Inter";
+            ctx.textAlign = "left";
+
+            // Draw horizontal grid lines & price labels
+            for (let i = 0; i <= gridLinesCount; i++) {
+                const price = maxPrice - (priceRange * (i / gridLinesCount));
+                const y = paddingTop + (mainChartHeight * (i / gridLinesCount));
+                
+                ctx.beginPath();
+                ctx.moveTo(paddingLeft, y);
+                ctx.lineTo(paddingLeft + chartWidth, y);
+                ctx.stroke();
+
+                // Draw price text on the right axis
+                ctx.fillText(price.toFixed(2), paddingLeft + chartWidth + 5, y + 3);
+            }
+
+            // Draw vertical axis (time) & columns
+            const candleCount = state.candles.length;
+            const candleWidth = chartWidth / candleCount;
+
+            // Draw time labels (every 15% candles)
+            const labelInterval = Math.max(1, Math.floor(candleCount / 5));
+            ctx.textAlign = "center";
+            ctx.fillStyle = "var(--text-muted)";
+            
+            for (let i = 0; i < candleCount; i += labelInterval) {
+                const x = paddingLeft + (i * candleWidth) + (candleWidth / 2);
+                const y = paddingTop + mainChartHeight + 5;
+                ctx.fillText(state.candles[i].time.split(" ")[1] || "", x, y + 10);
+            }
+
+            // Draw Candlesticks & Indicators (SMA/EMA)
+            let prevSmaX = null, prevSmaY = null;
+            let prevEmaX = null, prevEmaY = null;
+
+            state.candles.forEach((c, idx) => {
+                const x = paddingLeft + (idx * candleWidth);
+                const midX = x + (candleWidth / 2);
+                
+                // Candle coordinates
+                const openY = paddingTop + mainChartHeight * (1 - (c.open - minPrice) / priceRange);
+                const closeY = paddingTop + mainChartHeight * (1 - (c.close - minPrice) / priceRange);
+                const highY = paddingTop + mainChartHeight * (1 - (c.high - minPrice) / priceRange);
+                const lowY = paddingTop + mainChartHeight * (1 - (c.low - minPrice) / priceRange);
+
+                const isGreen = c.close >= c.open;
+                const candleColor = isGreen ? "var(--color-bullish)" : "var(--color-bearish)";
+
+                ctx.strokeStyle = candleColor;
+                ctx.fillStyle = candleColor;
+
+                // Draw wicks
+                ctx.beginPath();
+                ctx.moveTo(midX, highY);
+                ctx.lineTo(midX, lowY);
+                ctx.stroke();
+
+                // Draw candle body
+                const bodyHeight = Math.max(1, Math.abs(openY - closeY));
+                const bodyY = Math.min(openY, closeY);
+                ctx.fillRect(x + 1, bodyY, candleWidth - 2, bodyHeight);
+
+                // Draw SMA-20 (Blue line)
+                if (c.sma_20) {
+                    const smaY = paddingTop + mainChartHeight * (1 - (c.sma_20 - minPrice) / priceRange);
+                    if (prevSmaX !== null) {
+                        ctx.beginPath();
+                        ctx.strokeStyle = "#3b82f6";
+                        ctx.lineWidth = 1.5;
+                        ctx.moveTo(prevSmaX, prevSmaY);
+                        ctx.lineTo(midX, smaY);
+                        ctx.stroke();
+                    }
+                    prevSmaX = midX;
+                    prevSmaY = smaY;
+                }
+
+                // Draw EMA-50 (Purple line)
+                if (c.ema_50) {
+                    const emaY = paddingTop + mainChartHeight * (1 - (c.ema_50 - minPrice) / priceRange);
+                    if (prevEmaX !== null) {
+                        ctx.beginPath();
+                        ctx.strokeStyle = "#a855f7";
+                        ctx.lineWidth = 1.5;
+                        ctx.moveTo(prevEmaX, prevEmaY);
+                        ctx.lineTo(midX, emaY);
+                        ctx.stroke();
+                    }
+                    prevEmaX = midX;
+                    prevEmaY = emaY;
+                }
+            });
+
+            // Draw RSI-14 Indicator Pane
+            const rsiYStart = paddingTop + mainChartHeight + gap;
+            ctx.fillStyle = "rgba(0, 0, 0, 0.1)";
+            ctx.fillRect(paddingLeft, rsiYStart, chartWidth, rsiHeight);
+            
+            // Draw RSI Bounds (30 and 70 lines)
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+            ctx.lineWidth = 1;
+            const rsi70 = rsiYStart + rsiHeight * (1 - 70/100);
+            const rsi30 = rsiYStart + rsiHeight * (1 - 30/100);
+            
+            ctx.beginPath();
+            ctx.moveTo(paddingLeft, rsi70);
+            ctx.lineTo(paddingLeft + chartWidth, rsi70);
+            ctx.moveTo(paddingLeft, rsi30);
+            ctx.lineTo(paddingLeft + chartWidth, rsi30);
+            ctx.stroke();
+            
+            ctx.fillStyle = "var(--text-muted)";
+            ctx.fillText("70", paddingLeft + chartWidth + 5, rsi70 + 3);
+            ctx.fillText("30", paddingLeft + chartWidth + 5, rsi30 + 3);
+            ctx.fillText("RSI (14)", paddingLeft + 5, rsiYStart + 10);
+
+            // Draw RSI Line
+            let prevRsiX = null, prevRsiY = null;
+            state.candles.forEach((c, idx) => {
+                if (c.rsi_14 !== null) {
+                    const x = paddingLeft + (idx * candleWidth) + (candleWidth / 2);
+                    const y = rsiYStart + rsiHeight * (1 - c.rsi_14 / 100);
+                    
+                    if (prevRsiX !== null) {
+                        ctx.beginPath();
+                        ctx.strokeStyle = "#f59e0b";
+                        ctx.lineWidth = 1;
+                        ctx.moveTo(prevRsiX, prevRsiY);
+                        ctx.lineTo(x, y);
+                        ctx.stroke();
+                    }
+                    prevRsiX = x;
+                    prevRsiY = y;
+                }
+            });
+
+            // Draw MACD Indicator Pane
+            const macdYStart = rsiYStart + rsiHeight + gap;
+            ctx.fillStyle = "rgba(0, 0, 0, 0.1)";
+            ctx.fillRect(paddingLeft, macdYStart, chartWidth, macdHeight);
+            
+            ctx.fillStyle = "var(--text-muted)";
+            ctx.fillText("MACD (12, 26, 9)", paddingLeft + 5, macdYStart + 10);
+
+            // Find MACD bounds
+            let maxMacd = 0.1;
+            state.candles.forEach(c => {
+                if (c.macd) maxMacd = Math.max(maxMacd, Math.abs(c.macd), Math.abs(c.macd_signal), Math.abs(c.macd_hist));
+            });
+            const macdRange = maxMacd * 2;
+
+            // Draw Zero Line
+            const macdZero = macdYStart + (macdHeight / 2);
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+            ctx.beginPath();
+            ctx.moveTo(paddingLeft, macdZero);
+            ctx.lineTo(paddingLeft + chartWidth, macdZero);
+            ctx.stroke();
+
+            // Draw MACD Lines & Histogram
+            let prevMacdX = null, prevMacdY = null;
+            let prevSigX = null, prevSigY = null;
+
+            state.candles.forEach((c, idx) => {
+                if (c.macd !== null) {
+                    const x = paddingLeft + (idx * candleWidth) + (candleWidth / 2);
+                    
+                    const macdY = macdZero - (c.macd / macdRange) * macdHeight;
+                    const sigY = macdZero - (c.macd_signal / macdRange) * macdHeight;
+                    const histY = macdZero - (c.macd_hist / macdRange) * macdHeight;
+
+                    // Draw Histogram bar
+                    ctx.fillStyle = c.macd_hist >= 0 ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)";
+                    ctx.fillRect(x - (candleWidth/3), macdZero, candleWidth * (2/3), histY - macdZero);
+
+                    // Draw MACD Line (Orange)
+                    if (prevMacdX !== null) {
+                        ctx.beginPath();
+                        ctx.strokeStyle = "#6366f1";
+                        ctx.lineWidth = 1;
+                        ctx.moveTo(prevMacdX, prevMacdY);
+                        ctx.lineTo(x, macdY);
+                        ctx.stroke();
+
+                        // Signal Line (Red)
+                        ctx.beginPath();
+                        ctx.strokeStyle = "#ef4444";
+                        ctx.lineWidth = 1;
+                        ctx.moveTo(prevSigX, prevSigY);
+                        ctx.lineTo(x, sigY);
+                        ctx.stroke();
+                    }
+
+                    prevMacdX = x;
+                    prevMacdY = macdY;
+                    prevSigX = x;
+                    prevSigY = sigY;
+                }
+            });
+        }
+
+        // Handle Canvas mouse move hover (Tooltip & Crosshair)
+        function handleCanvasHover(e) {
+            if (!state.candles || state.candles.length === 0) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            const paddingLeft = 10;
+            const paddingRight = 60;
+            const chartWidth = canvas.width - paddingLeft - paddingRight;
+
+            const candleCount = state.candles.length;
+            const candleWidth = chartWidth / candleCount;
+
+            const idx = Math.floor((mouseX - paddingLeft) / candleWidth);
+            if (idx >= 0 && idx < candleCount) {
+                const c = state.candles[idx];
+                
+                // Draw chart with crosshair
+                drawChart();
+
+                // Draw Vertical Crosshair line
+                const midX = paddingLeft + (idx * candleWidth) + (candleWidth / 2);
+                ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(midX, 0);
+                ctx.lineTo(midX, canvas.height);
+                ctx.stroke();
+                ctx.setLineDash([]); // Reset
+
+                // Update Tooltip values
+                document.getElementById("tooltipO").innerText = parseFloat(c.open).toFixed(2);
+                document.getElementById("tooltipH").innerText = parseFloat(c.high).toFixed(2);
+                document.getElementById("tooltipL").innerText = parseFloat(c.low).toFixed(2);
+                document.getElementById("tooltipC").innerText = parseFloat(c.close).toFixed(2);
+                document.getElementById("tooltipRsi").innerText = c.rsi_14 ? parseFloat(c.rsi_14).toFixed(1) : "--";
+                document.getElementById("tooltipMacd").innerText = c.macd ? parseFloat(c.macd).toFixed(2) : "--";
+                
+                // Show tooltip
+                chartTooltip.style.display = "flex";
+            }
+        }
+
+        // AI Stock Analysis trigger
+        btnAiAnalyze.addEventListener("click", async () => {
+            btnAiAnalyze.disabled = true;
+            btnAiAnalyze.innerText = "Analyzing indicators...";
+            
+            try {
+                const res = await fetch(`/api/ai-analyze?exch=${state.activeScrip.exch}&token=${state.activeScrip.token}&interval=${state.interval}`);
+                const data = await res.json();
+                
+                if (data.recommendation) {
+                    displayAiAdvice(data);
+                } else {
+                    alert("Failed to analyze stock: " + (data.emsg || "Invalid format received."));
+                }
+            } catch(e) {
+                alert("Error calling AI agent API.");
+            } finally {
+                btnAiAnalyze.disabled = false;
+                btnAiAnalyze.innerText = "Analyze Stock with AI";
+            }
+        });
+
+        // Display AI advice values
+        function displayAiAdvice(data) {
+            // Display container
+            aiCardContainer.style.display = "flex";
+            aiRationale.style.display = "block";
+            
+            // Set glowing colors based on BUY/SELL/HOLD
+            aiCardContainer.className = `ai-card-glow glow-${data.recommendation}`;
+            
+            // Circular progress
+            const circleLength = 2 * Math.PI * 38; // radius = 38
+            const offset = circleLength * (1 - data.confidence / 100);
+            confFill.style.strokeDasharray = `${circleLength}`;
+            confFill.style.strokeDashoffset = `${offset}`;
+            
+            confPct.innerText = `${data.confidence}%`;
+            aiRecommendText.innerText = data.recommendation;
+            
+            // Targets
+            aiEntryVal.innerText = `₹${data.entry_price.toFixed(2)}`;
+            aiTargetVal.innerText = `₹${data.target_price.toFixed(2)}`;
+            aiSlVal.innerText = `₹${data.stop_loss.toFixed(2)}`;
+            
+            // Rationale text
+            aiRationale.innerText = data.rationale;
+
+            // PREFILL order ticket with AI suggestions!
+            setOrderAction(data.recommendation === "SELL" ? "S" : "B");
+            document.getElementById("orderQty").value = "5"; // Default helper size
+            
+            if (data.recommendation !== "HOLD") {
+                document.getElementById("orderPriceType").value = "LMT";
+                document.getElementById("orderPrice").disabled = false;
+                document.getElementById("orderPrice").value = data.entry_price.toFixed(2);
+            } else {
+                document.getElementById("orderPriceType").value = "MKT";
+                document.getElementById("orderPrice").disabled = true;
+                document.getElementById("orderPrice").value = "0.00";
+            }
+            updatePlaceOrderButtonText();
+        }
+
+        // Toggle Order Ticket action BUY vs SELL
+        function setOrderAction(action) {
+            state.orderForm.action = action;
+            const btnB = document.getElementById("orderActionB");
+            const btnS = document.getElementById("orderActionS");
+            const mainOrderBtn = document.getElementById("btnPlaceOrder");
+
+            if (action === "B") {
+                btnB.classList.add("active");
+                btnS.classList.remove("active");
+                mainOrderBtn.className = "btn-place-order btn-buy";
+            } else {
+                btnS.classList.add("active");
+                btnB.classList.remove("active");
+                mainOrderBtn.className = "btn-place-order btn-sell";
+            }
+            updatePlaceOrderButtonText();
+        }
+
+        // Toggle price input field on Market vs Limit
+        function togglePriceField() {
+            const pType = document.getElementById("orderPriceType").value;
+            const priceInput = document.getElementById("orderPrice");
+            if (pType === "MKT") {
+                priceInput.disabled = true;
+                priceInput.value = "0.00";
+            } else {
+                priceInput.disabled = false;
+                // prefill with last LTP
+                priceInput.value = parseFloat(state.activeScrip.lp).toFixed(2);
+            }
+        }
+
+        // Update main order button label
+        function updatePlaceOrderButtonText() {
+            const actionText = state.orderForm.action === 'B' ? 'BUY' : 'SELL';
+            const btn = document.getElementById("btnPlaceOrder");
+            btn.innerText = `${actionText} ${state.activeScrip.tsym}`;
+        }
+
+        // Place order button trigger (Shows confirmation first for live safety)
+        function clickPlaceOrderButton() {
+            // Read inputs
+            const qty = parseInt(document.getElementById("orderQty").value);
+            const pType = document.getElementById("orderPriceType").value;
+            const price = parseFloat(document.getElementById("orderPrice").value);
+            const prd = document.getElementById("orderProduct").value;
+            
+            if (isNaN(qty) || qty <= 0) {
+                alert("Please enter a valid quantity.");
+                return;
+            }
+
+            if (pType === "LMT" && (isNaN(price) || price <= 0)) {
+                alert("Please enter a valid limit price.");
+                return;
+            }
+
+            // Save details to state for confirmation
+            state.orderForm.qty = qty;
+            state.orderForm.priceType = pType;
+            state.orderForm.price = pType === "MKT" ? parseFloat(state.activeScrip.lp) : price;
+            state.orderForm.product = prd;
+
+            // Populate confirmation modal details
+            document.getElementById("confirmActionBadge").innerText = state.orderForm.action === "B" ? "BUY" : "SELL";
+            document.getElementById("confirmActionBadge").className = `table-badge ${state.orderForm.action === "B" ? "badge-buy" : "badge-sell"}`;
+            document.getElementById("confirmSymbol").innerText = state.activeScrip.tsym;
+            document.getElementById("confirmCompany").innerText = state.activeScrip.cname;
+            document.getElementById("confirmProduct").innerText = prd === "I" ? "INTRADAY (MIS)" : "DELIVERY (CNC)";
+            document.getElementById("confirmPriceType").innerText = pType;
+            document.getElementById("confirmQty").innerText = qty;
+            
+            const showPrice = pType === "MKT" ? `₹${parseFloat(state.activeScrip.lp).toFixed(2)} (MKT)` : `₹${price.toFixed(2)}`;
+            document.getElementById("confirmPrice").innerText = showPrice;
+
+            const estCost = qty * (pType === "MKT" ? parseFloat(state.activeScrip.lp) : price);
+            document.getElementById("confirmEstimateCost").innerText = `₹${estCost.toLocaleString("en-IN", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+
+            const executeBtn = document.getElementById("btnConfirmExecute");
+            executeBtn.className = `btn-place-order ${state.orderForm.action === "B" ? "btn-buy" : "btn-sell"}`;
+            executeBtn.innerText = `EXECUTE ${state.orderForm.action === "B" ? "BUY" : "SELL"}`;
+
+            confirmOrderModal.classList.add("active");
+        }
+
+        // Execute verified order
+        async function executeConfirmedOrder() {
+            confirmOrderModal.classList.remove("active");
+            
+            const payload = {
+                exch: state.activeScrip.exch,
+                tsym: state.activeScrip.tsym,
+                qty: state.orderForm.qty,
+                prc: state.orderForm.priceType === "MKT" ? 0.0 : state.orderForm.price,
+                trantype: state.orderForm.action,
+                prctyp: state.orderForm.priceType,
+                prd: state.orderForm.product,
+                token: state.activeScrip.token
+            };
+
+            try {
+                const res = await fetch("/api/order", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                
+                if (data.stat === "Ok") {
+                    alert(`Order submitted successfully! Order ID: ${data.norenordno}`);
+                    await fetchPortfolio();
+                } else {
+                    alert(`Order execution failed: ${data.emsg || "Unknown error"}`);
+                }
+            } catch (e) {
+                alert("Network error executing order.");
+            }
+        }
+
+        // Fetch Portfolio updates (Orders, Positions, Holdings, Margin limits)
+        async function fetchPortfolio() {
+            try {
+                const res = await fetch("/api/portfolio");
+                const data = await res.json();
+                
+                if (data.stat === "Ok") {
+                    state.portfolio = data;
+                    
+                    // Update connection labels
+                    if (data.mock_mode) {
+                        connectionDot.className = "status-indicator status-online";
+                        connectionLabel.innerText = "Paper Trading Active";
+                    } else {
+                        connectionDot.className = "status-indicator status-online";
+                        connectionLabel.innerText = "Shoonya Live Connected";
+                    }
+                    
+                    // Balance
+                    const bal = parseFloat(data.balance);
+                    headerBalance.innerText = `₹${bal.toLocaleString("en-IN", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+
+                    // Update UI Lists
+                    renderOrders();
+                    renderPositions();
+                    renderHoldings();
+                } else {
+                    connectionDot.className = "status-indicator status-offline";
+                    connectionLabel.innerText = "Shoonya Disconnected";
+                }
+            } catch (e) {
+                connectionDot.className = "status-indicator status-offline";
+                connectionLabel.innerText = "API Offline";
+            }
+        }
+
+        // Render Orders Table
+        function renderOrders() {
+            bodyOrders.innerHTML = "";
+            const orders = state.portfolio.orders || [];
+            
+            if (orders.length === 0) {
+                emptyOrders.style.display = "flex";
+                document.getElementById("tableOrders").style.display = "none";
+                return;
+            }
+
+            emptyOrders.style.display = "none";
+            document.getElementById("tableOrders").style.display = "table";
+
+            orders.forEach(ord => {
+                const tr = document.createElement("tr");
+                const ordTime = ord.ordtime ? ord.ordtime.split(" ")[1] || ord.ordtime : "--";
+                const isBuy = ord.trantype === "B";
+                const badgeClass = isBuy ? "badge-buy" : "badge-sell";
+                const statusClass = `badge-${ord.status.toLowerCase()}`;
+                
+                // Show cancel button only for pending orders
+                const canCancel = ord.status === "PENDING";
+                const actionCell = canCancel ? 
+                    `<button class="btn-table-action" onclick="cancelOrder('${ord.norenordno}')">Cancel</button>` : 
+                    `--`;
+
+                tr.innerHTML = `
+                    <td>${ordTime}</td>
+                    <td class="font-outfit" style="font-weight:600">${ord.tsym}</td>
+                    <td><span class="table-badge ${badgeClass}">${isBuy ? 'BUY' : 'SELL'}</span></td>
+                    <td>${ord.prd === 'I' ? 'MIS' : 'CNC'}</td>
+                    <td>${ord.qty}</td>
+                    <td>₹${parseFloat(ord.prc).toFixed(2)}</td>
+                    <td><span class="table-badge ${statusClass}">${ord.status}</span></td>
+                    <td>${actionCell}</td>
+                `;
+                bodyOrders.appendChild(tr);
+            });
+        }
+
+        // Cancel order API call
+        async function cancelOrder(orderno) {
+            if (!confirm(`Are you sure you want to cancel order ${orderno}?`)) return;
+            try {
+                const res = await fetch("/api/order/cancel", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ orderno: orderno })
+                });
+                const data = await res.json();
+                if (data.stat === "Ok") {
+                    alert("Order cancelled successfully!");
+                    await fetchPortfolio();
+                } else {
+                    alert("Cancel failed: " + data.emsg);
+                }
+            } catch(e) {
+                alert("API error cancelling order.");
+            }
+        }
+
+        // Render Positions Table
+        function renderPositions() {
+            bodyPositions.innerHTML = "";
+            const positions = state.portfolio.positions || [];
+
+            if (positions.length === 0) {
+                emptyPositions.style.display = "flex";
+                document.getElementById("tablePositions").style.display = "none";
+                return;
+            }
+
+            emptyPositions.style.display = "none";
+            document.getElementById("tablePositions").style.display = "table";
+
+            positions.forEach(pos => {
+                const tr = document.createElement("tr");
+                const netqty = parseInt(pos.netqty);
+                const isShort = netqty < 0;
+                
+                const m2m = parseFloat(pos.urmtom);
+                const m2mColorClass = m2m >= 0 ? "text-bullish" : "text-bearish";
+                const sign = m2m >= 0 ? "+" : "";
+
+                tr.innerHTML = `
+                    <td class="font-outfit" style="font-weight:600">${pos.tsym}</td>
+                    <td>${pos.prd === 'I' ? 'MIS' : 'CNC'}</td>
+                    <td style="font-weight:600" class="${isShort ? 'text-bearish' : 'text-bullish'}">${netqty}</td>
+                    <td>₹${parseFloat(pos.avgprc).toFixed(2)}</td>
+                    <td>₹${parseFloat(pos.lp).toFixed(2)}</td>
+                    <td style="font-weight:700" class="${m2mColorClass}">${sign}₹${m2m.toFixed(2)}</td>
+                    <td><button class="btn-table-action" onclick="squareOffPosition('${pos.exch}', '${pos.tsym}', ${Math.abs(netqty)}, ${isShort ? 'B' : 'S'}, '${pos.prd}', '${pos.token}')">Exit</button></td>
+                `;
+                bodyPositions.appendChild(tr);
+            });
+        }
+
+        // Square off/Exit active position
+        async function squareOffPosition(exch, tsym, qty, exitTranType, prd, token) {
+            const actionText = exitTranType === "B" ? "Buy cover" : "Sell square-off";
+            if (!confirm(`Are you sure you want to square-off position for ${tsym}? This places a ${actionText} order for ${qty} shares.`)) return;
+
+            const payload = {
+                exch: exch,
+                tsym: tsym,
+                qty: qty,
+                prc: 0.0,
+                trantype: exitTranType,
+                prctyp: "MKT", // Square off exits immediately via Market
+                prd: prd,
+                token: token
+            };
+
+            try {
+                const res = await fetch("/api/order", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.stat === "Ok") {
+                    alert("Square-off order filled successfully.");
+                    await fetchPortfolio();
+                } else {
+                    alert("Square-off failed: " + data.emsg);
+                }
+            } catch(e) {
+                alert("API error during square off.");
+            }
+        }
+
+        // Render Holdings Table
+        function renderHoldings() {
+            bodyHoldings.innerHTML = "";
+            const holdings = state.portfolio.holdings || [];
+
+            if (holdings.length === 0) {
+                emptyHoldings.style.display = "flex";
+                document.getElementById("tableHoldings").style.display = "none";
+                return;
+            }
+
+            emptyHoldings.style.display = "none";
+            document.getElementById("tableHoldings").style.display = "table";
+
+            holdings.forEach(hld => {
+                const tr = document.createElement("tr");
+                
+                const pnl = parseFloat(hld.pnl);
+                const pnlColorClass = pnl >= 0 ? "text-bullish" : "text-bearish";
+                const sign = pnl >= 0 ? "+" : "";
+
+                tr.innerHTML = `
+                    <td style="color:var(--text-secondary)">${hld.cname}</td>
+                    <td class="font-outfit" style="font-weight:600">${hld.tsym}</td>
+                    <td style="font-weight:600">${hld.qty}</td>
+                    <td>₹${parseFloat(hld.avgprc).toFixed(2)}</td>
+                    <td>₹${parseFloat(hld.lp).toFixed(2)}</td>
+                    <td style="font-weight:700" class="${pnlColorClass}">${sign}₹${pnl.toFixed(2)} (${parseFloat(hld.pnl_pct).toFixed(2)}%)</td>
+                `;
+                bodyHoldings.appendChild(tr);
+            });
+        }
+
+        // Switch bottom panels tabs
+        function switchTab(tabId) {
+            document.querySelectorAll(".portfolio-section .tab-btn").forEach(btn => {
+                btn.classList.remove("active");
+            });
+            event.target.classList.add("active");
+
+            document.querySelectorAll(".tab-panel").forEach(panel => {
+                panel.classList.remove("active");
+            });
+            document.getElementById(`tabPanel-${tabId}`).classList.add("active");
+        }
+
+        // Handle typing in stock search input
+        async function handleSearchInput() {
+            const query = searchInput.value.trim();
+            if (query.length < 2) {
+                searchResults.style.display = "none";
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+                const data = await res.json();
+                
+                if (data.stat === "Ok" && data.values && data.values.length > 0) {
+                    searchResults.innerHTML = "";
+                    
+                    data.values.slice(0, 10).forEach(scrip => {
+                        const div = document.createElement("div");
+                        div.className = "search-item";
+                        div.innerHTML = `
+                            <div>
+                                <span class="search-symbol">${scrip.tsym}</span>
+                                <div class="search-cname">${scrip.cname || ''}</div>
+                            </div>
+                            <span class="search-exch-badge">${scrip.exch}</span>
+                        `;
+                        div.addEventListener("click", () => {
+                            // Add to watchlist temporarily if not exists
+                            const exists = state.watchlist.find(w => w.token === scrip.token);
+                            if (!exists) {
+                                state.watchlist.unshift({
+                                    token: scrip.token,
+                                    exch: scrip.exch,
+                                    tsym: scrip.tsym,
+                                    cname: scrip.cname || scrip.tsym,
+                                    lp: scrip.lp || "100.0",
+                                    pc: "0.0"
+                                });
+                            }
+                            selectScrip(exists || state.watchlist[0]);
+                            searchResults.style.display = "none";
+                            searchInput.value = "";
+                        });
+                        searchResults.appendChild(div);
+                    });
+                    
+                    searchResults.style.display = "block";
+                } else {
+                    searchResults.style.display = "none";
+                }
+            } catch(e) {
+                console.error("Error searching stock:", e);
+            }
+        }
+
+        // Open settings modal and populate fields
+        async function openSettingsModal() {
+            try {
+                const res = await fetch("/api/config");
+                const config = await res.json();
+                
+                document.getElementById("configMockMode").checked = config.mock_mode;
+                document.getElementById("configUserId").value = config.user_id || "";
+                document.getElementById("configPassword").value = config.password || "";
+                document.getElementById("configVendorCode").value = config.vendor_code || "";
+                document.getElementById("configApiKey").value = config.api_key || "";
+                document.getElementById("configTotpSecret").value = config.totp_secret || "";
+                document.getElementById("configImei").value = config.imei || "abc1234";
+                document.getElementById("configGeminiApiKey").value = config.gemini_api_key || "";
+                
+                settingsModal.classList.add("active");
+            } catch(e) {
+                alert("Failed to load settings from server.");
+            }
+        }
+
+        // Save credentials config and trigger backend authenticate
+        async function saveSettings() {
+            const btn = document.getElementById("btnSaveConfig");
+            btn.disabled = true;
+            btn.innerText = "Authenticating with Shoonya...";
+
+            const payload = {
+                user_id: document.getElementById("configUserId").value,
+                password: document.getElementById("configPassword").value,
+                vendor_code: document.getElementById("configVendorCode").value,
+                api_key: document.getElementById("configApiKey").value,
+                totp_secret: document.getElementById("configTotpSecret").value,
+                imei: document.getElementById("configImei").value,
+                gemini_api_key: document.getElementById("configGeminiApiKey").value,
+                mock_mode: document.getElementById("configMockMode").checked
+            };
+
+            try {
+                const res = await fetch("/api/config", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    alert("Settings saved. Authentication successful!");
+                    settingsModal.classList.remove("active");
+                    
+                    // Refresh AI model badge name based on key presence
+                    if (payload.gemini_api_key) {
+                        aiModelBadge.innerText = "GEMINI-1.5";
+                        aiModelBadge.style.background = "rgba(99,102,241,0.15)";
+                        aiModelBadge.style.color = "#818cf8";
+                    } else {
+                        aiModelBadge.innerText = "LOCAL RULES ENGINE";
+                        aiModelBadge.style.background = "rgba(245,158,11,0.15)";
+                        aiModelBadge.style.color = "var(--color-neutral)";
+                    }
+                    
+                    await fetchPortfolio();
+                    fetchChartData();
+                } else {
+                    alert("Authentication Failed: " + (data.login_status.emsg || "Invalid credentials"));
+                }
+            } catch(e) {
+                alert("Network error updating credentials.");
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Save Settings & Authenticate";
+            }
+        }
+
+        // Local storage settings cache helper
+        function loadSettings() {
+            // Check config status on boot
+            fetch("/api/config").then(res => res.json()).then(config => {
+                if (config.gemini_api_key) {
+                    aiModelBadge.innerText = "GEMINI-1.5";
+                    aiModelBadge.style.background = "rgba(99,102,241,0.15)";
+                    aiModelBadge.style.color = "#818cf8";
+                } else {
+                    aiModelBadge.innerText = "LOCAL RULES ENGINE";
+                    aiModelBadge.style.background = "rgba(245,158,11,0.15)";
+                    aiModelBadge.style.color = "var(--color-neutral)";
+                }
+            }).catch(e => {});
+        }
+    </script>
+</body>
+</html>

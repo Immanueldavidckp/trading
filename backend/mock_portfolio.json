@@ -1,0 +1,23 @@
+{
+    "orders": [],
+    "positions": {},
+    "holdings": [
+        {
+            "exch": "NSE",
+            "token": "2885",
+            "tsym": "RELIANCE-EQ",
+            "qty": 50,
+            "avgprc": 2180.0,
+            "cname": "RELIANCE INDUSTRIES LTD"
+        },
+        {
+            "exch": "NSE",
+            "token": "1594",
+            "tsym": "INFY-EQ",
+            "qty": 100,
+            "avgprc": 1420.5,
+            "cname": "INFOSYS LIMITED"
+        }
+    ],
+    "balance": 1000000.0
+}

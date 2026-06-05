@@ -1,0 +1,28 @@
+# Secrets — contain hardcoded Shoonya credentials, DO NOT commit
+.env
+backend/.env
+backend/config.json
+shoonya_app.py
+
+# Captured market data (large, regenerable)
+backend/local_data/
+backend/static/.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

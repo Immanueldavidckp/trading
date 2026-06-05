@@ -1,0 +1,294 @@
+================================================================
+  SHOONYA / YAHOO TRADING APP — PROJECT LOG
+  Session date: 2026-05-27 → 2026-06-01
+  Project root: C:\home\applicatipn\test_trad
+================================================================
+
+----------------------------------------------------------------
+1. WHAT WAS ALREADY THERE (starting state)
+----------------------------------------------------------------
+- backend/ (FastAPI + uvicorn)
+    main.py             — REST endpoints, AI agent, Shoonya client
+    shoonya_client.py   — Shoonya REST login + REST trading
+    ai_agent.py         — Gemini AI + rule-based fallback (RSI/MACD/SMA/EMA)
+    config.json         — Shoonya credentials (kept)
+    static/index.html   — Pre-built React-style dashboard (2611 lines)
+- frontend/ (Vite + React 19) — boilerplate only
+- shoonya_app.py        — legacy script (unchanged)
+
+Existing Shoonya creds in config.json:
+    user_id      = FA153046
+    vendor_code  = FA153046_U
+    api_key      = 15d2af62a7df5229f950800379749c40
+    totp_secret  = RN25LW2255234G34S7ET2324235G4DL6
+    mock_mode    = true (paper trading)
+
+================================================================
+2. WORK DONE — STEP BY STEP
+================================================================
+
+----------------------------------------------------------------
+2.1  ENV-FILE SUPPORT
+----------------------------------------------------------------
+- Created backend/.env with all needed variables:
+      SHOONYA_USER_ID, SHOONYA_PASSWORD, SHOONYA_VENDOR_CODE,
+      SHOONYA_API_KEY, SHOONYA_TOTP_SECRET, SHOONYA_IMEI,
+      GEMINI_API_KEY, MOCK_MODE
+- Updated main.py:
+      * Loads .env via python-dotenv on startup
+      * get_initial_credentials() reads .env first, then config.json
+- Created .gitignore (so .env / config.json don’t get committed)
+
+----------------------------------------------------------------
+2.2  SHOONYA CONNECTIVITY TESTS
+----------------------------------------------------------------
+- TOTP generation works (053113 generated correctly)
+- DNS resolves to AWS ELB ap-south-1 (13.202.119.185, Mumbai)
+- Base URL https://api.shoonya.com/  -> HTTP 200
+- POST /NorenWClientTP/QuickAuth    -> HTTP 502 (every attempt, 3+ days)
+- Same 502 from real login WITH valid TOTP + correct password+appkey hash
+  Conclusion: Shoonya’s NorenWClientTP auth service is DOWN.
+              Not an IP block (same IP gets 200 on base, 502 on /Noren…).
+              Our IP = 182.72.158.86 (Airtel, Chennai, India) — fine.
+              Not credentials — would return Not_Ok JSON instead of 502.
+- Suspect possibility: API host may have migrated. User should verify
+  current host from their Shoonya portal.
+
+----------------------------------------------------------------
+2.3  SHOONYA WEBSOCKET TICK RECORDER (built, ready, not run-able yet)
+----------------------------------------------------------------
+- New file: backend/tick_recorder.py
+- SQLite table `ticks` with columns:
+      received_at, feed_time, exch, token, tsym, lp, v, oi,
+      bp1..bp5 + bq1..bq5  (5 levels of bid prices & quantities)
+      sp1..sp5 + sq1..sq5  (5 levels of ask prices & quantities)
+      raw (full Shoonya JSON)
+- Endpoints:
+      POST /api/recorder/start  — connect WS, subscribe, write rows
+      POST /api/recorder/stop
+      GET  /api/recorder/status
+      GET  /api/ticks?tsym=…&limit=…
+      GET  /api/ticks/stats
+- Default watchlist: RELIANCE-EQ (token 2885)
+- BLOCKED until Shoonya QuickAuth returns; otherwise no session token.
+
+----------------------------------------------------------------
+2.4  NSE DIRECT SCRAPING ATTEMPTS (failed)
+----------------------------------------------------------------
+- Direct https://www.nseindia.com/api/quote-equity   -> 403 Akamai WAF
+- Library nsepython                                  -> empty dict (swallowed 403)
+- Library jugaad-data                                -> JSONDecodeError (got 403 HTML)
+Conclusion: NSE’s WAF blocks scraping from this machine entirely.
+
+----------------------------------------------------------------
+2.5  YAHOO FINANCE FREE DATA SOURCE (works)
+----------------------------------------------------------------
+Honest comparison of free public sources:
+   Yahoo chart endpoint   ✅ works, 1-min granularity, no bid/ask
+   Yahoo v7/quote (crumb) ✅ works, gives best bid+ask, 1-level only
+   NSE direct scrape      ❌ 403 WAF
+   nsepython / jugaad     ❌ same root cause
+
+Yahoo ceiling: ~10-12 sec real update, ~15-min delayed in live market,
+               best bid+ask only (no 5-level depth),
+               bid/ask SIZES often 0/None for NSE stocks.
+
+----------------------------------------------------------------
+2.6  YAHOO PRICE POLLER (built and running)
+----------------------------------------------------------------
+- New file: backend/yahoo_poller.py
+- SQLite table `price_changes` with columns:
+      received_at (ms-precision ISO), bar_time, tsym, yahoo_sym,
+      lp, bid, ask, bid_size, ask_size,
+      day_open, day_high, day_low, prev_close,
+      change, change_pct, volume, source
+  (bid/ask columns added later via idempotent ALTER TABLE)
+
+- Class YahooQuoteClient
+      * Manages cookie + crumb auth (auto-refresh on 401)
+      * Calls v7/finance/quote in BATCH for all watched symbols
+      * Returns lp + bid + ask + sizes per symbol
+      * Fix applied: crumb endpoint returns 406 if Accept=application/json,
+        so we send Accept: text/plain for that one call.
+
+- Class YahooMultiPoller
+      * Persists watchlist to backend/local_data/watchlist.json
+      * Polls all symbols every 1s (configurable)
+      * Records a row ONLY when lp OR bid OR ask changes
+      * Tracks per-symbol last_price/last_bid/last_ask/change_count
+      * Auto-starts on backend boot
+
+- Static helpers
+      YahooPoller.query(tsym, limit)
+      YahooPoller.stats()
+      resolve_symbol(query) — Yahoo search API, name → ticker mapping
+
+- Endpoints
+      POST /api/yahoo/start
+      POST /api/yahoo/stop
+      GET  /api/yahoo/status
+      POST /api/yahoo/backfill?tsym=…&rng=1d|5d|1mo
+      GET  /api/yahoo/prices?tsym=…&limit=…
+      GET  /api/yahoo/stats
+      GET  /api/yahoo/symbols                     — list watchlist
+      POST /api/yahoo/symbols/add  {query:"…"}    — auto-resolves
+      POST /api/yahoo/symbols/remove {tsym:"…"}
+
+----------------------------------------------------------------
+2.7  LIVE WEBSOCKET STREAM (built and verified)
+----------------------------------------------------------------
+- Endpoint: GET /ws/prices?tsym=…&backlog=N
+- Backend implementation in main.py:
+      * Sends a "backlog" message on connect with the most recent N rows
+      * Polls SQLite every 500 ms; pushes any new rows as "update"
+      * Includes id, received_at, bar_time, tsym, lp, bid, ask,
+        bid_size, ask_size, change, change_pct, volume, source
+- Installed websockets>=12.0 (FastAPI WS support)
+- Tested: backlog + live deltas verified delivered.
+
+----------------------------------------------------------------
+2.8  FRONTEND – LIVE PRICE PAGE (zero-dependency, no npm needed)
+----------------------------------------------------------------
+- Frontend Vite/React (frontend/src/App.jsx, App.css) WAS WRITTEN,
+  but `npm install` failed: npm registry unreachable from this network
+  ("behind a proxy or bad network settings"). node_modules stays empty.
+- WORKAROUND: served self-contained HTML directly from backend.
+
+- New file: backend/static/live.html  (vanilla JS, no build step)
+- URL: http://127.0.0.1:8000/live.html
+- Features:
+      * Add-stock input box: type any name/symbol, auto-resolves
+        (e.g. "ola electric" → OLAELEC.NS)
+      * Chips for each tracked stock — click to view, × to remove
+      * Big LTP card (color = up/down, flashes on each tick)
+      * Dedicated BID / ASK / SPREAD box (Yahoo 1-level)
+      * Live table with ms timestamps:
+        Time | Symbol | Price | Bid | Ask | Spread | Change | % | Volume | Src
+      * Auto-reconnecting WebSocket
+      * Buttons: Start, Stop, Backfill 1d, Backfill 5d
+
+----------------------------------------------------------------
+2.9  AUTO-START ON BOOT
+----------------------------------------------------------------
+- Backend startup_event() now auto-creates YahooMultiPoller and starts it,
+  so data flows the moment the backend is up — no manual trigger needed.
+
+----------------------------------------------------------------
+2.10  STATIC DASHBOARD (unchanged)
+----------------------------------------------------------------
+- The original Shoonya AI Trade Copilot dashboard at /
+  (backend/static/index.html, 2611 lines) — left as-is and still serves.
+
+================================================================
+3. CURRENT STATE — WHAT WORKS RIGHT NOW
+================================================================
+
+Running:
+    Backend          uvicorn main:app at http://127.0.0.1:8000
+    Yahoo poller     auto-started, polls every 1 s, capturing bid/ask
+    Watchlist        RELIANCE-EQ, OLAELEC (persists in watchlist.json)
+    DB               backend/local_data/ticks.db  (~2,600+ rows)
+
+Live verified at last check (samples):
+    12:51:07.536   OLAELEC      lp=40.46  bid=40.44  ask=40.45  spread=0.01
+    12:51:05.323   RELIANCE-EQ  lp=1328.0 bid=1327.8 ask=1328.0 spread=0.20
+    OLAELEC was +8% earlier in the session.
+
+Pages:
+    http://127.0.0.1:8000/           — original full dashboard
+    http://127.0.0.1:8000/live.html  — new live price-change page (USE THIS)
+
+================================================================
+4. WHAT DOES NOT WORK / KNOWN LIMITS
+================================================================
+1. Shoonya REST + WebSocket — entire NorenWClientTP service 502s.
+   Recorder is built and will work the moment Shoonya recovers.
+2. NSE direct scraping — 403 WAF, no workaround on this machine.
+3. Yahoo bid/ask SIZES — often 0/None for Indian stocks (Yahoo limitation).
+4. Yahoo level-2 depth (bid2..bid5 / ask2..ask5) — does not exist anywhere
+   for free; only via paid vendors (TrueData ~₹3000/mo) or broker WS.
+5. Microsecond / "every trade" data — not available from any free source
+   on the planet. Exchanges license that data; HFT-only.
+6. npm registry unreachable on this network — Vite/React UI can’t be built
+   here; vanilla HTML served by backend works as the substitute.
+
+================================================================
+5. FILE TREE — WHAT WAS ADDED / CHANGED
+================================================================
+test_trad/
+├── .gitignore                              (NEW)
+├── PROJECT_LOG.txt                         (NEW — this file)
+├── backend/
+│   ├── .env                                (NEW)
+│   ├── main.py                             (CHANGED — env loading, WS, yahoo + symbol APIs, auto-start)
+│   ├── shoonya_client.py                   (unchanged)
+│   ├── ai_agent.py                         (unchanged)
+│   ├── tick_recorder.py                    (NEW — Shoonya WS + SQLite ticks table)
+│   ├── yahoo_poller.py                     (NEW — multi-symbol + bid/ask + crumb auth)
+│   ├── requirements.txt                    (CHANGED — added websocket-client, websockets)
+│   ├── config.json                         (unchanged, kept as fallback)
+│   ├── local_data/                         (NEW — auto-created)
+│   │   ├── ticks.db                          (SQLite: tables `ticks` + `price_changes`)
+│   │   └── watchlist.json                    (persistent stock list)
+│   └── static/
+│       ├── index.html                        (unchanged — original dashboard)
+│       └── live.html                         (NEW — live price page with bid/ask)
+└── frontend/
+    └── src/
+        ├── App.jsx                         (REWRITTEN — React live UI; needs npm install)
+        └── App.css                         (REWRITTEN)
+
+================================================================
+6. HOW TO RUN
+================================================================
+6.1  Backend
+        cd C:\home\applicatipn\test_trad\backend
+        python -m uvicorn main:app --host 127.0.0.1 --port 8000
+
+6.2  Open in browser
+        http://127.0.0.1:8000/live.html      ← live prices + bid/ask
+        http://127.0.0.1:8000/                ← original dashboard
+
+6.3  Add a new stock from the page
+        Type the name OR symbol (e.g. "tcs", "hdfc bank", "tata motors")
+        Press Enter / click + Add. Yahoo search resolves it automatically.
+
+6.4  Query the SQLite directly
+        sqlite3 backend\local_data\ticks.db
+        SELECT received_at, tsym, lp, bid, ask FROM price_changes
+        WHERE tsym='OLAELEC' ORDER BY id DESC LIMIT 20;
+
+6.5  Switch to LIVE Shoonya (when their server is back)
+        - Set MOCK_MODE=false in backend/.env
+        - Restart backend
+        - POST /api/recorder/start  → captures true tick-by-tick
+          + 5-level depth into the `ticks` table
+
+================================================================
+7. ENV VARS YOU NEED TO PROVIDE  (backend/.env)
+================================================================
+SHOONYA_USER_ID         — your client ID (e.g. FA153046)
+SHOONYA_PASSWORD        — login password
+SHOONYA_VENDOR_CODE     — usually <USER_ID>_U
+SHOONYA_API_KEY         — 32-char hex from Shoonya portal
+SHOONYA_TOTP_SECRET     — the BASE32 seed of 2FA, not the 6-digit code
+SHOONYA_IMEI            — any unique string (e.g. abc1234)
+GEMINI_API_KEY          — optional, for AI analysis (rule-based fallback exists)
+MOCK_MODE               — true=paper, false=live with REAL money
+
+================================================================
+8. END-TO-END VERIFICATION (final state)
+================================================================
+✅  Backend health                      HTTP 200
+✅  WebSocket /ws/prices                 streams backlog + live rows
+✅  Yahoo poller auto-started            poll_count growing
+✅  Bid/Ask captured                     verified live for RELIANCE + OLAELEC
+✅  Watchlist persists across restarts   watchlist.json verified
+✅  live.html served                     HTTP 200
+✅  Original dashboard served            HTTP 200
+✅  SQLite data persists                 2,600+ rows survived multiple restarts
+🟥  Shoonya QuickAuth                    HTTP 502 (their server side, 3+ days)
+
+================================================================
+END OF LOG
+================================================================

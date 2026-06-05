@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Live Price Changes</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;
+    --dim:#8b949e;--green:#2ea043;--red:#f85149;--accent:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+  .wrap{max-width:1040px;margin:0 auto;padding:20px 16px 60px}
+  .topbar{display:flex;justify-content:space-between;align-items:flex-start;
+    border-bottom:1px solid var(--border);padding-bottom:12px}
+  .topbar h1{margin:0;font-size:24px;letter-spacing:.5px}
+  .src{color:var(--dim);font-size:12px}
+  .conn{font-size:13px;font-weight:600;padding:4px 10px;border-radius:6px}
+  .conn.on{color:var(--green);background:rgba(46,160,67,.12)}
+  .conn.off{color:var(--dim);background:rgba(139,148,158,.12)}
+
+  /* Add stock + chips */
+  .addbar{display:flex;gap:8px;margin:16px 0 10px}
+  .addbar input{flex:1;background:var(--panel);border:1px solid var(--border);color:var(--text);
+    padding:9px 12px;border-radius:8px;font-size:14px;outline:none}
+  .addbar input:focus{border-color:var(--accent)}
+  .addbar button{background:var(--accent);color:#04101f;border:none;font-weight:700;
+    padding:9px 16px;border-radius:8px;cursor:pointer;font-size:14px}
+  .addbar button:disabled{opacity:.5;cursor:not-allowed}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+  .chip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--border);
+    border-radius:99px;padding:6px 6px 6px 14px;cursor:pointer;font-size:13px}
+  .chip.active{border-color:var(--accent);background:rgba(88,166,255,.1)}
+  .chip .cp{font-variant-numeric:tabular-nums;color:var(--dim)}
+  .chip .x{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:rgba(248,81,73,.15);color:var(--red);font-size:13px;line-height:1}
+  .chip .x:hover{background:var(--red);color:#fff}
+
+  .ltp{display:flex;align-items:baseline;gap:16px;margin:14px 0;padding:18px 22px;
+    background:var(--panel);border:1px solid var(--border);border-radius:10px}
+  .ltp .name{font-size:13px;color:var(--dim);margin-right:auto;align-self:center}
+  .ltp .price{font-size:40px;font-weight:700;font-variant-numeric:tabular-nums}
+  .ltp .chg{font-size:18px;font-weight:600}
+  .ltp .ts{color:var(--dim);font-size:13px;font-family:monospace}
+  .ltp.green .price,.ltp.green .chg{color:var(--green)}
+  .ltp.red .price,.ltp.red .chg{color:var(--red)}
+
+  .controls{display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+  .controls button{background:var(--panel);color:var(--text);border:1px solid var(--border);
+    padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px}
+  .controls button:hover{border-color:var(--accent);color:var(--accent)}
+  .stat{color:var(--dim);font-size:12px;margin-left:8px;font-family:monospace}
+
+  .tablewrap{border:1px solid var(--border);border-radius:10px;overflow:hidden;max-height:58vh;overflow-y:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead th{position:sticky;top:0;background:var(--panel);color:var(--dim);text-align:left;
+    padding:10px 12px;font-weight:600;border-bottom:1px solid var(--border)}
+  tbody td{padding:7px 12px;border-bottom:1px solid rgba(48,54,61,.5)}
+  tbody tr.g td.c{color:var(--green)} tbody tr.r td.c{color:var(--red)}
+  tbody tr:hover{background:rgba(88,166,255,.06)}
+  .mono{font-family:'SF Mono',Consolas,monospace;font-variant-numeric:tabular-nums}
+  .dim{color:var(--dim)} .empty{text-align:center;color:var(--dim);padding:30px}
+  .flash{animation:fl .6s ease}@keyframes fl{0%{background:rgba(88,166,255,.18)}100%{background:transparent}}
+  .foot{color:var(--dim);font-size:12px;margin-top:14px;text-align:center}
+  .foot code{background:var(--panel);padding:1px 5px;border-radius:4px}
+  a{color:var(--accent)}
+  .msg{font-size:12px;color:var(--red);margin-left:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div>
+      <h1>Live Price Changes</h1>
+      <span class="src">source: Yahoo Finance (free) · ~10-12s updates · ~15min delayed in live market · no bid/ask depth</span>
+    </div>
+    <div id="conn" class="conn off">○ connecting…</div>
+  </div>
+
+  <div class="addbar">
+    <input id="addInput" placeholder="Add a stock — type name or symbol (e.g. ola electric, TCS, INFY)…"
+           onkeydown="if(event.key==='Enter')addStock()">
+    <button id="addBtn" onclick="addStock()">+ Add</button>
+    <span id="addMsg" class="msg"></span>
+  </div>
+
+  <div id="chips" class="chips"></div>
+
+  <div id="ltpBox" class="ltp green" style="display:none">
+    <span class="name" id="ltpName"></span>
+    <span class="price" id="ltpPrice">₹--</span>
+    <span class="chg" id="ltpChg">--</span>
+    <span class="ts" id="ltpTs"></span>
+  </div>
+
+  <div id="bidaskBox" style="display:none;margin-bottom:14px;padding:12px 18px;background:var(--panel);
+       border:1px solid var(--border);border-radius:10px;display:flex;gap:30px;align-items:center;
+       font-family:'SF Mono',Consolas,monospace;font-size:14px">
+    <div><span style="color:var(--dim);font-size:11px;text-transform:uppercase">Best Bid</span><br>
+         <span id="bidVal" style="color:var(--green);font-size:18px;font-weight:600">--</span>
+         <span id="bidSizeVal" style="color:var(--dim);font-size:11px"></span></div>
+    <div><span style="color:var(--dim);font-size:11px;text-transform:uppercase">Best Ask</span><br>
+         <span id="askVal" style="color:var(--red);font-size:18px;font-weight:600">--</span>
+         <span id="askSizeVal" style="color:var(--dim);font-size:11px"></span></div>
+    <div><span style="color:var(--dim);font-size:11px;text-transform:uppercase">Spread</span><br>
+         <span id="spreadVal" style="font-size:18px;font-weight:600">--</span></div>
+    <div style="margin-left:auto;font-size:11px;color:var(--dim);font-family:inherit">
+         Yahoo provides 1 level only (best bid/ask). Sizes are often 0 for NSE.</div>
+  </div>
+
+  <div class="controls">
+    <button onclick="ctl('start')">Start</button>
+    <button onclick="ctl('stop')">Stop</button>
+    <button onclick="backfill('1d')">Backfill 1d</button>
+    <button onclick="backfill('5d')">Backfill 5d</button>
+    <span class="stat" id="stat">loading…</span>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>Time (capture, ms)</th><th>Symbol</th><th>Price ₹</th>
+        <th>Bid</th><th>Ask</th><th>Spread</th>
+        <th>Change</th><th>%</th><th>Volume</th><th>Src</th>
+      </tr></thead>
+      <tbody id="tbody"><tr><td colspan="10" class="empty">Waiting for price changes…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="foot">
+    Showing <span id="cnt">0</span> changes for <b id="activeLbl">—</b> ·
+    stored in <code>local_data/ticks.db</code> → <code>price_changes</code> ·
+    <a href="/">main dashboard</a>
+  </div>
+</div>
+
+<script>
+const MAX = 500;
+let active = null;          // currently displayed tsym
+let ws = null;
+let rows = [];
+const seen = new Set();
+
+const fmtTime = (iso)=> !iso ? "-" : (iso.split("T")[1]||iso);
+const wsUrl = (tsym)=> (location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws/prices?tsym="+encodeURIComponent(tsym)+"&backlog=40";
+
+function render(){
+  const tb=document.getElementById("tbody");
+  const fnum = v => (v==null||v==='')?'-':Number(v).toFixed(2);
+  if(!rows.length){tb.innerHTML='<tr><td colspan="10" class="empty">Waiting for price changes…</td></tr>';}
+  else{
+    tb.innerHTML=rows.map(r=>{
+      const sp = (r.bid!=null && r.ask!=null) ? (r.ask-r.bid).toFixed(2) : '-';
+      return `
+      <tr class="${r.change>=0?'g':'r'}">
+        <td class="mono">${fmtTime(r.received_at)}</td>
+        <td class="mono">${r.tsym}</td>
+        <td class="mono c">${fnum(r.lp)}</td>
+        <td class="mono" style="color:var(--green)">${fnum(r.bid)}</td>
+        <td class="mono" style="color:var(--red)">${fnum(r.ask)}</td>
+        <td class="mono dim">${sp}</td>
+        <td class="mono c">${r.change}</td>
+        <td class="mono c">${r.change_pct}%</td>
+        <td class="mono dim">${(r.volume??'')?.toLocaleString?.()||r.volume||''}</td>
+        <td class="dim">${(r.source||'').replace('yahoo','Y')}</td>
+      </tr>`;}).join("");
+  }
+  document.getElementById("cnt").textContent=rows.length;
+  document.getElementById("activeLbl").textContent=active||"—";
+  const l=rows[0];
+  if(l){
+    const up=l.change>=0, box=document.getElementById("ltpBox");
+    box.style.display="flex"; box.className="ltp "+(up?"green":"red")+" flash";
+    setTimeout(()=>box.classList.remove("flash"),600);
+    document.getElementById("ltpPrice").textContent="₹"+Number(l.lp).toFixed(2);
+    document.getElementById("ltpChg").textContent=(up?"▲ ":"▼ ")+l.change+" ("+l.change_pct+"%)";
+    document.getElementById("ltpTs").textContent="@ "+fmtTime(l.received_at);
+
+    // Bid/Ask box
+    const bab=document.getElementById("bidaskBox");
+    if(l.bid!=null || l.ask!=null){
+      bab.style.display="flex";
+      document.getElementById("bidVal").textContent = l.bid!=null ? "₹"+Number(l.bid).toFixed(2) : "--";
+      document.getElementById("askVal").textContent = l.ask!=null ? "₹"+Number(l.ask).toFixed(2) : "--";
+      document.getElementById("bidSizeVal").textContent = l.bid_size ? " × "+l.bid_size : "";
+      document.getElementById("askSizeVal").textContent = l.ask_size ? " × "+l.ask_size : "";
+      const sp = (l.bid!=null && l.ask!=null) ? (l.ask-l.bid).toFixed(2) : "--";
+      document.getElementById("spreadVal").textContent = "₹"+sp;
+    } else { bab.style.display="none"; }
+  } else { document.getElementById("ltpBox").style.display="none"; document.getElementById("bidaskBox").style.display="none"; }
+}
+
+function addRows(incoming){
+  const fresh=incoming.filter(r=>!seen.has(r.id));
+  fresh.forEach(r=>seen.add(r.id));
+  if(!fresh.length)return;
+  rows=[...fresh.reverse(),...rows].slice(0,MAX);
+  render();
+}
+
+function selectSymbol(tsym){
+  if(active===tsym && ws && ws.readyState===1) return;
+  active=tsym; rows=[]; seen.clear(); render();
+  document.querySelectorAll(".chip").forEach(c=>c.classList.toggle("active",c.dataset.tsym===tsym));
+  if(ws){ try{ws.onclose=null;ws.close();}catch(e){} }
+  connect();
+}
+
+function connect(){
+  if(!active) return;
+  ws=new WebSocket(wsUrl(active));
+  const c=document.getElementById("conn");
+  ws.onopen=()=>{c.className="conn on";c.textContent="● LIVE";};
+  ws.onclose=()=>{c.className="conn off";c.textContent="○ reconnecting…";setTimeout(connect,1500);};
+  ws.onerror=()=>ws.close();
+  ws.onmessage=(ev)=>{try{const m=JSON.parse(ev.data);if(m.rows&&m.rows.length)addRows(m.rows);}catch(e){}};
+}
+
+async function loadSymbols(){
+  try{
+    const r=await fetch("/api/yahoo/symbols");
+    const j=await r.json();
+    const syms=j.symbols||[];
+    const box=document.getElementById("chips");
+    box.innerHTML=syms.map(s=>`
+      <div class="chip ${s.tsym===active?'active':''}" data-tsym="${s.tsym}" onclick="selectSymbol('${s.tsym}')">
+        <span><b>${s.tsym}</b> <span class="cp">${s.last_price!=null?'₹'+s.last_price:''}</span></span>
+        <span class="x" title="remove" onclick="event.stopPropagation();removeStock('${s.tsym}')">×</span>
+      </div>`).join("") || '<span class="dim" style="font-size:13px">No stocks yet — add one above.</span>';
+    if(!active && syms.length){ selectSymbol(syms[0].tsym); }
+    if(active && !syms.find(s=>s.tsym===active) && syms.length){ selectSymbol(syms[0].tsym); }
+  }catch(e){}
+}
+
+async function addStock(){
+  const inp=document.getElementById("addInput"), btn=document.getElementById("addBtn"), msg=document.getElementById("addMsg");
+  const q=inp.value.trim(); if(!q)return;
+  btn.disabled=true; msg.textContent="resolving…"; msg.style.color="var(--dim)";
+  try{
+    const r=await fetch("/api/yahoo/symbols/add",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})});
+    const j=await r.json();
+    if(j.ok){ msg.textContent="added "+j.added.tsym+" ("+j.added.name+")"; msg.style.color="var(--green)"; inp.value="";
+      await loadSymbols(); selectSymbol(j.added.tsym);
+    } else { msg.textContent=j.error||"could not add"; msg.style.color="var(--red)"; }
+  }catch(e){ msg.textContent="error"; msg.style.color="var(--red)"; }
+  finally{ btn.disabled=false; setTimeout(()=>msg.textContent="",4000); }
+}
+
+async function removeStock(tsym){
+  try{ await fetch("/api/yahoo/symbols/remove",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tsym})}); }catch(e){}
+  await loadSymbols();
+}
+
+async function ctl(which){
+  try{
+    if(which==="start") await fetch("/api/yahoo/start",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    else await fetch("/api/yahoo/stop",{method:"POST"});
+    pollStatus();
+  }catch(e){}
+}
+async function backfill(rng){ if(!active)return; try{ await fetch("/api/yahoo/backfill?tsym="+encodeURIComponent(active)+"&rng="+rng,{method:"POST"}); }catch(e){} }
+
+async function pollStatus(){
+  try{
+    const r=await fetch("/api/yahoo/status"); const s=await r.json();
+    const n=(s.symbols||[]).length;
+    document.getElementById("stat").textContent=`polls: ${s.poll_count??0} · stocks: ${n} · ${s.running?'running':'stopped'}`;
+  }catch(e){ document.getElementById("stat").textContent="backend offline"; }
+}
+
+loadSymbols();
+pollStatus();
+setInterval(loadSymbols,5000);   // refresh chip prices + new/removed stocks
+setInterval(pollStatus,3000);
+</script>
+</body>
+</html>
