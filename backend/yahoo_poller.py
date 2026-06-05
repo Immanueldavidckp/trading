@@ -26,8 +26,12 @@ from typing import Optional
 
 import requests
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_data", "ticks.db")
+import db as _db  # unified MySQL/SQLite layer (uses DATABASE_URL env var)
+
+DB_PATH = _db.SQLITE_PATH  # kept for backward-compat imports
 WATCHLIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_data", "watchlist.json")
+PH = _db.PLACE                # "?" for sqlite, "%s" for mysql
+COL_CHANGE = _db.quote_col("change")  # reserved word in MySQL
 
 # Map a Shoonya-style trading symbol to a Yahoo ticker.
 # RELIANCE-EQ on NSE -> RELIANCE.NS
@@ -193,14 +197,8 @@ _NEW_COLS = [
 
 
 def _ensure_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.executescript(SCHEMA)
-        existing = {r[1] for r in conn.execute("PRAGMA table_info(price_changes)").fetchall()}
-        for col, typ in _NEW_COLS:
-            if col not in existing:
-                conn.execute(f"ALTER TABLE price_changes ADD COLUMN {col} {typ}")
-        conn.commit()
+    """Delegate to db.ensure_schema() which handles both MySQL and SQLite."""
+    _db.ensure_schema()
 
 
 def yahoo_ticker_for(tsym: str) -> str:
@@ -276,15 +274,19 @@ class YahooPoller:
             "yahoo",
         )
         with self._lock:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.execute(
-                    """INSERT INTO price_changes
-                       (received_at, bar_time, tsym, yahoo_sym, lp, day_open, day_high,
-                        day_low, prev_close, change, change_pct, volume, source)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    row,
-                )
+            conn = _db.connect()
+            try:
+                cur = conn.cursor()
+                ph = ",".join([PH]*13)
+                cur.execute(
+                    f"""INSERT INTO price_changes
+                        (received_at, bar_time, tsym, yahoo_sym, lp, day_open, day_high,
+                         day_low, prev_close, {COL_CHANGE}, change_pct, volume, source)
+                        VALUES ({ph})""", row)
                 conn.commit()
+                cur.close()
+            finally:
+                conn.close()
         self.change_count += 1
 
     # ---- lifecycle ----
@@ -369,7 +371,14 @@ class YahooPoller:
         prev_close = meta.get("chartPreviousClose")
         inserted = 0
         with self._lock:
-            with sqlite3.connect(DB_PATH) as conn:
+            conn = _db.connect()
+            try:
+                cur = conn.cursor()
+                ph = ",".join([PH]*13)
+                sql = (f"""INSERT INTO price_changes
+                            (received_at, bar_time, tsym, yahoo_sym, lp, day_open, day_high,
+                             day_low, prev_close, {COL_CHANGE}, change_pct, volume, source)
+                            VALUES ({ph})""")
                 for i in range(len(ts)):
                     c = closes[i] if i < len(closes) else None
                     if c is None:
@@ -377,21 +386,18 @@ class YahooPoller:
                     bar_time = datetime.fromtimestamp(ts[i]).strftime("%Y-%m-%d %H:%M:%S")
                     change = round(c - prev_close, 2) if prev_close else None
                     change_pct = round((change / prev_close) * 100, 2) if (change is not None and prev_close) else None
-                    conn.execute(
-                        """INSERT INTO price_changes
-                           (received_at, bar_time, tsym, yahoo_sym, lp, day_open, day_high,
-                            day_low, prev_close, change, change_pct, volume, source)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (
-                            datetime.now().isoformat(timespec="milliseconds"),
-                            bar_time, self.tsym, self.yahoo, c,
-                            meta.get("regularMarketDayOpen"), meta.get("regularMarketDayHigh"),
-                            meta.get("regularMarketDayLow"), prev_close, change, change_pct,
-                            vols[i] if i < len(vols) else None, "yahoo_backfill",
-                        ),
-                    )
+                    cur.execute(sql, (
+                        datetime.now().isoformat(timespec="milliseconds"),
+                        bar_time, self.tsym, self.yahoo, c,
+                        meta.get("regularMarketDayOpen"), meta.get("regularMarketDayHigh"),
+                        meta.get("regularMarketDayLow"), prev_close, change, change_pct,
+                        vols[i] if i < len(vols) else None, "yahoo_backfill",
+                    ))
                     inserted += 1
                 conn.commit()
+                cur.close()
+            finally:
+                conn.close()
         return {"ok": True, "inserted": inserted, "range": rng, "yahoo_sym": self.yahoo}
 
     # ---- query ----
@@ -399,30 +405,45 @@ class YahooPoller:
     def query(tsym: Optional[str] = None, limit: int = 100):
         _ensure_db()
         sql = ("SELECT received_at, bar_time, tsym, lp, bid, ask, bid_size, ask_size, "
-               "change, change_pct, volume, source FROM price_changes")
+               f"{COL_CHANGE} as `change`, change_pct, volume, source FROM price_changes")
         params: list = []
         if tsym:
-            sql += " WHERE tsym = ?"
+            sql += f" WHERE tsym = {PH}"
             params.append(tsym)
-        sql += " ORDER BY id DESC LIMIT ?"
+        sql += f" ORDER BY id DESC LIMIT {PH}"
         params.append(int(limit))
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            return [dict(r) for r in conn.execute(sql, params).fetchall()]
+        conn = _db.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, params)
+            rows = _db.dict_rows(cur)
+            cur.close()
+            return rows
+        finally:
+            conn.close()
 
     @staticmethod
     def stats():
         _ensure_db()
-        with sqlite3.connect(DB_PATH) as conn:
-            total = conn.execute("SELECT COUNT(*) FROM price_changes").fetchone()[0]
-            by_sym = conn.execute(
-                "SELECT tsym, COUNT(*) n, MIN(bar_time) first, MAX(bar_time) last FROM price_changes GROUP BY tsym"
-            ).fetchall()
+        conn = _db.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM price_changes")
+            total = cur.fetchone()[0]
+            cur.execute(
+                "SELECT tsym, COUNT(*) n, MIN(bar_time) first_t, MAX(bar_time) last_t "
+                "FROM price_changes GROUP BY tsym"
+            )
+            by_sym = cur.fetchall()
+            cur.close()
             return {
                 "total_rows": total,
                 "by_symbol": [{"tsym": r[0], "count": r[1], "first": r[2], "last": r[3]} for r in by_sym],
-                "db_path": DB_PATH,
+                "backend": "mysql" if _db.USE_MYSQL else "sqlite",
+                "db_path": None if _db.USE_MYSQL else DB_PATH,
             }
+        finally:
+            conn.close()
 
 
 # ============================================================
@@ -508,14 +529,20 @@ class YahooMultiPoller:
             prev_close, change, change_pct, q.get("volume"), "yahoo",
         )
         with self._lock:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.execute(
-                    """INSERT INTO price_changes
-                       (received_at, bar_time, tsym, yahoo_sym, lp,
-                        bid, ask, bid_size, ask_size,
-                        day_open, day_high, day_low, prev_close, change, change_pct, volume, source)
-                       VALUES (?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?,?,?)""", row)
+            conn = _db.connect()
+            try:
+                cur = conn.cursor()
+                ph = ",".join([PH]*17)
+                cur.execute(
+                    f"""INSERT INTO price_changes
+                        (received_at, bar_time, tsym, yahoo_sym, lp,
+                         bid, ask, bid_size, ask_size,
+                         day_open, day_high, day_low, prev_close, {COL_CHANGE}, change_pct, volume, source)
+                        VALUES ({ph})""", row)
                 conn.commit()
+                cur.close()
+            finally:
+                conn.close()
         self.change_count[tsym] = self.change_count.get(tsym, 0) + 1
 
     # ---- lifecycle ----

@@ -501,33 +501,47 @@ def yahoo_stats():
 
 
 # ---------- Live WebSocket price stream ----------
-from yahoo_poller import DB_PATH as PRICE_DB_PATH
+import db as _db
+PH = _db.PLACE
+COL_CHANGE = _db.quote_col("change")
 
 
 def _fetch_price_rows_after(last_id: int, tsym: Optional[str] = None, limit: int = 50):
     """Return new price_changes rows with id > last_id, oldest-first."""
     sql = ("SELECT id, received_at, bar_time, tsym, lp, bid, ask, bid_size, ask_size, "
-           "change, change_pct, volume, source FROM price_changes WHERE id > ?")
+           f"{COL_CHANGE} as `change`, change_pct, volume, source FROM price_changes WHERE id > " + PH)
     params: list = [last_id]
     if tsym:
-        sql += " AND tsym = ?"
+        sql += f" AND tsym = {PH}"
         params.append(tsym)
-    sql += " ORDER BY id ASC LIMIT ?"
+    sql += f" ORDER BY id ASC LIMIT {PH}"
     params.append(limit)
     try:
-        with sqlite3.connect(PRICE_DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            return [dict(r) for r in conn.execute(sql, params).fetchall()]
-    except sqlite3.OperationalError:
-        return []  # table not created yet
+        conn = _db.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, params)
+            rows = _db.dict_rows(cur)
+            cur.close()
+            return rows
+        finally:
+            conn.close()
+    except Exception:
+        return []
 
 
 def _latest_price_id() -> int:
     try:
-        with sqlite3.connect(PRICE_DB_PATH) as conn:
-            row = conn.execute("SELECT MAX(id) FROM price_changes").fetchone()
-            return row[0] or 0
-    except sqlite3.OperationalError:
+        conn = _db.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(id) FROM price_changes")
+            row = cur.fetchone()
+            cur.close()
+            return (row[0] or 0) if row else 0
+        finally:
+            conn.close()
+    except Exception:
         return 0
 
 
