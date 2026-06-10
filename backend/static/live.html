@@ -3,277 +3,574 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Live Price Changes</title>
+<title>trade.scratchforge — Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root{
-    --bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;
-    --dim:#8b949e;--green:#2ea043;--red:#f85149;--accent:#58a6ff;
+    --bg: #07090d;
+    --bg-2: #0d1119;
+    --panel: #12161f;
+    --panel-2: #1a1f2b;
+    --border: #232a38;
+    --border-bright: #2f3848;
+    --text: #e5ecf5;
+    --text-2: #9ba6b8;
+    --text-3: #5e6776;
+    --green: #00d68f;
+    --green-bg: rgba(0,214,143,0.10);
+    --red: #ff5677;
+    --red-bg: rgba(255,86,119,0.10);
+    --blue: #5e8eff;
+    --blue-bg: rgba(94,142,255,0.12);
+    --yellow: #ffb84d;
+    --grad: linear-gradient(135deg,#5e8eff 0%, #b372ff 100%);
   }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
-  .wrap{max-width:1040px;margin:0 auto;padding:20px 16px 60px}
-  .topbar{display:flex;justify-content:space-between;align-items:flex-start;
-    border-bottom:1px solid var(--border);padding-bottom:12px}
-  .topbar h1{margin:0;font-size:24px;letter-spacing:.5px}
-  .src{color:var(--dim);font-size:12px}
-  .conn{font-size:13px;font-weight:600;padding:4px 10px;border-radius:6px}
-  .conn.on{color:var(--green);background:rgba(46,160,67,.12)}
-  .conn.off{color:var(--dim);background:rgba(139,148,158,.12)}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:radial-gradient(ellipse at top, rgba(94,142,255,0.06), transparent 50%), var(--bg);
+    color:var(--text);
+    font-family:'Inter',system-ui,sans-serif;
+    font-size:14px;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  .app{display:grid;grid-template-columns:260px 1fr;min-height:100vh}
 
-  /* Add stock + chips */
-  .addbar{display:flex;gap:8px;margin:16px 0 10px}
-  .addbar input{flex:1;background:var(--panel);border:1px solid var(--border);color:var(--text);
-    padding:9px 12px;border-radius:8px;font-size:14px;outline:none}
-  .addbar input:focus{border-color:var(--accent)}
-  .addbar button{background:var(--accent);color:#04101f;border:none;font-weight:700;
-    padding:9px 16px;border-radius:8px;cursor:pointer;font-size:14px}
-  .addbar button:disabled{opacity:.5;cursor:not-allowed}
-  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
-  .chip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--border);
-    border-radius:99px;padding:6px 6px 6px 14px;cursor:pointer;font-size:13px}
-  .chip.active{border-color:var(--accent);background:rgba(88,166,255,.1)}
-  .chip .cp{font-variant-numeric:tabular-nums;color:var(--dim)}
-  .chip .x{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-    background:rgba(248,81,73,.15);color:var(--red);font-size:13px;line-height:1}
-  .chip .x:hover{background:var(--red);color:#fff}
+  /* --------- Sidebar --------- */
+  .sidebar{
+    background:var(--bg-2);
+    border-right:1px solid var(--border);
+    padding:18px 14px;
+    position:sticky;top:0;height:100vh;overflow-y:auto;
+  }
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+  .brand-mark{width:32px;height:32px;border-radius:9px;background:var(--grad);display:grid;place-items:center;color:#fff;font-weight:700;box-shadow:0 4px 18px rgba(94,142,255,0.35)}
+  .brand-text{font-weight:700;font-size:15px;letter-spacing:.2px}
+  .brand-sub{font-size:11px;color:var(--text-3)}
+  .section-label{font-size:10px;font-weight:600;color:var(--text-3);letter-spacing:1px;text-transform:uppercase;padding:14px 6px 8px}
 
-  .ltp{display:flex;align-items:baseline;gap:16px;margin:14px 0;padding:18px 22px;
-    background:var(--panel);border:1px solid var(--border);border-radius:10px}
-  .ltp .name{font-size:13px;color:var(--dim);margin-right:auto;align-self:center}
-  .ltp .price{font-size:40px;font-weight:700;font-variant-numeric:tabular-nums}
-  .ltp .chg{font-size:18px;font-weight:600}
-  .ltp .ts{color:var(--dim);font-size:13px;font-family:monospace}
-  .ltp.green .price,.ltp.green .chg{color:var(--green)}
-  .ltp.red .price,.ltp.red .chg{color:var(--red)}
+  .add-row{display:flex;gap:6px;margin-bottom:10px}
+  .add-row input{
+    flex:1;background:var(--panel);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);padding:8px 10px;font-size:12.5px;outline:none;font-family:inherit;
+  }
+  .add-row input:focus{border-color:var(--blue)}
+  .add-row button{
+    background:var(--grad);color:#fff;border:none;border-radius:8px;
+    padding:0 12px;font-size:18px;cursor:pointer;font-weight:600;
+  }
+  .add-msg{font-size:11px;color:var(--text-3);margin-bottom:8px;min-height:14px;padding:0 4px}
 
-  .controls{display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap}
-  .controls button{background:var(--panel);color:var(--text);border:1px solid var(--border);
-    padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px}
-  .controls button:hover{border-color:var(--accent);color:var(--accent)}
-  .stat{color:var(--dim);font-size:12px;margin-left:8px;font-family:monospace}
+  .stock-list{display:flex;flex-direction:column;gap:4px}
+  .stock-item{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:9px 11px;border-radius:9px;cursor:pointer;
+    border:1px solid transparent;transition:background .15s,border-color .15s;
+  }
+  .stock-item:hover{background:var(--panel)}
+  .stock-item.active{background:var(--panel);border-color:var(--blue);box-shadow:inset 3px 0 0 var(--blue)}
+  .stock-meta{display:flex;flex-direction:column;gap:1px;overflow:hidden}
+  .stock-sym{font-size:13px;font-weight:600;letter-spacing:.2px}
+  .stock-name{font-size:10.5px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
+  .stock-price-col{text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:1px}
+  .stock-price{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+  .stock-chg{font-size:10.5px;font-weight:600;font-family:'JetBrains Mono',monospace}
+  .stock-x{
+    opacity:0;width:18px;height:18px;display:grid;place-items:center;border-radius:50%;
+    background:var(--red-bg);color:var(--red);font-size:11px;transition:opacity .15s;
+    position:absolute;right:6px;
+  }
+  .stock-item{position:relative}
+  .stock-item:hover .stock-x{opacity:1}
 
-  .tablewrap{border:1px solid var(--border);border-radius:10px;overflow:hidden;max-height:58vh;overflow-y:auto}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  thead th{position:sticky;top:0;background:var(--panel);color:var(--dim);text-align:left;
-    padding:10px 12px;font-weight:600;border-bottom:1px solid var(--border)}
-  tbody td{padding:7px 12px;border-bottom:1px solid rgba(48,54,61,.5)}
-  tbody tr.g td.c{color:var(--green)} tbody tr.r td.c{color:var(--red)}
-  tbody tr:hover{background:rgba(88,166,255,.06)}
-  .mono{font-family:'SF Mono',Consolas,monospace;font-variant-numeric:tabular-nums}
-  .dim{color:var(--dim)} .empty{text-align:center;color:var(--dim);padding:30px}
-  .flash{animation:fl .6s ease}@keyframes fl{0%{background:rgba(88,166,255,.18)}100%{background:transparent}}
-  .foot{color:var(--dim);font-size:12px;margin-top:14px;text-align:center}
-  .foot code{background:var(--panel);padding:1px 5px;border-radius:4px}
-  a{color:var(--accent)}
-  .msg{font-size:12px;color:var(--red);margin-left:8px}
+  /* --------- Main --------- */
+  .main{padding:18px 22px 40px;min-width:0}
+  .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;gap:14px;flex-wrap:wrap}
+  .crumb{display:flex;align-items:center;gap:10px}
+  .crumb h1{font-size:22px;font-weight:700;letter-spacing:-.2px}
+  .crumb .sub{font-size:12px;color:var(--text-3)}
+  .conn{
+    display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;
+    padding:6px 12px;border-radius:99px;background:var(--panel);border:1px solid var(--border);
+  }
+  .conn-dot{width:7px;height:7px;border-radius:50%;background:var(--text-3)}
+  .conn.on .conn-dot{background:var(--green);box-shadow:0 0 0 4px rgba(0,214,143,0.18)}
+  .conn.on{color:var(--green)}
+
+  /* --------- KPI cards --------- */
+  .kpis{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:12px;margin-bottom:18px}
+  .kpi{
+    background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px 18px;
+    transition:border-color .2s;position:relative;overflow:hidden;
+  }
+  .kpi.primary{background:linear-gradient(180deg,var(--panel-2),var(--panel));border-color:var(--border-bright)}
+  .kpi-label{font-size:11px;color:var(--text-3);font-weight:600;letter-spacing:.6px;text-transform:uppercase;margin-bottom:6px}
+  .kpi-value{font-family:'JetBrains Mono',monospace;font-weight:700;font-variant-numeric:tabular-nums;font-size:26px;letter-spacing:-.5px}
+  .kpi-value.lg{font-size:34px}
+  .kpi-sub{display:flex;align-items:baseline;gap:8px;margin-top:4px;font-size:12.5px}
+  .arrow{font-size:11px}
+  .kpi.flash{animation:kpiflash .8s ease}
+  @keyframes kpiflash{0%{background:rgba(94,142,255,0.12)}100%{}}
+
+  .kpi-row{display:flex;align-items:baseline;gap:14px}
+  .kpi-cell{display:flex;flex-direction:column;gap:2px}
+  .kpi-cell .v{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:18px;font-variant-numeric:tabular-nums}
+  .kpi-cell .k{font-size:10px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+
+  .green{color:var(--green)} .red{color:var(--red)} .blue{color:var(--blue)} .dim{color:var(--text-3)}
+  .pill{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:600;font-family:'JetBrains Mono',monospace}
+  .pill.green{background:var(--green-bg);color:var(--green)}
+  .pill.red{background:var(--red-bg);color:var(--red)}
+
+  /* --------- Chart panel --------- */
+  .chart-card{
+    background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    overflow:hidden;margin-bottom:18px;
+  }
+  .chart-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
+  .chart-title{font-size:13px;font-weight:600;color:var(--text-2)}
+  .chart-legend{display:flex;gap:14px;font-size:11.5px;color:var(--text-3)}
+  .legend-item{display:flex;align-items:center;gap:6px}
+  .legend-dot{width:8px;height:2px;border-radius:1px}
+  .chart-body{height:340px;position:relative}
+  #priceChart{position:absolute;inset:0}
+
+  /* --------- Tables --------- */
+  .grid-2{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}
+  @media (max-width:1100px){.grid-2{grid-template-columns:1fr}.kpis{grid-template-columns:1fr 1fr}}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid var(--border)}
+  .panel-title{font-size:13px;font-weight:600;color:var(--text-2)}
+  .panel-sub{font-size:11px;color:var(--text-3)}
+  .scroll{max-height:380px;overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  thead th{
+    position:sticky;top:0;background:var(--panel);color:var(--text-3);
+    text-align:left;padding:9px 14px;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;
+    border-bottom:1px solid var(--border);
+  }
+  tbody td{padding:8px 14px;border-bottom:1px solid rgba(35,42,56,0.5)}
+  tbody tr:hover{background:rgba(94,142,255,0.04)}
+  .mono{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+  .row-up td.c{color:var(--green)}
+  .row-dn td.c{color:var(--red)}
+  .new-row{animation:newrow 1s ease}
+  @keyframes newrow{0%{background:rgba(94,142,255,0.10)}100%{background:transparent}}
+
+  .ctrls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .btn{
+    background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;
+    padding:7px 12px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:500;
+    transition:border-color .15s,color .15s;
+  }
+  .btn:hover{border-color:var(--blue);color:var(--blue)}
+  .btn.primary{background:var(--grad);border:none;color:#fff;font-weight:600}
+  .btn.primary:hover{filter:brightness(1.1)}
+
+  .order-book{display:grid;grid-template-columns:1fr 1fr;gap:0}
+  .book-side{padding:12px 16px}
+  .book-side h4{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px}
+  .book-side h4.bid{color:var(--green)}
+  .book-side h4.ask{color:var(--red)}
+  .book-row{display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:13px;padding:5px 0}
+  .book-row .v{font-weight:600}
+  .book-row.bid .v{color:var(--green)}
+  .book-row.ask .v{color:var(--red)}
+  .book-info{padding:8px 16px;font-size:11px;color:var(--text-3);border-top:1px solid var(--border);background:var(--bg-2)}
+
+  .footer{margin-top:24px;color:var(--text-3);font-size:11px;text-align:center}
+  .footer code{background:var(--panel);padding:2px 7px;border-radius:5px;font-size:10.5px}
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="topbar">
-    <div>
-      <h1>Live Price Changes</h1>
-      <span class="src">source: Yahoo Finance (free) · ~10-12s updates · ~15min delayed in live market · no bid/ask depth</span>
+<div class="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">📈</div>
+      <div>
+        <div class="brand-text">trade.scratchforge</div>
+        <div class="brand-sub">live price intelligence</div>
+      </div>
     </div>
-    <div id="conn" class="conn off">○ connecting…</div>
-  </div>
 
-  <div class="addbar">
-    <input id="addInput" placeholder="Add a stock — type name or symbol (e.g. ola electric, TCS, INFY)…"
-           onkeydown="if(event.key==='Enter')addStock()">
-    <button id="addBtn" onclick="addStock()">+ Add</button>
-    <span id="addMsg" class="msg"></span>
-  </div>
+    <div class="section-label">Add stock</div>
+    <div class="add-row">
+      <input id="addInput" placeholder="e.g. tcs, infosys, hdfc bank" onkeydown="if(event.key==='Enter')addStock()">
+      <button onclick="addStock()">+</button>
+    </div>
+    <div class="add-msg" id="addMsg"></div>
 
-  <div id="chips" class="chips"></div>
+    <div class="section-label">Watchlist</div>
+    <div id="stockList" class="stock-list"></div>
+  </aside>
 
-  <div id="ltpBox" class="ltp green" style="display:none">
-    <span class="name" id="ltpName"></span>
-    <span class="price" id="ltpPrice">₹--</span>
-    <span class="chg" id="ltpChg">--</span>
-    <span class="ts" id="ltpTs"></span>
-  </div>
+  <!-- ============ MAIN ============ -->
+  <main class="main">
 
-  <div id="bidaskBox" style="display:none;margin-bottom:14px;padding:12px 18px;background:var(--panel);
-       border:1px solid var(--border);border-radius:10px;display:flex;gap:30px;align-items:center;
-       font-family:'SF Mono',Consolas,monospace;font-size:14px">
-    <div><span style="color:var(--dim);font-size:11px;text-transform:uppercase">Best Bid</span><br>
-         <span id="bidVal" style="color:var(--green);font-size:18px;font-weight:600">--</span>
-         <span id="bidSizeVal" style="color:var(--dim);font-size:11px"></span></div>
-    <div><span style="color:var(--dim);font-size:11px;text-transform:uppercase">Best Ask</span><br>
-         <span id="askVal" style="color:var(--red);font-size:18px;font-weight:600">--</span>
-         <span id="askSizeVal" style="color:var(--dim);font-size:11px"></span></div>
-    <div><span style="color:var(--dim);font-size:11px;text-transform:uppercase">Spread</span><br>
-         <span id="spreadVal" style="font-size:18px;font-weight:600">--</span></div>
-    <div style="margin-left:auto;font-size:11px;color:var(--dim);font-family:inherit">
-         Yahoo provides 1 level only (best bid/ask). Sizes are often 0 for NSE.</div>
-  </div>
+    <div class="topbar">
+      <div class="crumb">
+        <h1 id="hdrSym">—</h1>
+        <span class="sub" id="hdrName"></span>
+      </div>
+      <div class="ctrls">
+        <div class="conn" id="conn"><span class="conn-dot"></span><span id="connText">connecting…</span></div>
+        <button class="btn" onclick="backfill('1d')">Backfill 1d</button>
+        <button class="btn" onclick="backfill('5d')">Backfill 5d</button>
+      </div>
+    </div>
 
-  <div class="controls">
-    <button onclick="ctl('start')">Start</button>
-    <button onclick="ctl('stop')">Stop</button>
-    <button onclick="backfill('1d')">Backfill 1d</button>
-    <button onclick="backfill('5d')">Backfill 5d</button>
-    <span class="stat" id="stat">loading…</span>
-  </div>
+    <!-- KPI cards -->
+    <div class="kpis">
+      <div class="kpi primary" id="kpiPrice">
+        <div class="kpi-label">Last price</div>
+        <div class="kpi-value lg mono" id="kpiPriceVal">₹—</div>
+        <div class="kpi-sub">
+          <span class="pill" id="kpiChgPill">—</span>
+          <span class="dim mono" id="kpiTs">—</span>
+        </div>
+      </div>
+      <div class="kpi" id="kpiBid">
+        <div class="kpi-label">Best bid</div>
+        <div class="kpi-value mono green" id="kpiBidVal">—</div>
+        <div class="kpi-sub dim"><span class="mono" id="kpiBidSize">qty —</span></div>
+      </div>
+      <div class="kpi" id="kpiAsk">
+        <div class="kpi-label">Best ask</div>
+        <div class="kpi-value mono red" id="kpiAskVal">—</div>
+        <div class="kpi-sub dim"><span class="mono" id="kpiAskSize">qty —</span></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Spread · Volume</div>
+        <div class="kpi-row">
+          <div class="kpi-cell"><span class="k">Spread</span><span class="v" id="kpiSpread">—</span></div>
+          <div class="kpi-cell"><span class="k">Vol</span><span class="v" id="kpiVol">—</span></div>
+        </div>
+      </div>
+    </div>
 
-  <div class="tablewrap">
-    <table>
-      <thead><tr>
-        <th>Time (capture, ms)</th><th>Symbol</th><th>Price ₹</th>
-        <th>Bid</th><th>Ask</th><th>Spread</th>
-        <th>Change</th><th>%</th><th>Volume</th><th>Src</th>
-      </tr></thead>
-      <tbody id="tbody"><tr><td colspan="10" class="empty">Waiting for price changes…</td></tr></tbody>
-    </table>
-  </div>
+    <!-- Chart -->
+    <div class="chart-card">
+      <div class="chart-head">
+        <div class="chart-title">Live price chart · 1-min</div>
+        <div class="chart-legend">
+          <span class="legend-item"><span class="legend-dot" style="background:#5e8eff"></span>Price</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#00d68f"></span>Bid</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#ff5677"></span>Ask</span>
+        </div>
+      </div>
+      <div class="chart-body"><div id="priceChart"></div></div>
+    </div>
 
-  <div class="foot">
-    Showing <span id="cnt">0</span> changes for <b id="activeLbl">—</b> ·
-    stored in <code>local_data/ticks.db</code> → <code>price_changes</code> ·
-    <a href="/">main dashboard</a>
-  </div>
+    <!-- Tables -->
+    <div class="grid-2">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">Recent price changes</div>
+            <div class="panel-sub" id="tickCount">0 ticks</div>
+          </div>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead><tr>
+              <th>Time</th><th>Price</th><th>Bid</th><th>Ask</th><th>Spread</th><th>Vol Δ</th>
+            </tr></thead>
+            <tbody id="tickBody">
+              <tr><td colspan="6" style="padding:30px;text-align:center;color:var(--text-3)">waiting for ticks…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">Order book (top of book)</div>
+            <div class="panel-sub">Yahoo · 1 level only</div>
+          </div>
+        </div>
+        <div class="order-book">
+          <div class="book-side">
+            <h4 class="bid">▲ Bid</h4>
+            <div class="book-row bid"><span>Price</span><span class="v" id="bookBid">—</span></div>
+            <div class="book-row bid"><span>Size</span><span class="v" id="bookBidSize">—</span></div>
+          </div>
+          <div class="book-side">
+            <h4 class="ask">▼ Ask</h4>
+            <div class="book-row ask"><span>Price</span><span class="v" id="bookAsk">—</span></div>
+            <div class="book-row ask"><span>Size</span><span class="v" id="bookAskSize">—</span></div>
+          </div>
+        </div>
+        <div class="book-info" id="bookInfo">
+          Mid: — &nbsp;·&nbsp; Spread: — &nbsp;·&nbsp; Microprice: —
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      Source: Yahoo Finance · ~10–12s updates · ~15-min delayed during live market · 1-level depth.
+      Stored to MySQL · table <code>price_changes</code>.
+      <a href="/">main dashboard</a>
+    </div>
+  </main>
 </div>
 
 <script>
-const MAX = 500;
-let active = null;          // currently displayed tsym
+/* =========================================================
+   Live trading dashboard logic
+   ========================================================= */
+const MAX_TABLE = 200;
+const MAX_CHART_POINTS = 600;
+
+let active = null;
+let symbols = [];
+let rows = [];                // live tick rows for the active symbol
+let prevVolume = null;        // for "Vol Δ" column
 let ws = null;
-let rows = [];
-const seen = new Set();
+const seenIds = new Set();
 
-const fmtTime = (iso)=> !iso ? "-" : (iso.split("T")[1]||iso);
-const wsUrl = (tsym)=> (location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws/prices?tsym="+encodeURIComponent(tsym)+"&backlog=40";
+// ---- TradingView Lightweight Charts ----
+const chartEl = document.getElementById('priceChart');
+const chart = LightweightCharts.createChart(chartEl, {
+  layout: { background: { color: 'transparent' }, textColor: '#9ba6b8', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
+  grid: { vertLines: { color: 'rgba(35,42,56,0.4)' }, horzLines: { color: 'rgba(35,42,56,0.4)' } },
+  rightPriceScale: { borderColor: 'rgba(35,42,56,0.7)' },
+  timeScale: { borderColor: 'rgba(35,42,56,0.7)', timeVisible: true, secondsVisible: true },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  width: chartEl.clientWidth,
+  height: 340,
+});
+const priceSeries = chart.addLineSeries({ color: '#5e8eff', lineWidth: 2, priceLineColor: '#5e8eff', priceLineWidth: 1 });
+const bidSeries   = chart.addLineSeries({ color: '#00d68f', lineWidth: 1, lineStyle: 2, crosshairMarkerVisible: false });
+const askSeries   = chart.addLineSeries({ color: '#ff5677', lineWidth: 1, lineStyle: 2, crosshairMarkerVisible: false });
 
-function render(){
-  const tb=document.getElementById("tbody");
-  const fnum = v => (v==null||v==='')?'-':Number(v).toFixed(2);
-  if(!rows.length){tb.innerHTML='<tr><td colspan="10" class="empty">Waiting for price changes…</td></tr>';}
-  else{
-    tb.innerHTML=rows.map(r=>{
-      const sp = (r.bid!=null && r.ask!=null) ? (r.ask-r.bid).toFixed(2) : '-';
-      return `
-      <tr class="${r.change>=0?'g':'r'}">
-        <td class="mono">${fmtTime(r.received_at)}</td>
-        <td class="mono">${r.tsym}</td>
-        <td class="mono c">${fnum(r.lp)}</td>
-        <td class="mono" style="color:var(--green)">${fnum(r.bid)}</td>
-        <td class="mono" style="color:var(--red)">${fnum(r.ask)}</td>
-        <td class="mono dim">${sp}</td>
-        <td class="mono c">${r.change}</td>
-        <td class="mono c">${r.change_pct}%</td>
-        <td class="mono dim">${(r.volume??'')?.toLocaleString?.()||r.volume||''}</td>
-        <td class="dim">${(r.source||'').replace('yahoo','Y')}</td>
-      </tr>`;}).join("");
+window.addEventListener('resize', () => chart.applyOptions({ width: chartEl.clientWidth }));
+
+// ---- Helpers ----
+const fmtTime = iso => !iso ? '-' : (iso.split('T')[1] || iso);
+const fmtNum  = (v, d=2) => (v==null || v==='' || isNaN(v)) ? '—' : Number(v).toFixed(d);
+const fmtINR  = v => v==null ? '—' : '₹' + Number(v).toFixed(2);
+const fmtCompact = v => {
+  if (v==null) return '—';
+  const n = Number(v);
+  if (n>=10000000) return (n/10000000).toFixed(2)+' Cr';
+  if (n>=100000) return (n/100000).toFixed(2)+' L';
+  if (n>=1000) return (n/1000).toFixed(1)+' K';
+  return String(n);
+};
+function tsToSec(iso){ return Math.floor(new Date(iso.endsWith('Z')?iso:iso+'Z').getTime()/1000); }
+
+// ---- Render KPIs + book + chart from latest row ----
+function applyLatest(r){
+  if(!r) return;
+  const up = (r.change ?? 0) >= 0;
+  document.getElementById('kpiPriceVal').textContent = fmtINR(r.lp);
+  const pill = document.getElementById('kpiChgPill');
+  pill.textContent = (up?'▲ ':'▼ ') + r.change + ' (' + r.change_pct + '%)';
+  pill.className = 'pill ' + (up?'green':'red');
+  document.getElementById('kpiTs').textContent = '@ ' + fmtTime(r.received_at);
+
+  document.getElementById('kpiBidVal').textContent = r.bid==null?'—':fmtNum(r.bid);
+  document.getElementById('kpiAskVal').textContent = r.ask==null?'—':fmtNum(r.ask);
+  document.getElementById('kpiBidSize').textContent = 'qty ' + (r.bid_size==null?'—':fmtCompact(r.bid_size));
+  document.getElementById('kpiAskSize').textContent = 'qty ' + (r.ask_size==null?'—':fmtCompact(r.ask_size));
+
+  const sp = (r.bid!=null && r.ask!=null) ? (r.ask-r.bid).toFixed(2) : '—';
+  document.getElementById('kpiSpread').textContent = sp==='—'?'—':'₹'+sp;
+  document.getElementById('kpiVol').textContent = fmtCompact(r.volume);
+
+  // Order book mini-panel
+  document.getElementById('bookBid').textContent = fmtNum(r.bid);
+  document.getElementById('bookAsk').textContent = fmtNum(r.ask);
+  document.getElementById('bookBidSize').textContent = r.bid_size==null?'—':fmtCompact(r.bid_size);
+  document.getElementById('bookAskSize').textContent = r.ask_size==null?'—':fmtCompact(r.ask_size);
+  const mid = (r.bid!=null && r.ask!=null) ? ((r.bid+r.ask)/2).toFixed(3) : '—';
+  let micro = '—';
+  if(r.bid!=null && r.ask!=null && r.bid_size && r.ask_size){
+    micro = ((r.bid*r.ask_size + r.ask*r.bid_size)/(r.bid_size+r.ask_size)).toFixed(3);
   }
-  document.getElementById("cnt").textContent=rows.length;
-  document.getElementById("activeLbl").textContent=active||"—";
-  const l=rows[0];
-  if(l){
-    const up=l.change>=0, box=document.getElementById("ltpBox");
-    box.style.display="flex"; box.className="ltp "+(up?"green":"red")+" flash";
-    setTimeout(()=>box.classList.remove("flash"),600);
-    document.getElementById("ltpPrice").textContent="₹"+Number(l.lp).toFixed(2);
-    document.getElementById("ltpChg").textContent=(up?"▲ ":"▼ ")+l.change+" ("+l.change_pct+"%)";
-    document.getElementById("ltpTs").textContent="@ "+fmtTime(l.received_at);
+  document.getElementById('bookInfo').innerHTML =
+    `Mid: <b class="mono">${mid}</b> &nbsp;·&nbsp; Spread: <b class="mono">${sp}</b> &nbsp;·&nbsp; Microprice: <b class="mono">${micro}</b>`;
 
-    // Bid/Ask box
-    const bab=document.getElementById("bidaskBox");
-    if(l.bid!=null || l.ask!=null){
-      bab.style.display="flex";
-      document.getElementById("bidVal").textContent = l.bid!=null ? "₹"+Number(l.bid).toFixed(2) : "--";
-      document.getElementById("askVal").textContent = l.ask!=null ? "₹"+Number(l.ask).toFixed(2) : "--";
-      document.getElementById("bidSizeVal").textContent = l.bid_size ? " × "+l.bid_size : "";
-      document.getElementById("askSizeVal").textContent = l.ask_size ? " × "+l.ask_size : "";
-      const sp = (l.bid!=null && l.ask!=null) ? (l.ask-l.bid).toFixed(2) : "--";
-      document.getElementById("spreadVal").textContent = "₹"+sp;
-    } else { bab.style.display="none"; }
-  } else { document.getElementById("ltpBox").style.display="none"; document.getElementById("bidaskBox").style.display="none"; }
+  // KPI flash
+  const kp = document.getElementById('kpiPrice');
+  kp.classList.add('flash'); setTimeout(()=>kp.classList.remove('flash'), 800);
 }
 
-function addRows(incoming){
-  const fresh=incoming.filter(r=>!seen.has(r.id));
-  fresh.forEach(r=>seen.add(r.id));
-  if(!fresh.length)return;
-  rows=[...fresh.reverse(),...rows].slice(0,MAX);
-  render();
+// ---- Render the rolling tick table ----
+function renderTable(){
+  const tb = document.getElementById('tickBody');
+  if(!rows.length){
+    tb.innerHTML = '<tr><td colspan="6" style="padding:30px;text-align:center;color:var(--text-3)">waiting for ticks…</td></tr>';
+  } else {
+    tb.innerHTML = rows.slice(0, MAX_TABLE).map((r,i) => {
+      const sp = (r.bid!=null && r.ask!=null) ? (r.ask-r.bid).toFixed(2) : '—';
+      const cls = r.change>=0 ? 'row-up' : 'row-dn';
+      const newC = i===0 ? ' new-row' : '';
+      const dv = r._volDelta;
+      const dvTxt = dv==null ? '—' : (dv>=0?'+':'') + fmtCompact(dv);
+      return `<tr class="${cls}${newC}">
+        <td class="mono dim">${fmtTime(r.received_at)}</td>
+        <td class="mono c">${fmtNum(r.lp)}</td>
+        <td class="mono green">${fmtNum(r.bid)}</td>
+        <td class="mono red">${fmtNum(r.ask)}</td>
+        <td class="mono dim">${sp}</td>
+        <td class="mono dim">${dvTxt}</td>
+      </tr>`;
+    }).join('');
+  }
+  document.getElementById('tickCount').textContent = rows.length + ' ticks';
 }
 
-function selectSymbol(tsym){
-  if(active===tsym && ws && ws.readyState===1) return;
-  active=tsym; rows=[]; seen.clear(); render();
-  document.querySelectorAll(".chip").forEach(c=>c.classList.toggle("active",c.dataset.tsym===tsym));
-  if(ws){ try{ws.onclose=null;ws.close();}catch(e){} }
-  connect();
+// ---- Chart helpers ----
+function addToChart(r){
+  if(r.lp==null) return;
+  const t = tsToSec(r.received_at);
+  // lightweight-charts requires strictly ascending; if same second arrives twice, .update() replaces it.
+  try {
+    priceSeries.update({ time: t, value: r.lp });
+    if(r.bid!=null) bidSeries.update({ time: t, value: r.bid });
+    if(r.ask!=null) askSeries.update({ time: t, value: r.ask });
+  } catch(e) { /* out-of-order ignored */ }
+}
+function resetChart(){
+  priceSeries.setData([]); bidSeries.setData([]); askSeries.setData([]);
 }
 
+// ---- WebSocket plumbing ----
+function setConn(on, txt){
+  const c = document.getElementById('conn');
+  c.classList.toggle('on', on);
+  document.getElementById('connText').textContent = txt;
+}
+function wsUrl(tsym){
+  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  return proto + location.host + '/ws/prices?tsym=' + encodeURIComponent(tsym) + '&backlog=80';
+}
 function connect(){
   if(!active) return;
-  ws=new WebSocket(wsUrl(active));
-  const c=document.getElementById("conn");
-  ws.onopen=()=>{c.className="conn on";c.textContent="● LIVE";};
-  ws.onclose=()=>{c.className="conn off";c.textContent="○ reconnecting…";setTimeout(connect,1500);};
-  ws.onerror=()=>ws.close();
-  ws.onmessage=(ev)=>{try{const m=JSON.parse(ev.data);if(m.rows&&m.rows.length)addRows(m.rows);}catch(e){}};
+  if(ws){ try{ ws.onclose=null; ws.close(); }catch(e){} }
+  setConn(false,'connecting…');
+  ws = new WebSocket(wsUrl(active));
+  ws.onopen = ()=> setConn(true,'LIVE');
+  ws.onclose = ()=> { setConn(false,'reconnecting…'); setTimeout(connect, 1500); };
+  ws.onerror = ()=> { try{ws.close();}catch(e){} };
+  ws.onmessage = (ev) => {
+    let msg; try{ msg = JSON.parse(ev.data); }catch(e){ return; }
+    if(!msg.rows || !msg.rows.length) return;
+    const fresh = msg.rows.filter(r => !seenIds.has(r.id));
+    fresh.forEach(r => seenIds.add(r.id));
+    if(!fresh.length) return;
+
+    // Compute volume delta per row (cumulative -> per-interval)
+    // backlog arrives in ascending order; we keep that ordering when computing delta.
+    fresh.forEach(r => {
+      if(prevVolume != null && r.volume != null){
+        r._volDelta = r.volume - prevVolume;
+      }
+      if(r.volume != null) prevVolume = r.volume;
+      addToChart(r);
+    });
+
+    // Prepend newest first to table
+    rows = [...fresh.slice().reverse(), ...rows].slice(0, MAX_TABLE);
+    applyLatest(rows[0]);
+    renderTable();
+  };
+}
+
+// ---- Sidebar / watchlist ----
+function renderSidebar(){
+  const box = document.getElementById('stockList');
+  if(!symbols.length){
+    box.innerHTML = '<div class="dim" style="font-size:12px;padding:8px">No stocks yet. Add one above.</div>';
+    return;
+  }
+  box.innerHTML = symbols.map(s => {
+    const up = s.last_price != null && s.changes > 0;
+    const cls = s.tsym === active ? 'active' : '';
+    return `<div class="stock-item ${cls}" data-tsym="${s.tsym}" onclick="selectSymbol('${s.tsym}')">
+      <div class="stock-meta">
+        <div class="stock-sym">${s.tsym}</div>
+        <div class="stock-name">${s.name||''}</div>
+      </div>
+      <div class="stock-price-col">
+        <div class="stock-price">${s.last_price!=null?'₹'+s.last_price:'—'}</div>
+        <div class="stock-chg ${up?'green':'dim'}">${s.bid!=null?'b '+s.bid:''}</div>
+      </div>
+      <span class="stock-x" title="remove" onclick="event.stopPropagation();removeStock('${s.tsym}')">×</span>
+    </div>`;
+  }).join('');
 }
 
 async function loadSymbols(){
   try{
-    const r=await fetch("/api/yahoo/symbols");
-    const j=await r.json();
-    const syms=j.symbols||[];
-    const box=document.getElementById("chips");
-    box.innerHTML=syms.map(s=>`
-      <div class="chip ${s.tsym===active?'active':''}" data-tsym="${s.tsym}" onclick="selectSymbol('${s.tsym}')">
-        <span><b>${s.tsym}</b> <span class="cp">${s.last_price!=null?'₹'+s.last_price:''}</span></span>
-        <span class="x" title="remove" onclick="event.stopPropagation();removeStock('${s.tsym}')">×</span>
-      </div>`).join("") || '<span class="dim" style="font-size:13px">No stocks yet — add one above.</span>';
-    if(!active && syms.length){ selectSymbol(syms[0].tsym); }
-    if(active && !syms.find(s=>s.tsym===active) && syms.length){ selectSymbol(syms[0].tsym); }
+    const r = await fetch('/api/yahoo/symbols');
+    const j = await r.json();
+    symbols = j.symbols || [];
+    if(!active && symbols.length) selectSymbol(symbols[0].tsym, true);
+    if(active && !symbols.find(s => s.tsym===active) && symbols.length) selectSymbol(symbols[0].tsym, true);
+    renderSidebar();
   }catch(e){}
+}
+
+function selectSymbol(tsym, fromBoot){
+  if(active===tsym && !fromBoot) return;
+  active = tsym;
+  rows = []; seenIds.clear(); prevVolume = null;
+  resetChart();
+  renderTable();
+  const s = symbols.find(x=>x.tsym===tsym);
+  document.getElementById('hdrSym').textContent = tsym;
+  document.getElementById('hdrName').textContent = s ? s.name : '';
+  renderSidebar();
+  connect();
 }
 
 async function addStock(){
-  const inp=document.getElementById("addInput"), btn=document.getElementById("addBtn"), msg=document.getElementById("addMsg");
-  const q=inp.value.trim(); if(!q)return;
-  btn.disabled=true; msg.textContent="resolving…"; msg.style.color="var(--dim)";
+  const inp = document.getElementById('addInput'), msg = document.getElementById('addMsg');
+  const q = inp.value.trim(); if(!q) return;
+  msg.textContent = 'resolving…'; msg.style.color = 'var(--text-3)';
   try{
-    const r=await fetch("/api/yahoo/symbols/add",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})});
-    const j=await r.json();
-    if(j.ok){ msg.textContent="added "+j.added.tsym+" ("+j.added.name+")"; msg.style.color="var(--green)"; inp.value="";
-      await loadSymbols(); selectSymbol(j.added.tsym);
-    } else { msg.textContent=j.error||"could not add"; msg.style.color="var(--red)"; }
-  }catch(e){ msg.textContent="error"; msg.style.color="var(--red)"; }
-  finally{ btn.disabled=false; setTimeout(()=>msg.textContent="",4000); }
+    const r = await fetch('/api/yahoo/symbols/add', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})});
+    const j = await r.json();
+    if(j.ok){
+      msg.textContent = '✓ added ' + j.added.tsym; msg.style.color = 'var(--green)';
+      inp.value = '';
+      await loadSymbols();
+      selectSymbol(j.added.tsym);
+    } else {
+      msg.textContent = j.error || 'not found'; msg.style.color = 'var(--red)';
+    }
+  }catch(e){ msg.textContent = 'error'; msg.style.color = 'var(--red)'; }
+  setTimeout(()=>msg.textContent='', 4000);
 }
 
 async function removeStock(tsym){
-  try{ await fetch("/api/yahoo/symbols/remove",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tsym})}); }catch(e){}
+  try{ await fetch('/api/yahoo/symbols/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tsym})}); }catch(e){}
   await loadSymbols();
 }
 
-async function ctl(which){
-  try{
-    if(which==="start") await fetch("/api/yahoo/start",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
-    else await fetch("/api/yahoo/stop",{method:"POST"});
-    pollStatus();
-  }catch(e){}
-}
-async function backfill(rng){ if(!active)return; try{ await fetch("/api/yahoo/backfill?tsym="+encodeURIComponent(active)+"&rng="+rng,{method:"POST"}); }catch(e){} }
-
-async function pollStatus(){
-  try{
-    const r=await fetch("/api/yahoo/status"); const s=await r.json();
-    const n=(s.symbols||[]).length;
-    document.getElementById("stat").textContent=`polls: ${s.poll_count??0} · stocks: ${n} · ${s.running?'running':'stopped'}`;
-  }catch(e){ document.getElementById("stat").textContent="backend offline"; }
+async function backfill(rng){
+  if(!active) return;
+  try{ await fetch('/api/yahoo/backfill?tsym='+encodeURIComponent(active)+'&rng='+rng,{method:'POST'}); }catch(e){}
+  // After backfill, reconnect WS so we re-fetch the backlog
+  rows = []; seenIds.clear(); prevVolume = null;
+  resetChart();
+  connect();
 }
 
+// ---- Boot ----
 loadSymbols();
-pollStatus();
-setInterval(loadSymbols,5000);   // refresh chip prices + new/removed stocks
-setInterval(pollStatus,3000);
+setInterval(loadSymbols, 6000);
 </script>
 </body>
 </html>
