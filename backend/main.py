@@ -616,6 +616,11 @@ class FtCancelModel(BaseModel):
     orderno: str
 
 
+class FtSetTokenModel(BaseModel):
+    token: str
+    api_secret: str  # must match server's secret — acts as auth for this endpoint
+
+
 @app.get("/api/flattrade/status")
 def ft_status():
     if not flattrade:
@@ -635,6 +640,21 @@ def ft_logout():
     if flattrade:
         flattrade.logout()
     return {"ok": True}
+
+
+@app.post("/api/flattrade/set_token")
+def ft_set_token(req: FtSetTokenModel):
+    """
+    Accept a session token exchanged on a local (Indian) machine.
+    Flattrade's apitoken endpoint rejects datacenter IPs (INVALID_IP),
+    so the exchange happens locally and the token is pushed here.
+    Authorized by requiring the matching API secret.
+    """
+    if not flattrade:
+        raise HTTPException(status_code=500, detail="Client not initialized")
+    if req.api_secret != flattrade.api_secret:
+        raise HTTPException(status_code=403, detail="Bad api_secret")
+    return flattrade.set_token(req.token)
 
 
 @app.get("/api/flattrade/user")
@@ -740,11 +760,20 @@ def root(code: Optional[str] = None, client: Optional[str] = None):
                     f"Logged in at: {flattrade.logged_in_at}"
                 ),
             ))
+        err = res.get("error", "Token exchange failed")
+        hint = ""
+        if "INVALID_IP" in str(err):
+            hint = (
+                "Flattrade blocks token exchange from server IPs.<br>"
+                "<b>Fix:</b> copy the FULL URL from your address bar (it contains "
+                "<code>?code=...</code>) and run <code>python flattrade_local_login.py</code> "
+                "on your PC — or paste the URL to Claude. Codes expire in ~2 minutes."
+            )
         return HTMLResponse(_LOGGED_IN_HTML.format(
             cls="err",
             title="✗ Login failed",
-            msg=res.get("error", "Token exchange failed"),
-            details=f"Error details: {res}",
+            msg=err,
+            details=hint or f"Error details: {res}",
         ), status_code=400)
     return RedirectResponse(url="/live.html", status_code=302)
 

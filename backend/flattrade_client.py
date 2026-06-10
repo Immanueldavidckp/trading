@@ -162,6 +162,32 @@ class FlattradeClient:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    # ---------- Accept an externally-obtained token ----------
+    def set_token(self, token: str) -> dict:
+        """
+        Accept a userSession token obtained elsewhere (e.g. exchanged on a
+        local machine because Flattrade blocks datacenter IPs for apitoken).
+        Validates the token by calling UserDetails before accepting it.
+        """
+        with self._lock:
+            self.session_token = token
+            self.actid = self.user_id
+            self.logged_in_at = datetime.now().isoformat(timespec="seconds")
+        details = self.user_details()
+        if isinstance(details, dict) and details.get("stat") == "Ok":
+            with self._lock:
+                self.uname = details.get("uname")
+                self.email = details.get("email")
+                self.broker = details.get("brkname")
+                self.actid = details.get("actid") or self.actid
+            self._save_session()
+            return {"ok": True, "uname": self.uname, "actid": self.actid, "broker": self.broker}
+        # Token didn't validate — roll back
+        with self._lock:
+            self.session_token = None
+            self.logged_in_at = None
+        return {"ok": False, "error": details.get("emsg", "Token validation failed"), "raw": details}
+
     # ---------- Low-level API call ----------
     def _call(self, endpoint: str, payload: dict):
         if not self.session_token:
