@@ -465,6 +465,11 @@ function connect(){
     if(!fresh.length) return;
 
     fresh.forEach(r => {
+      // Yahoo sends bid/ask = 0 outside market hours — treat as "no quote"
+      if(!r.bid) r.bid = null;
+      if(!r.ask) r.ask = null;
+      if(!r.bid_size) r.bid_size = null;
+      if(!r.ask_size) r.ask_size = null;
       if(prevVolume != null && r.volume != null) r._volDelta = r.volume - prevVolume;
       if(r.volume != null) prevVolume = r.volume;
       const t = toMs(r.received_at);
