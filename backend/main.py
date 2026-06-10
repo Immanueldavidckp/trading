@@ -513,6 +513,62 @@ def yahoo_stats():
     return YahooPoller.stats()
 
 
+@app.get("/api/candles_db")
+def candles_db(tsym: str, tf: int = 60, limit: int = 500):
+    """
+    Aggregate stored price_changes ticks into OHLCV candles.
+    tf    = candle width in seconds (1, 5, 15, 60, 300, 900)
+    limit = max number of candles returned (most recent)
+    Volume per candle = delta of the cumulative day-volume within the bucket.
+    Timestamps are epoch-ms (UTC); frontend renders in IST.
+    """
+    import db as _dbm
+    from datetime import datetime as _dt, timedelta as _td
+
+    tf = max(1, min(int(tf), 3600))
+    limit = max(10, min(int(limit), 2000))
+
+    # Pull a generous window of raw ticks then bucket
+    since = (_dt.utcnow() - _td(seconds=tf * limit * 4)).isoformat(timespec="milliseconds")
+    sql = (f"SELECT received_at, lp, volume FROM price_changes "
+           f"WHERE tsym = {_dbm.PLACE} AND received_at >= {_dbm.PLACE} AND lp IS NOT NULL "
+           f"ORDER BY id ASC")
+    conn = _dbm.connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, [tsym, since])
+        raw = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+
+    candles: dict = {}
+    order: list = []
+    for received_at, lp, vol in raw:
+        try:
+            ts = _dt.fromisoformat(received_at).timestamp()
+        except (ValueError, TypeError):
+            continue
+        b = int(ts // tf) * tf
+        c = candles.get(b)
+        if c is None:
+            candles[b] = {"t": b * 1000, "o": lp, "h": lp, "l": lp, "c": lp,
+                          "v0": vol or 0, "v1": vol or 0}
+            order.append(b)
+        else:
+            if lp > c["h"]: c["h"] = lp
+            if lp < c["l"]: c["l"] = lp
+            c["c"] = lp
+            if vol is not None: c["v1"] = vol
+
+    out = []
+    for b in order[-limit:]:
+        c = candles[b]
+        out.append({"t": c["t"], "o": c["o"], "h": c["h"], "l": c["l"],
+                    "c": c["c"], "v": max(0, (c["v1"] or 0) - (c["v0"] or 0))})
+    return {"stat": "Ok", "tsym": tsym, "tf": tf, "candles": out}
+
+
 # ---------- Live WebSocket price stream ----------
 import db as _db
 PH = _db.PLACE
