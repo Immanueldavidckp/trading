@@ -514,59 +514,89 @@ def yahoo_stats():
 
 
 @app.get("/api/candles_db")
-def candles_db(tsym: str, tf: int = 60, limit: int = 500):
+def candles_db(tsym: str, tf: int = 60, limit: int = 500, day: Optional[str] = None, full: int = 0):
     """
-    Aggregate stored price_changes ticks into OHLCV candles.
-    tf    = candle width in seconds (1, 5, 15, 60, 300, 900)
-    limit = max number of candles returned (most recent)
-    Volume per candle = delta of the cumulative day-volume within the bucket.
-    Timestamps are epoch-ms (UTC); frontend renders in IST.
+    OHLCV candles for ONE IST trading day, aggregated from stored ticks.
+      tf    = candle seconds (0 = raw per-tick rows, else 1..3600)
+      limit = max candles/ticks returned (most recent first trimmed)
+      day   = IST date 'YYYY-MM-DD' (default: today IST) — saved-data browsing
+      full  = 1 to include pre/post market rows (default: 09:00-15:40 IST only)
+    All rows come straight from the price_changes table — no synthetic data.
     """
     import db as _dbm
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
 
-    tf = max(1, min(int(tf), 3600))
-    limit = max(10, min(int(limit), 2000))
+    IST = _tz(_td(hours=5, minutes=30))
+    tf = max(0, min(int(tf), 3600))
+    limit = max(10, min(int(limit), 4000))
 
-    # Pull a generous window of raw ticks then bucket
-    since = (_dt.utcnow() - _td(seconds=tf * limit * 4)).isoformat(timespec="milliseconds")
+    now_ist = _dt.now(_tz.utc).astimezone(IST)
+    try:
+        d = _dt.strptime(day, "%Y-%m-%d").date() if day else now_ist.date()
+    except ValueError:
+        d = now_ist.date()
+
+    if full:
+        start_ist = _dt(d.year, d.month, d.day, 0, 0, tzinfo=IST)
+        end_ist = start_ist + _td(days=1)
+    else:
+        # NSE session window (incl. pre-open + small buffer)
+        start_ist = _dt(d.year, d.month, d.day, 9, 0, tzinfo=IST)
+        end_ist = _dt(d.year, d.month, d.day, 15, 40, tzinfo=IST)
+    start_utc = start_ist.astimezone(_tz.utc).replace(tzinfo=None).isoformat(timespec="milliseconds")
+    end_utc = end_ist.astimezone(_tz.utc).replace(tzinfo=None).isoformat(timespec="milliseconds")
+
     sql = (f"SELECT received_at, lp, volume FROM price_changes "
-           f"WHERE tsym = {_dbm.PLACE} AND received_at >= {_dbm.PLACE} AND lp IS NOT NULL "
-           f"ORDER BY id ASC")
+           f"WHERE tsym = {_dbm.PLACE} AND received_at >= {_dbm.PLACE} AND received_at < {_dbm.PLACE} "
+           f"AND lp IS NOT NULL ORDER BY id ASC")
     conn = _dbm.connect()
     try:
         cur = conn.cursor()
-        cur.execute(sql, [tsym, since])
+        cur.execute(sql, [tsym, start_utc, end_utc])
         raw = cur.fetchall()
         cur.close()
     finally:
         conn.close()
 
-    candles: dict = {}
-    order: list = []
-    for received_at, lp, vol in raw:
-        try:
-            ts = _dt.fromisoformat(received_at).timestamp()
-        except (ValueError, TypeError):
-            continue
-        b = int(ts // tf) * tf
-        c = candles.get(b)
-        if c is None:
-            candles[b] = {"t": b * 1000, "o": lp, "h": lp, "l": lp, "c": lp,
-                          "v0": vol or 0, "v1": vol or 0}
-            order.append(b)
-        else:
-            if lp > c["h"]: c["h"] = lp
-            if lp < c["l"]: c["l"] = lp
-            c["c"] = lp
-            if vol is not None: c["v1"] = vol
+    out: list = []
+    if tf == 0:
+        # Raw tick rows, each with per-tick volume delta
+        prev_vol = None
+        for received_at, lp, vol in raw:
+            try:
+                ts = _dt.fromisoformat(received_at).timestamp()
+            except (ValueError, TypeError):
+                continue
+            dv = max(0, vol - prev_vol) if (vol is not None and prev_vol is not None) else 0
+            if vol is not None:
+                prev_vol = vol
+            out.append({"t": int(ts * 1000), "o": lp, "h": lp, "l": lp, "c": lp, "v": dv})
+        out = out[-limit:]
+    else:
+        candles: dict = {}
+        order: list = []
+        for received_at, lp, vol in raw:
+            try:
+                ts = _dt.fromisoformat(received_at).timestamp()
+            except (ValueError, TypeError):
+                continue
+            b = int(ts // tf) * tf
+            c = candles.get(b)
+            if c is None:
+                candles[b] = {"t": b * 1000, "o": lp, "h": lp, "l": lp, "c": lp,
+                              "v0": vol or 0, "v1": vol or 0}
+                order.append(b)
+            else:
+                if lp > c["h"]: c["h"] = lp
+                if lp < c["l"]: c["l"] = lp
+                c["c"] = lp
+                if vol is not None: c["v1"] = vol
+        for b in order[-limit:]:
+            c = candles[b]
+            out.append({"t": c["t"], "o": c["o"], "h": c["h"], "l": c["l"],
+                        "c": c["c"], "v": max(0, (c["v1"] or 0) - (c["v0"] or 0))})
 
-    out = []
-    for b in order[-limit:]:
-        c = candles[b]
-        out.append({"t": c["t"], "o": c["o"], "h": c["h"], "l": c["l"],
-                    "c": c["c"], "v": max(0, (c["v1"] or 0) - (c["v0"] or 0))})
-    return {"stat": "Ok", "tsym": tsym, "tf": tf, "candles": out}
+    return {"stat": "Ok", "tsym": tsym, "tf": tf, "day": str(d), "candles": out}
 
 
 # ---------- Live WebSocket price stream ----------

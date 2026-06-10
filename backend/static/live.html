@@ -173,13 +173,17 @@
           <button class="tf-btn" data-tf="900">15m</button>
         </div>
         <div class="chart-tools">
+          <button class="btn" id="liveModeBtn" onclick="goLive()"
+                  style="background:var(--green-bg);border-color:rgba(0,214,143,0.4);color:var(--green);font-weight:700">● LIVE today</button>
+          <input type="date" id="dayPick" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:4px 8px;font-size:11.5px;outline:none;font-family:inherit"
+                 onchange="loadDay()">
           <span id="ptCount" class="mono dim">0</span>
           <select id="backlogSel" onchange="loadChart()">
             <option value="500">500</option>
             <option value="1000" selected>1,000</option>
             <option value="2000">2,000</option>
+            <option value="4000">4,000</option>
           </select>
-          <span>candles/ticks</span>
         </div>
       </div>
       <div class="ohlc-readout" id="ohlcReadout"><span class="dim">hover the chart…</span></div>
@@ -258,6 +262,7 @@ const MAX_TABLE = 300, MAX_CANDLES = 2000;
 let active=null, symbols=[], rows=[], ws=null;
 let prevVolume=null, paused=false;
 let tf=60;                 // timeframe seconds; 0 = tick mode
+let historyDay=null;       // null = LIVE today; 'YYYY-MM-DD' = browse saved day
 let candles=[];            // [{t,o,h,l,c,v}]
 const seenIds=new Set();
 
@@ -468,23 +473,43 @@ chart.on('updateAxisPointer',e=>{
   }
 });
 
-/* ---------- Load candles (server-side aggregation) ---------- */
+/* ---------- Load candles (server-side, 100% from MySQL) ---------- */
 async function loadChart(){
   if(!active)return;
   const limit=document.getElementById('backlogSel').value;
   candles=[];
-  if(tf===0){
-    // tick mode: raw rows arrive via WS backlog
-    reconnectWS(limit);
+  const dayParam=historyDay?`&day=${historyDay}`:'';
+  try{
+    const r=await fetch(`/api/candles_db?tsym=${encodeURIComponent(active)}&tf=${tf}&limit=${limit}${dayParam}`);
+    const j=await r.json();
+    candles=(j.candles||[]).map(c=>({t:c.t,o:c.o,h:c.h,l:c.l,c:c.c,v:c.v}));
+  }catch(e){}
+  renderChart(true);
+  updateModeLabel();
+  // WS keeps the tick table + KPIs live always; chart merges only in LIVE mode
+  reconnectWS(60);
+}
+
+function updateModeLabel(){
+  const b=document.getElementById('liveModeBtn');
+  if(historyDay){
+    b.textContent='⏪ HISTORY '+historyDay+' — click for LIVE';
+    b.style.background='var(--red-bg)'; b.style.borderColor='rgba(255,86,119,0.4)'; b.style.color='var(--red)';
   } else {
-    try{
-      const r=await fetch(`/api/candles_db?tsym=${encodeURIComponent(active)}&tf=${tf}&limit=${limit}`);
-      const j=await r.json();
-      candles=(j.candles||[]).map(c=>({t:c.t,o:c.o,h:c.h,l:c.l,c:c.c,v:c.v}));
-    }catch(e){}
-    renderChart(true);
-    reconnectWS(50);   // small backlog; history already loaded
+    b.textContent='● LIVE today';
+    b.style.background='var(--green-bg)'; b.style.borderColor='rgba(0,214,143,0.4)'; b.style.color='var(--green)';
   }
+}
+function goLive(){
+  historyDay=null;
+  document.getElementById('dayPick').value='';
+  loadChart();
+}
+function loadDay(){
+  const v=document.getElementById('dayPick').value;
+  if(!v)return;
+  historyDay=v;
+  loadChart();
 }
 
 /* ---------- merge live tick into candles ---------- */
@@ -585,17 +610,22 @@ function reconnectWS(backlog){
     const fresh=msg.rows.filter(r=>!seenIds.has(r.id));
     fresh.forEach(r=>seenIds.add(r.id));
     if(!fresh.length)return;
+    // 'backlog' = recent saved rows on connect (table/KPI only — the chart
+    // is loaded from /api/candles_db so merging these would double-count).
+    // 'update' = genuinely new live ticks → also merge into the chart,
+    // but only in LIVE mode (never while browsing a saved day).
+    const isLiveUpdate = (msg.type==='update');
     fresh.forEach(r=>{
       if(!r.bid)r.bid=null; if(!r.ask)r.ask=null;
       if(!r.bid_size)r.bid_size=null; if(!r.ask_size)r.ask_size=null;
       if(prevVolume!=null&&r.volume!=null)r._volDelta=r.volume-prevVolume;
       if(r.volume!=null)prevVolume=r.volume;
-      mergeTick(r);
+      if(isLiveUpdate && !historyDay) mergeTick(r);
     });
     rows=[...fresh.slice().reverse(),...rows].slice(0,MAX_TABLE);
     applyLatest(rows[0]);
     renderTable();
-    renderChart();
+    if(isLiveUpdate && !historyDay) renderChart();
   };
 }
 
