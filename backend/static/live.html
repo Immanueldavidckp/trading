@@ -222,6 +222,9 @@
       </div>
       <div class="ctrls">
         <div class="conn" id="conn"><span class="conn-dot"></span><span id="connText">connecting…</span></div>
+        <div class="conn" id="ftConn"><span class="conn-dot"></span><span id="ftConnText">Flattrade: …</span></div>
+        <button class="btn" id="ftLoginBtn" onclick="ftLogin()">Connect Flattrade</button>
+        <button class="btn" onclick="document.getElementById('orderModal').style.display='flex'">Place order</button>
         <button class="btn" onclick="backfill('1d')">Backfill 1d</button>
         <button class="btn" onclick="backfill('5d')">Backfill 5d</button>
       </div>
@@ -318,10 +321,79 @@
     <div class="footer">
       Source: Yahoo Finance · ~10–12s updates · ~15-min delayed during live market · 1-level depth.
       Stored to MySQL · table <code>price_changes</code>.
-      <a href="/">main dashboard</a>
     </div>
   </main>
 </div>
+
+<!-- ============ Order modal ============ -->
+<div id="orderModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);
+     backdrop-filter:blur(6px);z-index:100;align-items:center;justify-content:center;padding:20px">
+  <div style="background:var(--panel);border:1px solid var(--border-bright);border-radius:14px;
+       width:420px;max-width:100%;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.6)">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-weight:700;font-size:16px">Place order — Flattrade</div>
+      <button onclick="document.getElementById('orderModal').style.display='none'"
+              style="background:none;border:none;color:var(--text-3);font-size:22px;cursor:pointer">×</button>
+    </div>
+    <div style="padding:20px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+        <button id="actionBuy" class="btn primary" onclick="setAction('B')" style="padding:10px">BUY</button>
+        <button id="actionSell" class="btn" onclick="setAction('S')" style="padding:10px">SELL</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div>
+          <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Symbol</div>
+          <input id="ordSym" class="ord-input" placeholder="e.g. RELIANCE-EQ">
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Exchange</div>
+          <select id="ordExch" class="ord-input"><option>NSE</option><option>BSE</option><option>NFO</option></select>
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Type</div>
+          <select id="ordPrctyp" class="ord-input" onchange="toggleLimit()">
+            <option value="MKT">MARKET</option>
+            <option value="LMT">LIMIT</option>
+          </select>
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Product</div>
+          <select id="ordPrd" class="ord-input">
+            <option value="C">CNC (Delivery)</option>
+            <option value="I">MIS (Intraday)</option>
+          </select>
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Quantity</div>
+          <input id="ordQty" type="number" min="1" value="1" class="ord-input">
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Limit ₹</div>
+          <input id="ordPrc" type="number" step="0.05" value="0" class="ord-input" disabled>
+        </div>
+      </div>
+
+      <div style="background:rgba(255,184,77,0.08);border:1px solid rgba(255,184,77,0.3);color:var(--yellow);
+                  padding:9px 12px;border-radius:8px;font-size:12px;margin-bottom:14px">
+        ⚠️ This places a <b>real order</b> with real money in your Flattrade account.
+      </div>
+
+      <button class="btn primary" style="width:100%;padding:12px;font-size:13px" onclick="placeOrder()">
+        <span id="ordSubmitText">Place BUY order</span>
+      </button>
+      <div id="ordResult" style="margin-top:12px;font-size:12px;font-family:'JetBrains Mono',monospace"></div>
+    </div>
+  </div>
+</div>
+<style>
+  .ord-input{width:100%;background:var(--panel-2);border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:9px 11px;font-family:'JetBrains Mono',monospace;font-size:13px;outline:none;font-variant-numeric:tabular-nums}
+  .ord-input:focus{border-color:var(--blue)}
+  #actionBuy{background:var(--green);color:#04101f;border:none;font-weight:700}
+  #actionBuy:not(.primary){background:var(--panel-2);color:var(--text);border:1px solid var(--border);font-weight:500}
+  #actionSell.primary{background:var(--red);color:#fff;border:none;font-weight:700}
+</style>
 
 <script>
 /* =========================================================
@@ -568,9 +640,99 @@ async function backfill(rng){
   connect();
 }
 
+/* =========================================================
+   Flattrade login + order placement
+   ========================================================= */
+let ftAction = 'B';   // B = buy, S = sell
+
+async function ftStatus(){
+  try{
+    const r = await fetch('/api/flattrade/status');
+    const s = await r.json();
+    const box = document.getElementById('ftConn');
+    const txt = document.getElementById('ftConnText');
+    const btn = document.getElementById('ftLoginBtn');
+    if(s.logged_in){
+      box.classList.add('on');
+      txt.textContent = 'Flattrade: ' + (s.uname || s.user_id || 'logged in');
+      btn.textContent = 'Logout';
+      btn.onclick = ftLogout;
+    } else if(s.configured){
+      box.classList.remove('on');
+      txt.textContent = 'Flattrade: not logged in';
+      btn.textContent = 'Connect Flattrade';
+      btn.onclick = ftLogin;
+    } else {
+      box.classList.remove('on');
+      txt.textContent = 'Flattrade: not configured';
+      btn.style.display = 'none';
+    }
+  }catch(e){}
+}
+
+async function ftLogin(){
+  try{
+    const r = await fetch('/api/flattrade/login_url');
+    const j = await r.json();
+    if(j.login_url) window.location.href = j.login_url;
+  }catch(e){ alert('Could not start Flattrade login'); }
+}
+
+async function ftLogout(){
+  await fetch('/api/flattrade/logout');
+  ftStatus();
+}
+
+function setAction(a){
+  ftAction = a;
+  document.getElementById('actionBuy').classList.toggle('primary', a==='B');
+  document.getElementById('actionSell').classList.toggle('primary', a==='S');
+  document.getElementById('ordSubmitText').textContent = (a==='B'?'Place BUY order':'Place SELL order');
+}
+
+function toggleLimit(){
+  const t = document.getElementById('ordPrctyp').value;
+  document.getElementById('ordPrc').disabled = (t === 'MKT');
+}
+
+async function placeOrder(){
+  const body = {
+    exch:     document.getElementById('ordExch').value,
+    tsym:     document.getElementById('ordSym').value.trim().toUpperCase(),
+    qty:      Math.max(1, parseInt(document.getElementById('ordQty').value || 1)),
+    prc:      parseFloat(document.getElementById('ordPrc').value || 0),
+    trantype: ftAction,
+    prctyp:   document.getElementById('ordPrctyp').value,
+    prd:      document.getElementById('ordPrd').value,
+    confirm:  true,
+  };
+  if(!body.tsym){ alert('Symbol is required (e.g. RELIANCE-EQ)'); return; }
+  if(!confirm(`Place REAL ${ftAction==='B'?'BUY':'SELL'} order: ${body.qty} × ${body.tsym} @ ${body.prctyp}${body.prctyp==='LMT'?' ₹'+body.prc:''}?`)) return;
+
+  const result = document.getElementById('ordResult');
+  result.textContent = 'placing…'; result.style.color = 'var(--text-3)';
+  try{
+    const r = await fetch('/api/flattrade/order', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j = await r.json();
+    if(j.stat === 'Ok'){
+      result.style.color = 'var(--green)';
+      result.textContent = '✓ Order placed · order# ' + (j.norenordno || j.NOrdNo || '?');
+    } else {
+      result.style.color = 'var(--red)';
+      result.textContent = '✗ ' + (j.emsg || JSON.stringify(j));
+    }
+  }catch(e){
+    result.style.color = 'var(--red)';
+    result.textContent = 'Network error: ' + e;
+  }
+}
+
 // ---- Boot ----
 loadSymbols();
+ftStatus();
 setInterval(loadSymbols, 6000);
+setInterval(ftStatus, 15000);
+setAction('B');  // initial state
 </script>
 </body>
 </html>

@@ -19,6 +19,8 @@ from shoonya_client import ShoonyaClient
 from ai_agent import AIAgent
 from tick_recorder import TickRecorder
 from yahoo_poller import YahooPoller, YahooMultiPoller
+from flattrade_client import FlattradeClient
+from fastapi.responses import RedirectResponse, HTMLResponse
 
 app = FastAPI(title="Shoonya AI Trading Backend")
 
@@ -62,6 +64,7 @@ client = None
 ai_agent = None
 recorder: Optional[TickRecorder] = None
 yahoo: Optional[YahooMultiPoller] = None
+flattrade: Optional[FlattradeClient] = None
 
 # Default watchlist for tick recorder. Add more here as you go.
 DEFAULT_WATCHLIST = [
@@ -167,7 +170,17 @@ def get_initial_credentials():
 # Initialize singletons on startup
 @app.on_event("startup")
 def startup_event():
-    global client, ai_agent, yahoo
+    global client, ai_agent, yahoo, flattrade
+    # Flattrade — OAuth based (no password stored server-side)
+    try:
+        flattrade = FlattradeClient()
+        print(
+            f"Flattrade: configured={flattrade.has_creds()} "
+            f"logged_in={bool(flattrade.session_token)} "
+            f"as={flattrade.uname or '(not logged in)'}"
+        )
+    except Exception as e:
+        print(f"Flattrade init failed: {e}")
     creds = get_initial_credentials()
     client = ShoonyaClient(creds)
     ai_agent = AIAgent(creds.get("gemini_api_key"))
@@ -586,7 +599,157 @@ async def ws_prices(websocket: WebSocket):
             pass
 
 
-# Serve static dashboard files
+# ---------- Flattrade OAuth + trading endpoints ----------
+class FtOrderModel(BaseModel):
+    exch: str = "NSE"        # NSE / BSE / NFO / MCX
+    tsym: str                # e.g. "RELIANCE-EQ"
+    qty: int
+    prc: float = 0.0         # 0 for MKT orders
+    trantype: str            # "B" buy / "S" sell
+    prctyp: str = "MKT"      # MKT / LMT / SL-LMT / SL-MKT
+    prd: str = "C"           # C = CNC delivery, I = MIS intraday
+    ret: str = "DAY"
+    confirm: bool = False    # Must be true to actually place — safety gate
+
+
+class FtCancelModel(BaseModel):
+    orderno: str
+
+
+@app.get("/api/flattrade/status")
+def ft_status():
+    if not flattrade:
+        return {"configured": False, "logged_in": False, "error": "Client not initialized"}
+    return flattrade.status()
+
+
+@app.get("/api/flattrade/login_url")
+def ft_login_url():
+    if not flattrade or not flattrade.has_creds():
+        raise HTTPException(status_code=400, detail="Flattrade not configured on server")
+    return {"login_url": flattrade.login_url()}
+
+
+@app.get("/api/flattrade/logout")
+def ft_logout():
+    if flattrade:
+        flattrade.logout()
+    return {"ok": True}
+
+
+@app.get("/api/flattrade/user")
+def ft_user():
+    if not flattrade or not flattrade.session_token:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return flattrade.user_details()
+
+
+@app.get("/api/flattrade/portfolio")
+def ft_portfolio():
+    if not flattrade or not flattrade.session_token:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return {
+        "stat": "Ok",
+        "orders":    flattrade.get_orderbook(),
+        "positions": flattrade.get_positions(),
+        "holdings":  flattrade.get_holdings(),
+        "limits":    flattrade.get_limits(),
+        "trades":    flattrade.get_tradebook(),
+    }
+
+
+@app.get("/api/flattrade/quote")
+def ft_quote(exch: str, token: str):
+    if not flattrade or not flattrade.session_token:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return flattrade.get_quote(exch, token)
+
+
+@app.get("/api/flattrade/search")
+def ft_search(q: str, exch: str = "NSE"):
+    if not flattrade or not flattrade.session_token:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return flattrade.search_scrip(exch, q)
+
+
+@app.post("/api/flattrade/order")
+def ft_place_order(order: FtOrderModel):
+    if not flattrade or not flattrade.session_token:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    # Safety: explicit confirm flag required to actually place a REAL order.
+    if not order.confirm:
+        return {
+            "stat": "Not_Ok",
+            "emsg": "Safety gate: pass confirm=true to actually place this order.",
+            "preview": order.dict(),
+        }
+    res = flattrade.place_order(
+        exch=order.exch, tsym=order.tsym, qty=order.qty, prc=order.prc,
+        trantype=order.trantype, prctyp=order.prctyp, prd=order.prd, ret=order.ret,
+    )
+    return res
+
+
+@app.post("/api/flattrade/cancel")
+def ft_cancel(req: FtCancelModel):
+    if not flattrade or not flattrade.session_token:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return flattrade.cancel_order(req.orderno)
+
+
+# ---------- Root handler: OAuth callback OR redirect to /live.html ----------
+_LOGGED_IN_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Flattrade login</title>
+<style>body{{font-family:system-ui,sans-serif;background:#07090d;color:#e5ecf5;
+margin:0;display:grid;place-items:center;height:100vh}}
+.box{{background:#12161f;border:1px solid #232a38;border-radius:14px;padding:32px 36px;max-width:480px}}
+h1{{margin:0 0 12px;font-size:22px}}
+.ok{{color:#00d68f}}.err{{color:#ff5677}}
+a{{color:#5e8eff;text-decoration:none}}
+.kv{{font-family:'JetBrains Mono',monospace;font-size:13px;color:#9ba6b8;margin-top:14px;line-height:1.7}}
+</style></head><body><div class="box">
+<h1 class="{cls}">{title}</h1>
+<div>{msg}</div>
+<div class="kv">{details}</div>
+<p style="margin-top:24px"><a href="/live.html">→ Go to live dashboard</a></p>
+</div></body></html>"""
+
+
+@app.get("/")
+def root(code: Optional[str] = None, client: Optional[str] = None):
+    """
+    If Flattrade redirects here with ?code=...&client=..., exchange for token.
+    Otherwise redirect to the live dashboard.
+    """
+    if code:
+        if not flattrade or not flattrade.has_creds():
+            return HTMLResponse(_LOGGED_IN_HTML.format(
+                cls="err", title="✗ Flattrade not configured on server",
+                msg="Backend is missing FLATTRADE_API_KEY / FLATTRADE_API_SECRET.",
+                details="",
+            ), status_code=500)
+        res = flattrade.exchange_code(code)
+        if res.get("ok"):
+            return HTMLResponse(_LOGGED_IN_HTML.format(
+                cls="ok",
+                title="✓ Connected to Flattrade",
+                msg=f"You're logged in as <b>{flattrade.uname or flattrade.user_id}</b>.",
+                details=(
+                    f"Account ID: {flattrade.actid or '-'}<br>"
+                    f"Broker: {flattrade.broker or '-'}<br>"
+                    f"Logged in at: {flattrade.logged_in_at}"
+                ),
+            ))
+        return HTMLResponse(_LOGGED_IN_HTML.format(
+            cls="err",
+            title="✗ Login failed",
+            msg=res.get("error", "Token exchange failed"),
+            details=f"Error details: {res}",
+        ), status_code=400)
+    return RedirectResponse(url="/live.html", status_code=302)
+
+
+# Serve static dashboard files (live.html etc.)
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if not os.path.exists(static_dir):
     os.makedirs(static_dir)
