@@ -486,6 +486,11 @@ async function loadChart(){
   }catch(e){}
   renderChart(true);
   updateModeLabel();
+  if(!candles.length){
+    document.getElementById('ohlcReadout').innerHTML = historyDay
+      ? `<span class="dim">No saved data for ${historyDay} (market holiday or recording not running that day).</span>`
+      : `<span class="dim">No session data yet today — NSE opens 09:15 IST. Live candles will appear here; pick a date to browse saved days.</span>`;
+  }
   // WS keeps the tick table + KPIs live always; chart merges only in LIVE mode
   reconnectWS(60);
 }
@@ -541,7 +546,7 @@ function applyLatest(r){
   const pill=document.getElementById('kpiChgPill');
   pill.textContent=(up?'▲ ':'▼ ')+r.change+' ('+r.change_pct+'%)';
   pill.className='pill '+(up?'green':'red');
-  document.getElementById('kpiTs').textContent=istTime(r.received_at);
+  document.getElementById('kpiTs').textContent=istFull(toMs(r.received_at));
   document.getElementById('kpiBidVal').textContent=fmtNum(r.bid);
   document.getElementById('kpiAskVal').textContent=fmtNum(r.ask);
   const sp=(r.bid!=null&&r.ask!=null)?(r.ask-r.bid).toFixed(2):null;
