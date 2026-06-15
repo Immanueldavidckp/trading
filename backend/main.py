@@ -599,6 +599,95 @@ def candles_db(tsym: str, tf: int = 60, limit: int = 500, day: Optional[str] = N
     return {"stat": "Ok", "tsym": tsym, "tf": tf, "day": str(d), "candles": out}
 
 
+@app.get("/api/analysis_db")
+def analysis_db(tsym: str, tf: int = 60, day: Optional[str] = None, limit: int = 400):
+    """
+    Per-bucket analysis table from stored ticks (default 1-minute buckets):
+      - open / high / low / close
+      - range (high-low) and % move (close vs open)
+      - volume traded in that bucket
+      - number of recorded price changes in that bucket
+    Session hours 09:00-15:40 IST. 100% from price_changes (no synthetic data).
+    """
+    import db as _dbm
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    IST = _tz(_td(hours=5, minutes=30))
+    tf = max(1, min(int(tf), 3600))
+    limit = max(10, min(int(limit), 2000))
+
+    now_ist = _dt.now(_tz.utc).astimezone(IST)
+    try:
+        dd = _dt.strptime(day, "%Y-%m-%d").date() if day else now_ist.date()
+    except ValueError:
+        dd = now_ist.date()
+
+    start_ist = _dt(dd.year, dd.month, dd.day, 9, 0, tzinfo=IST)
+    end_ist = _dt(dd.year, dd.month, dd.day, 15, 40, tzinfo=IST)
+    start_utc = start_ist.astimezone(_tz.utc).replace(tzinfo=None).isoformat(timespec="milliseconds")
+    end_utc = end_ist.astimezone(_tz.utc).replace(tzinfo=None).isoformat(timespec="milliseconds")
+
+    sql = (f"SELECT received_at, lp, volume FROM price_changes "
+           f"WHERE tsym = {_dbm.PLACE} AND received_at >= {_dbm.PLACE} AND received_at < {_dbm.PLACE} "
+           f"AND lp IS NOT NULL ORDER BY id ASC")
+    conn = _dbm.connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, [tsym, start_utc, end_utc])
+        raw = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+
+    buckets: dict = {}
+    order: list = []
+    for received_at, lp, vol in raw:
+        try:
+            ts = _dt.fromisoformat(received_at).timestamp()
+        except (ValueError, TypeError):
+            continue
+        b = int(ts // tf) * tf
+        x = buckets.get(b)
+        if x is None:
+            buckets[b] = {"t": b * 1000, "o": lp, "h": lp, "l": lp, "c": lp,
+                          "v0": vol or 0, "v1": vol or 0, "n": 1}
+            order.append(b)
+        else:
+            if lp > x["h"]: x["h"] = lp
+            if lp < x["l"]: x["l"] = lp
+            x["c"] = lp
+            if vol is not None: x["v1"] = vol
+            x["n"] += 1
+
+    rows_out = []
+    for b in order[-limit:]:
+        x = buckets[b]
+        rng = round(x["h"] - x["l"], 2)
+        move = round(x["c"] - x["o"], 2)
+        move_pct = round((move / x["o"]) * 100, 3) if x["o"] else 0.0
+        rows_out.append({
+            "t": x["t"], "o": x["o"], "h": x["h"], "l": x["l"], "c": x["c"],
+            "range": rng, "move": move, "move_pct": move_pct,
+            "volume": max(0, (x["v1"] or 0) - (x["v0"] or 0)),
+            "changes": x["n"],
+        })
+
+    # session totals
+    tot_vol = sum(r["volume"] for r in rows_out)
+    tot_chg = sum(r["changes"] for r in rows_out)
+    day_hi = max((r["h"] for r in rows_out), default=None)
+    day_lo = min((r["l"] for r in rows_out), default=None)
+    return {
+        "stat": "Ok", "tsym": tsym, "tf": tf, "day": str(dd),
+        "rows": list(reversed(rows_out)),   # newest first for table
+        "summary": {
+            "buckets": len(rows_out), "total_volume": tot_vol, "total_changes": tot_chg,
+            "day_high": day_hi, "day_low": day_lo,
+            "day_range": round(day_hi - day_lo, 2) if (day_hi and day_lo) else None,
+        },
+    }
+
+
 # ---------- Live WebSocket price stream ----------
 import db as _db
 PH = _db.PLACE

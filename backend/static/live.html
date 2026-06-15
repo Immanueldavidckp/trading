@@ -194,6 +194,36 @@
       </div>
     </div>
 
+    <!-- Per-minute analysis -->
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Per-interval analysis — <span id="anTf">1 min</span> buckets (IST)</div>
+          <div class="panel-sub" id="anSummary">—</div>
+        </div>
+        <div class="chart-tools">
+          <select id="anTfSel" onchange="loadAnalysis()">
+            <option value="1">1 second</option>
+            <option value="5">5 seconds</option>
+            <option value="15">15 seconds</option>
+            <option value="60" selected>1 minute</option>
+            <option value="300">5 minutes</option>
+          </select>
+          <button class="btn" onclick="loadAnalysis()">↻ Refresh</button>
+          <button class="btn" onclick="downloadAnalysisCsv()">⬇ CSV</button>
+        </div>
+      </div>
+      <div class="scroll" style="max-height:340px">
+        <table>
+          <thead><tr>
+            <th>Time (IST)</th><th>Open</th><th>High</th><th>Low</th><th>Close</th>
+            <th>Range</th><th>Move %</th><th>Volume</th><th>Price changes</th>
+          </tr></thead>
+          <tbody id="anBody"><tr><td colspan="9" style="padding:26px;text-align:center;color:var(--text-3)">loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Bottom: ticks + book -->
     <div class="grid-2">
       <div class="panel">
@@ -493,6 +523,7 @@ async function loadChart(){
   }
   // WS keeps the tick table + KPIs live always; chart merges only in LIVE mode
   reconnectWS(60);
+  loadAnalysis();
 }
 
 function updateModeLabel(){
@@ -606,7 +637,7 @@ function reconnectWS(backlog){
   setConn(false,'connecting…');
   const proto=location.protocol==='https:'?'wss://':'ws://';
   ws=new WebSocket(proto+location.host+'/ws/prices?tsym='+encodeURIComponent(active)+'&backlog='+backlog);
-  ws.onopen=()=>setConn(true,'LIVE');
+  ws.onopen=()=>{ setConn(true,'LIVE'); setTimeout(refreshMarketState,500); };
   ws.onclose=()=>{ setConn(false,'reconnecting…'); setTimeout(()=>reconnectWS(50),1500); };
   ws.onerror=()=>{ try{ws.close();}catch(e){} };
   ws.onmessage=(ev)=>{
@@ -630,6 +661,7 @@ function reconnectWS(backlog){
     rows=[...fresh.slice().reverse(),...rows].slice(0,MAX_TABLE);
     applyLatest(rows[0]);
     renderTable();
+    refreshMarketState();
     if(isLiveUpdate && !historyDay) renderChart();
   };
 }
@@ -725,6 +757,76 @@ async function placeOrder(){
     else{result.style.color='var(--red)';result.textContent='✗ '+(j.emsg||JSON.stringify(j));}
   }catch(e){result.style.color='var(--red)';result.textContent='Network error';}
 }
+
+/* ---------- Per-interval analysis ---------- */
+let anRows=[];
+async function loadAnalysis(){
+  if(!active)return;
+  const atf=document.getElementById('anTfSel').value;
+  document.getElementById('anTf').textContent =
+    atf<60? atf+' sec' : (atf/60)+' min';
+  const dayParam=historyDay?`&day=${historyDay}`:'';
+  try{
+    const r=await fetch(`/api/analysis_db?tsym=${encodeURIComponent(active)}&tf=${atf}${dayParam}`);
+    const j=await r.json();
+    anRows=j.rows||[];
+    const s=j.summary||{};
+    document.getElementById('anSummary').textContent =
+      `${s.buckets||0} buckets · day H ${s.day_high??'—'} / L ${s.day_low??'—'} · `+
+      `range ${s.day_range??'—'} · total vol ${fmtCompact(s.total_volume)} · ${s.total_changes||0} price changes`;
+    const tb=document.getElementById('anBody');
+    if(!anRows.length){
+      tb.innerHTML='<tr><td colspan="9" style="padding:26px;text-align:center;color:var(--text-3)">'+
+        (historyDay?`no data for ${historyDay}`:'no session data yet today (NSE opens 09:15 IST)')+'</td></tr>';
+      return;
+    }
+    tb.innerHTML=anRows.map(r=>{
+      const up=r.move>=0;
+      return `<tr class="${up?'row-up':'row-dn'}">
+        <td class="mono dim">${istHMS(r.t,false)}</td>
+        <td class="mono">${r.o.toFixed(2)}</td>
+        <td class="mono green">${r.h.toFixed(2)}</td>
+        <td class="mono red">${r.l.toFixed(2)}</td>
+        <td class="mono c">${r.c.toFixed(2)}</td>
+        <td class="mono dim">${r.range.toFixed(2)}</td>
+        <td class="mono c">${up?'+':''}${r.move_pct}%</td>
+        <td class="mono">${fmtCompact(r.volume)}</td>
+        <td class="mono dim">${r.changes}</td></tr>`;
+    }).join('');
+  }catch(e){}
+}
+function downloadAnalysisCsv(){
+  if(!anRows.length){alert('No data to export');return;}
+  const hdr='time_IST,open,high,low,close,range,move_pct,volume,price_changes\n';
+  const body=anRows.map(r=>[istHMS(r.t,false),r.o,r.h,r.l,r.c,r.range,r.move_pct,r.volume,r.changes].join(',')).join('\n');
+  const blob=new Blob([hdr+body],{type:'text/csv'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`${active}_${historyDay||'today'}_${document.getElementById('anTfSel').value}s.csv`;
+  a.click();
+}
+
+/* ---------- Market open/closed indicator ---------- */
+function refreshMarketState(){
+  const c=document.getElementById('conn');
+  const txt=document.getElementById('connText');
+  if(!rows.length) return;
+  const ageSec=(Date.now()-toMs(rows[0].received_at))/1000;
+  // IST hour to know if session should be active
+  const istH=parseInt(new Date().toLocaleString('en-GB',{timeZone:'Asia/Kolkata',hour:'2-digit',hour12:false}));
+  const istMin=parseInt(new Date().toLocaleString('en-GB',{timeZone:'Asia/Kolkata',minute:'2-digit'}));
+  const mins=istH*60+istMin;
+  const inSession=(mins>=555 && mins<=940); // 09:15–15:40 IST
+  if(ageSec>120 || !inSession){
+    c.classList.remove('on');
+    c.style.background='var(--red-bg)'; c.style.borderColor='rgba(255,86,119,0.4)'; c.style.color='var(--red)';
+    txt.textContent='MARKET CLOSED · last '+istHMS(toMs(rows[0].received_at),false);
+  } else {
+    c.style.background=''; c.style.borderColor=''; c.style.color='';
+    c.classList.add('on'); txt.textContent='LIVE';
+  }
+}
+setInterval(refreshMarketState, 5000);
 
 /* ---------- Boot ---------- */
 loadSymbols();
