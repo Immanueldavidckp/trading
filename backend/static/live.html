@@ -84,7 +84,15 @@
   .chart-tools select{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:4px 8px;font-size:11.5px;outline:none;font-family:inherit}
   .ohlc-readout{display:flex;gap:13px;padding:8px 16px;font-family:'JetBrains Mono',monospace;font-size:12px;border-bottom:1px solid var(--border);background:var(--bg-2);flex-wrap:wrap;min-height:35px;align-items:center}
   .ohlc-readout span b{font-weight:600}
-  #proChart{height:660px;width:100%}
+  #proChart{height:720px;width:100%}
+  .ind-bar{display:flex;align-items:center;gap:6px;padding:8px 16px;border-bottom:1px solid var(--border);background:var(--bg-2);flex-wrap:wrap}
+  .ind-label{font-size:10px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-right:2px}
+  .ind-chip{background:var(--panel-2);border:1px solid var(--border);color:var(--text-3);border-radius:7px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace;transition:.12s}
+  .ind-chip:hover{color:var(--text);border-color:var(--border-bright)}
+  .ind-chip.on{background:rgba(94,142,255,0.15);border-color:rgba(94,142,255,0.5);color:var(--blue)}
+  .ind-chip.ctrl{color:var(--text-2)}
+  .ind-sep{width:1px;height:18px;background:var(--border);margin:0 4px}
+  .ind-hint{font-size:10px;color:var(--text-3);margin-left:auto}
   .chart-hint{padding:6px 16px;font-size:10.5px;color:var(--text-3);border-top:1px solid var(--border);background:var(--bg-2)}
 
   /* Bottom tables */
@@ -185,6 +193,24 @@
             <option value="4000">4,000</option>
           </select>
         </div>
+      </div>
+      <div class="ind-bar" id="indBar">
+        <span class="ind-label">Indicators:</span>
+        <button class="ind-chip on" data-ind="ema9">EMA 9</button>
+        <button class="ind-chip on" data-ind="ema21">EMA 21</button>
+        <button class="ind-chip on" data-ind="sma20">SMA 20</button>
+        <button class="ind-chip" data-ind="sma50">SMA 50</button>
+        <button class="ind-chip" data-ind="bb">Bollinger</button>
+        <button class="ind-chip" data-ind="vwap">VWAP</button>
+        <span class="ind-sep"></span>
+        <span class="ind-label">Panes:</span>
+        <button class="ind-chip on" data-ind="vol">Volume</button>
+        <button class="ind-chip on" data-ind="rsi">RSI</button>
+        <button class="ind-chip on" data-ind="macd">MACD</button>
+        <span class="ind-sep"></span>
+        <button class="ind-chip ctrl" onclick="resetZoom()">⤢ Reset zoom</button>
+        <button class="ind-chip ctrl" id="logBtn" onclick="toggleLogScale()">Log scale: off</button>
+        <span class="ind-hint">scroll = zoom time · scroll over price axis = zoom price · drag = pan · drag axis = stretch</span>
       </div>
       <div class="ohlc-readout" id="ohlcReadout"><span class="dim">hover the chart…</span></div>
       <div id="proChart"></div>
@@ -352,93 +378,161 @@ function macdArr(closes){
   return {dif,dea,hist};
 }
 
-/* ---------- ECharts: 4 synced panes ---------- */
+/* ---------- ECharts: dynamic multi-pane broker chart ---------- */
 const chart = echarts.init(document.getElementById('proChart'),null,{renderer:'canvas'});
 const UP='#00d68f', DN='#ff5677';
-const baseOption={
-  backgroundColor:'transparent', animation:false,
-  axisPointer:{link:[{xAxisIndex:'all'}],label:{backgroundColor:'#2f3848'}},
-  tooltip:{
-    trigger:'axis', backgroundColor:'#1a1f2b', borderColor:'#2f3848',
-    textStyle:{color:'#e5ecf5',fontFamily:'JetBrains Mono',fontSize:11.5},
-    axisPointer:{type:'cross'},
-    formatter:(params)=>{
-      if(!params.length)return '';
-      const t=Number(params[0].axisValue);
-      let h='<b>'+istFull(t)+' IST</b><br>';
-      params.forEach(p=>{
-        if(p.seriesName==='Candles'&&Array.isArray(p.value)){
-          h+=`O <b>${p.value[1].toFixed(2)}</b> H <b>${p.value[4].toFixed(2)}</b> `+
-             `L <b>${p.value[3].toFixed(2)}</b> C <b>${p.value[2].toFixed(2)}</b><br>`;
-        } else if(p.value!=null&&!Array.isArray(p.value)){
-          h+=`${p.marker}${p.seriesName}: <b>${Number(p.value).toFixed(2)}</b><br>`;
-        } else if(Array.isArray(p.value)&&p.value[1]!=null&&p.seriesName!=='Candles'){
-          h+=`${p.marker}${p.seriesName}: <b>${Number(p.value[1]).toFixed(2)}</b><br>`;
-        }
-      });
-      return h;
-    }
-  },
-  grid:[
-    {left:62,right:14,top:8,height:'44%'},
-    {left:62,right:14,top:'56%',height:'10%'},
-    {left:62,right:14,top:'69%',height:'10%'},
-    {left:62,right:14,top:'82%',height:'11%'}
-  ],
-  xAxis:[0,1,2,3].map(i=>({
-    type:'category', gridIndex:i, boundaryGap:i===0?true:true,
-    axisLine:{lineStyle:{color:'#2f3848'}},
-    axisTick:{show:false},
-    axisLabel:i===3?{
-      color:'#9ba6b8',fontFamily:'JetBrains Mono',fontSize:10,
-      formatter:v=>{ const t=Number(v);
-        return tf===0||tf<60 ? istHMS(t,false) : istHMS(t,false).slice(0,5); }
-    }:{show:false},
+
+// indicator + pane toggles
+const IND={ema9:true,ema21:true,sma20:true,sma50:false,bb:false,vwap:false,vol:true,rsi:true,macd:true};
+let logScale=false;
+let lastZoom={start:60,end:100};   // remember user's zoom window across data refreshes
+
+function bollinger(closes,n=20,k=2){
+  const mid=smaArr(closes,n), up=new Array(closes.length).fill(null), lo=new Array(closes.length).fill(null);
+  for(let i=n-1;i<closes.length;i++){
+    let m=mid[i],s=0; for(let j=i-n+1;j<=i;j++)s+=(closes[j]-m)**2;
+    const sd=Math.sqrt(s/n); up[i]=m+k*sd; lo[i]=m-k*sd;
+  }
+  return {mid,up,lo};
+}
+function vwapArr(cs){ // candles array -> cumulative VWAP using typical price*vol
+  const out=[]; let pv=0,vv=0;
+  for(const c of cs){ const tp=(c.h+c.l+c.c)/3, v=c.v||0; pv+=tp*v; vv+=v; out.push(vv>0?pv/vv:c.c); }
+  return out;
+}
+
+/* Build the full chart option (layout depends on which panes are on). */
+function buildChartOption(){
+  const subs=['vol','rsi','macd'].filter(k=>IND[k]);   // stacked panes under price
+  const n=subs.length;
+  const top=2, gap=2, subH=12, sliderArea=6;
+  const priceH=100-top-sliderArea-n*(subH+gap);
+  const grids=[{left:64,right:58,top:top+'%',height:priceH+'%'}];
+  const paneGridIndex={};   // 'vol'->gridIdx
+  subs.forEach((k,i)=>{
+    const t=top+priceH+gap+i*(subH+gap);
+    grids.push({left:64,right:58,top:t+'%',height:subH+'%'});
+    paneGridIndex[k]=grids.length-1;
+  });
+  const gn=grids.length;
+  const lastGrid=gn-1;
+
+  const xAxis=grids.map((g,i)=>({
+    type:'category',gridIndex:i,boundaryGap:true,
+    axisLine:{lineStyle:{color:'#2f3848'}},axisTick:{show:false},
+    axisLabel:i===lastGrid?{color:'#9ba6b8',fontFamily:'JetBrains Mono',fontSize:10,
+      formatter:v=>{const t=Number(v);return (tf===0||tf<60)?istHMS(t,false):istHMS(t,false).slice(0,5);}}:{show:false},
     splitLine:{show:false},
-    axisPointer:{label:{show:i===3,formatter:p=>istFull(Number(p.value))}}
-  })),
-  yAxis:[
-    {gridIndex:0,scale:true,axisLabel:{color:'#9ba6b8',fontFamily:'JetBrains Mono',fontSize:10},
-     splitLine:{lineStyle:{color:'rgba(35,42,56,0.5)'}},axisLine:{show:false}},
-    {gridIndex:1,scale:true,axisLabel:{color:'#5e6776',fontSize:9,formatter:v=>fmtCompact(v)},
-     splitLine:{show:false},splitNumber:2,axisLine:{show:false}},
-    {gridIndex:2,min:0,max:100,axisLabel:{color:'#5e6776',fontSize:9},splitNumber:2,
-     splitLine:{show:false},axisLine:{show:false}},
-    {gridIndex:3,scale:true,axisLabel:{color:'#5e6776',fontSize:9,formatter:v=>v.toFixed(1)},
-     splitNumber:2,splitLine:{show:false},axisLine:{show:false}}
-  ],
-  dataZoom:[
-    {type:'inside',xAxisIndex:[0,1,2,3],filterMode:'weakFilter',start:55,end:100},
-    {type:'slider',xAxisIndex:[0,1,2,3],height:20,bottom:6,
+    axisPointer:{label:{show:i===lastGrid,formatter:p=>istFull(Number(p.value))}}
+  }));
+
+  const yAxis=[{
+    gridIndex:0, scale:true, type:logScale?'log':'value', position:'right',
+    axisLabel:{color:'#9ba6b8',fontFamily:'JetBrains Mono',fontSize:10},
+    splitLine:{lineStyle:{color:'rgba(35,42,56,0.5)'}},axisLine:{show:false}
+  }];
+  const yIdx={};
+  subs.forEach(k=>{
+    if(k==='vol') yAxis.push({gridIndex:paneGridIndex.vol,scale:true,position:'right',
+      axisLabel:{color:'#5e6776',fontSize:9,formatter:v=>fmtCompact(v)},splitLine:{show:false},splitNumber:2,axisLine:{show:false}});
+    if(k==='rsi') yAxis.push({gridIndex:paneGridIndex.rsi,min:0,max:100,position:'right',
+      axisLabel:{color:'#5e6776',fontSize:9},splitNumber:2,splitLine:{show:false},axisLine:{show:false}});
+    if(k==='macd') yAxis.push({gridIndex:paneGridIndex.macd,scale:true,position:'right',
+      axisLabel:{color:'#5e6776',fontSize:9,formatter:v=>v.toFixed(1)},splitNumber:2,splitLine:{show:false},axisLine:{show:false}});
+    yIdx[k]=yAxis.length-1;
+  });
+
+  const allX=grids.map((_,i)=>i);
+  const dataZoom=[
+    {type:'inside',xAxisIndex:allX,filterMode:'filter',start:lastZoom.start,end:lastZoom.end,
+     zoomOnMouseWheel:true,moveOnMouseMove:true,moveOnMouseWheel:false},
+    {type:'slider',xAxisIndex:allX,height:18,bottom:8,
      backgroundColor:'rgba(26,31,43,0.6)',fillerColor:'rgba(94,142,255,0.15)',
      borderColor:'#2f3848',handleStyle:{color:'#5e8eff'},
-     textStyle:{color:'#5e6776',fontSize:9},
-     labelFormatter:v=>'' }
-  ],
-  series:[
+     dataBackground:{lineStyle:{color:'#2f3848'},areaStyle:{color:'rgba(94,142,255,0.08)'}},
+     textStyle:{color:'#5e6776',fontSize:9},labelFormatter:()=>'' },
+    // SHIFT+wheel over the price pane scales the price axis (broker-style)
+    {type:'inside',yAxisIndex:0,filterMode:'none',zoomOnMouseWheel:'shift',moveOnMouseMove:false,moveOnMouseWheel:false}
+  ];
+
+  const series=[
     {name:'Candles',type:'candlestick',xAxisIndex:0,yAxisIndex:0,
-     itemStyle:{color:UP,color0:DN,borderColor:UP,borderColor0:DN},data:[]},
+     itemStyle:{color:UP,color0:DN,borderColor:UP,borderColor0:DN},data:[],
+     markLine:{symbol:'none',silent:true,precision:2,
+       label:{position:'end',color:'#fff',backgroundColor:'#5e8eff',padding:[2,4],fontSize:10,fontFamily:'JetBrains Mono'},
+       lineStyle:{color:'#5e8eff',type:'dashed',width:1},data:[]}},
     {name:'Price',type:'line',xAxisIndex:0,yAxisIndex:0,showSymbol:false,
      lineStyle:{color:'#5e8eff',width:1.6},itemStyle:{color:'#5e8eff'},data:[]},
     {name:'EMA 9',type:'line',xAxisIndex:0,yAxisIndex:0,showSymbol:false,smooth:true,
      lineStyle:{color:'#ffb84d',width:1},itemStyle:{color:'#ffb84d'},data:[]},
+    {name:'EMA 21',type:'line',xAxisIndex:0,yAxisIndex:0,showSymbol:false,smooth:true,
+     lineStyle:{color:'#4dd2ff',width:1},itemStyle:{color:'#4dd2ff'},data:[]},
     {name:'SMA 20',type:'line',xAxisIndex:0,yAxisIndex:0,showSymbol:false,smooth:true,
      lineStyle:{color:'#b372ff',width:1},itemStyle:{color:'#b372ff'},data:[]},
-    {name:'Volume',type:'bar',xAxisIndex:1,yAxisIndex:1,data:[]},
-    {name:'RSI 14',type:'line',xAxisIndex:2,yAxisIndex:2,showSymbol:false,
+    {name:'SMA 50',type:'line',xAxisIndex:0,yAxisIndex:0,showSymbol:false,smooth:true,
+     lineStyle:{color:'#ff8fab',width:1},itemStyle:{color:'#ff8fab'},data:[]},
+    {name:'BB up',type:'line',xAxisIndex:0,yAxisIndex:0,showSymbol:false,
+     lineStyle:{color:'rgba(94,142,255,0.5)',width:1,type:'dashed'},itemStyle:{color:'#5e8eff'},data:[]},
+    {name:'BB low',type:'line',xAxisIndex:0,yAxisIndex:0,showSymbol:false,
+     lineStyle:{color:'rgba(94,142,255,0.5)',width:1,type:'dashed'},itemStyle:{color:'#5e8eff'},
+     areaStyle:{color:'rgba(94,142,255,0.05)'},data:[]},
+    {name:'VWAP',type:'line',xAxisIndex:0,yAxisIndex:0,showSymbol:false,
+     lineStyle:{color:'#ffd24d',width:1.4},itemStyle:{color:'#ffd24d'},data:[]},
+  ];
+  if(IND.vol) series.push({name:'Volume',type:'bar',xAxisIndex:paneGridIndex.vol,yAxisIndex:yIdx.vol,data:[]});
+  if(IND.rsi) series.push({name:'RSI 14',type:'line',xAxisIndex:paneGridIndex.rsi,yAxisIndex:yIdx.rsi,showSymbol:false,
      lineStyle:{color:'#5e8eff',width:1.2},itemStyle:{color:'#5e8eff'},
-     markLine:{symbol:'none',silent:true,label:{show:false},
-       lineStyle:{color:'#5e6776',type:'dashed',width:0.7},
-       data:[{yAxis:30},{yAxis:70}]},data:[]},
-    {name:'MACD hist',type:'bar',xAxisIndex:3,yAxisIndex:3,data:[]},
-    {name:'DIF',type:'line',xAxisIndex:3,yAxisIndex:3,showSymbol:false,
-     lineStyle:{color:'#ffb84d',width:1},itemStyle:{color:'#ffb84d'},data:[]},
-    {name:'DEA',type:'line',xAxisIndex:3,yAxisIndex:3,showSymbol:false,
-     lineStyle:{color:'#b372ff',width:1},itemStyle:{color:'#b372ff'},data:[]}
-  ]
-};
-chart.setOption(baseOption);
+     markLine:{symbol:'none',silent:true,label:{show:false},lineStyle:{color:'#5e6776',type:'dashed',width:0.7},
+       data:[{yAxis:30},{yAxis:70}]},data:[]});
+  if(IND.macd){
+    series.push({name:'MACD hist',type:'bar',xAxisIndex:paneGridIndex.macd,yAxisIndex:yIdx.macd,data:[]});
+    series.push({name:'DIF',type:'line',xAxisIndex:paneGridIndex.macd,yAxisIndex:yIdx.macd,showSymbol:false,
+      lineStyle:{color:'#ffb84d',width:1},itemStyle:{color:'#ffb84d'},data:[]});
+    series.push({name:'DEA',type:'line',xAxisIndex:paneGridIndex.macd,yAxisIndex:yIdx.macd,showSymbol:false,
+      lineStyle:{color:'#b372ff',width:1},itemStyle:{color:'#b372ff'},data:[]});
+  }
+
+  return {
+    backgroundColor:'transparent', animation:false,
+    axisPointer:{link:[{xAxisIndex:'all'}],label:{backgroundColor:'#2f3848'}},
+    toolbox:{right:10,top:-4,itemSize:13,iconStyle:{borderColor:'#5e6776'},
+      feature:{dataZoom:{yAxisIndex:false,title:{zoom:'box zoom',back:'undo'}},
+        restore:{title:'reset'},saveAsImage:{title:'save',backgroundColor:'#07090d'}}},
+    tooltip:{trigger:'axis',backgroundColor:'#1a1f2b',borderColor:'#2f3848',
+      textStyle:{color:'#e5ecf5',fontFamily:'JetBrains Mono',fontSize:11.5},
+      axisPointer:{type:'cross'},
+      formatter:(params)=>{
+        if(!params.length)return '';
+        const t=Number(params[0].axisValue);
+        let h='<b>'+istFull(t)+' IST</b><br>';
+        params.forEach(p=>{
+          if(p.seriesName==='Candles'&&Array.isArray(p.value)){
+            const o=p.value[1],c=p.value[2],l=p.value[3],hi=p.value[4];
+            const col=c>=o?'#00d68f':'#ff5677';
+            h+=`<span style="color:${col}">O ${o.toFixed(2)} H ${hi.toFixed(2)} L ${l.toFixed(2)} C ${c.toFixed(2)}</span><br>`;
+          } else if(p.value!=null&&!Array.isArray(p.value)){
+            h+=`${p.marker}${p.seriesName}: <b>${Number(p.value).toFixed(2)}</b><br>`;
+          }
+        });
+        return h;
+      }},
+    grid:grids, xAxis, yAxis, dataZoom, series
+  };
+}
+chart.setOption(buildChartOption());
+chart.on('dataZoom',()=>{ const dz=chart.getOption().dataZoom[0]; if(dz){lastZoom={start:dz.start,end:dz.end};} });
 window.addEventListener('resize',()=>chart.resize());
+
+function rebuildChart(){ chart.setOption(buildChartOption(),true); renderChart(true); }
+function resetZoom(){ lastZoom={start:0,end:100}; chart.dispatchAction({type:'dataZoom',start:0,end:100}); }
+function toggleLogScale(){ logScale=!logScale; document.getElementById('logBtn').textContent='Log scale: '+(logScale?'on':'off'); rebuildChart(); }
+
+/* indicator chip handlers */
+document.getElementById('indBar').addEventListener('click',(e)=>{
+  const c=e.target.closest('.ind-chip[data-ind]'); if(!c)return;
+  const k=c.dataset.ind; IND[k]=!IND[k]; c.classList.toggle('on',IND[k]);
+  if(['vol','rsi','macd'].includes(k)) rebuildChart(); else renderChart(true);
+});
 
 /* ---------- Chart render from candles[] ---------- */
 let chartDirty=false;
@@ -452,28 +546,35 @@ function renderChart(force){
     const closes=candles.map(c=>c.c);
     const kdata=candles.map(c=>[c.o,c.c,c.l,c.h]);
     const lineData=candles.map(c=>c.c);
-    const vols=candles.map((c,i)=>({
-      value:c.v??0,
-      itemStyle:{color:(c.c>=c.o)?'rgba(0,214,143,0.55)':'rgba(255,86,119,0.55)'}
-    }));
-    const ema9=emaArr(closes,9), sma20=smaArr(closes,20);
-    const rsi=rsiArr(closes,14);
-    const {dif,dea,hist}=macdArr(closes);
-    const histBars=hist.map(v=>({
-      value:v, itemStyle:{color:v==null?'transparent':(v>=0?'rgba(0,214,143,0.7)':'rgba(255,86,119,0.7)')}
-    }));
-    const tick = (tf===0);
-    chart.setOption({
-      xAxis:[{data:xs},{data:xs},{data:xs},{data:xs}],
-      series:[
-        {data: tick?[]:kdata},
-        {data: tick?lineData:[]},
-        {data:ema9},{data:sma20},
-        {data:vols},
-        {data:rsi},
-        {data:histBars},{data:dif},{data:dea}
-      ]
-    });
+    const vols=candles.map(c=>({value:c.v??0,
+      itemStyle:{color:(c.c>=c.o)?'rgba(0,214,143,0.55)':'rgba(255,86,119,0.55)'}}));
+    const ema9=IND.ema9?emaArr(closes,9):[], ema21=IND.ema21?emaArr(closes,21):[];
+    const sma20=IND.sma20?smaArr(closes,20):[], sma50=IND.sma50?smaArr(closes,50):[];
+    const bb=IND.bb?bollinger(closes,20,2):{up:[],lo:[]};
+    const vwap=IND.vwap?vwapArr(candles):[];
+    const rsi=IND.rsi?rsiArr(closes,14):[];
+    const tick=(tf===0);
+    const lastClose=closes.length?closes[closes.length-1]:null;
+    const ser=[
+      {name:'Candles',data:tick?[]:kdata,
+        markLine:{data:lastClose!=null?[{yAxis:lastClose}]:[]}},
+      {name:'Price',data:tick?lineData:[]},
+      {name:'EMA 9',data:ema9},{name:'EMA 21',data:ema21},
+      {name:'SMA 20',data:sma20},{name:'SMA 50',data:sma50},
+      {name:'BB up',data:bb.up},{name:'BB low',data:bb.lo},
+      {name:'VWAP',data:vwap},
+    ];
+    if(IND.vol) ser.push({name:'Volume',data:vols});
+    if(IND.rsi) ser.push({name:'RSI 14',data:rsi});
+    if(IND.macd){
+      const {dif,dea,hist}=macdArr(closes);
+      ser.push({name:'MACD hist',data:hist.map(v=>({value:v,
+        itemStyle:{color:v==null?'transparent':(v>=0?'rgba(0,214,143,0.7)':'rgba(255,86,119,0.7)')}}))});
+      ser.push({name:'DIF',data:dif}); ser.push({name:'DEA',data:dea});
+    }
+    const nGrid=chart.getOption().grid.length;
+    const axisData=[]; for(let i=0;i<nGrid;i++)axisData.push({data:xs});
+    chart.setOption({xAxis:axisData,series:ser});
     document.getElementById('ptCount').textContent=candles.length.toLocaleString();
     updateReadout(candles.length-1);
   }, force?0:280);
