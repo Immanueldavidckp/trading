@@ -718,6 +718,31 @@ def _fetch_price_rows_after(last_id: int, tsym: Optional[str] = None, limit: int
         return []
 
 
+def _fetch_recent_rows(tsym: Optional[str], n: int):
+    """Return the most-recent n price_changes rows, oldest-first (for backlog)."""
+    n = max(1, min(int(n), 5000))
+    sql = ("SELECT id, received_at, bar_time, tsym, lp, bid, ask, bid_size, ask_size, "
+           f"{COL_CHANGE} as `change`, change_pct, volume, source FROM price_changes")
+    params: list = []
+    if tsym:
+        sql += f" WHERE tsym = {PH}"
+        params.append(tsym)
+    sql += f" ORDER BY id DESC LIMIT {PH}"   # newest first...
+    params.append(n)
+    try:
+        conn = _db.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, params)
+            rows = _db.dict_rows(cur)
+            cur.close()
+            return list(reversed(rows))      # ...then flip to oldest-first
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
 def _latest_price_id() -> int:
     try:
         conn = _db.connect()
@@ -746,14 +771,15 @@ async def ws_prices(websocket: WebSocket):
     except ValueError:
         backlog = 30
 
-    # 1. Send a backlog of the most recent rows so the UI isn't empty
+    # 1. Send a backlog of the genuinely most-recent rows so the UI isn't empty
     last_id = 0
     if backlog > 0:
-        recent = _fetch_price_rows_after(0, tsym=tsym, limit=10_000)
-        recent = recent[-backlog:]
+        recent = _fetch_recent_rows(tsym, backlog)
         if recent:
             last_id = recent[-1]["id"]
             await websocket.send_json({"type": "backlog", "rows": recent})
+        else:
+            last_id = _latest_price_id()
     else:
         last_id = _latest_price_id()
 
