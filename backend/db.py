@@ -140,3 +140,9 @@ def quote_col(name: str) -> str:
     if USE_MYSQL:
         return f"`{name}`"
     return f'"{name}"'
+
+
+def ensure_candles_table():
+    """Create candles OHLCV table if it does not exist yet."""
+    from upstox_client import ensure_candles_table as _ect
+    _ect()

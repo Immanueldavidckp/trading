@@ -20,6 +20,7 @@ from ai_agent import AIAgent
 from tick_recorder import TickRecorder
 from yahoo_poller import YahooPoller, YahooMultiPoller
 from flattrade_client import FlattradeClient
+from upstox_client import UpstoxClient, ALL_INTERVALS
 from fastapi.responses import RedirectResponse, HTMLResponse
 
 app = FastAPI(title="Shoonya AI Trading Backend")
@@ -65,6 +66,7 @@ ai_agent = None
 recorder: Optional[TickRecorder] = None
 yahoo: Optional[YahooMultiPoller] = None
 flattrade: Optional[FlattradeClient] = None
+upstox: Optional[UpstoxClient] = None
 
 # Default watchlist for tick recorder. Add more here as you go.
 DEFAULT_WATCHLIST = [
@@ -198,6 +200,15 @@ def startup_event():
         print(f"Yahoo multi-poller auto-start: {res.get('ok')} (symbols={[s['tsym'] for s in res.get('symbols', [])]})")
     except Exception as e:
         print(f"Yahoo poller auto-start failed: {e}")
+
+    # Initialise Upstox client (loads cached token + instruments if available)
+    global upstox
+    try:
+        upstox = UpstoxClient()
+        st = upstox.status()
+        print(f"Upstox: configured={st['configured']} logged_in={st['logged_in']} instruments={st['instruments_cached']}")
+    except Exception as e:
+        print(f"Upstox init failed: {e}")
 
 @app.get("/api/config")
 def get_config():
@@ -916,6 +927,122 @@ def ft_cancel(req: FtCancelModel):
     if not flattrade or not flattrade.session_token:
         raise HTTPException(status_code=401, detail="Not logged in")
     return flattrade.cancel_order(req.orderno)
+
+
+# ---------- Upstox candle data endpoints ----------
+
+class UpstoxFetchModel(BaseModel):
+    tsym:      str
+    interval:  Optional[str] = "1d"
+    from_date: Optional[str] = None
+    to_date:   Optional[str] = None
+
+
+def _upstox() -> UpstoxClient:
+    global upstox
+    if upstox is None:
+        upstox = UpstoxClient()
+    return upstox
+
+
+@app.get("/api/upstox/status")
+def upstox_status():
+    """Check if Upstox is configured and logged in."""
+    return _upstox().status()
+
+
+@app.get("/api/upstox/login_url")
+def upstox_login_url():
+    """
+    Returns the URL the user must open in their browser to log in to Upstox.
+    After approving, the browser is redirected to /api/upstox/callback automatically.
+    """
+    u = _upstox()
+    if not u.has_creds():
+        raise HTTPException(
+            status_code=400,
+            detail="UPSTOX_API_KEY and UPSTOX_API_SECRET are not set in backend/.env"
+        )
+    url = u.login_url()
+    return {
+        "login_url": url,
+        "instruction": "Open this URL in your browser, log in with your Upstox account, then approve access.",
+    }
+
+
+@app.get("/api/upstox/callback")
+def upstox_callback(code: Optional[str] = None, error: Optional[str] = None):
+    """
+    OAuth2 redirect target. Upstox sends the authorization code here automatically.
+    Exchanges the code for an access token and saves it for the day.
+    """
+    if error:
+        return HTMLResponse(f"<h2>Upstox login failed</h2><p>{error}</p>", status_code=400)
+    if not code:
+        return HTMLResponse("<h2>No code received</h2><p>Something went wrong with the OAuth flow.</p>", status_code=400)
+
+    res = _upstox().exchange_code(code)
+    if res.get("ok"):
+        return HTMLResponse("""
+        <html><body style="font-family:system-ui;background:#07090d;color:#e5ecf5;
+               display:grid;place-items:center;height:100vh;margin:0">
+          <div style="text-align:center">
+            <h2 style="color:#00d68f">Connected to Upstox</h2>
+            <p>Access token saved. You can close this tab.</p>
+            <a href="/live.html" style="color:#5e8eff">Go to dashboard</a>
+          </div>
+        </body></html>""")
+    return HTMLResponse(f"<h2>Login failed</h2><p>{res.get('error')}</p>", status_code=400)
+
+
+@app.post("/api/upstox/fetch")
+def upstox_fetch(req: UpstoxFetchModel):
+    """
+    Fetch historical OHLCV candles for a symbol and store in local SQLite DB.
+
+    interval options: 1m, 5m, 15m, 1h, 4h, 30m, 1d, 1w, 1mo
+    Example body: {"tsym": "RELIANCE", "interval": "1d"}
+    """
+    return _upstox().fetch_candles(
+        tsym=req.tsym,
+        interval=req.interval,
+        from_date=req.from_date,
+        to_date=req.to_date,
+    )
+
+
+@app.get("/api/upstox/candles")
+def upstox_candles(tsym: str, interval: str = "1d", limit: int = 500):
+    """
+    Read stored candles from local DB for the given symbol and interval.
+    Call /api/upstox/fetch first to populate the data.
+    Returns oldest-first list: [{ts, o, h, l, c, v, oi}, ...]
+    """
+    from upstox_client import UpstoxClient as _UC
+    rows = _UC.query(tsym=tsym, interval=interval, limit=limit)
+    return {"stat": "Ok", "tsym": tsym, "interval": interval, "candles": rows}
+
+
+@app.get("/api/upstox/symbols")
+def upstox_symbols():
+    """List all symbols and intervals currently stored in the candles table."""
+    from upstox_client import UpstoxClient as _UC
+    return {"stat": "Ok", "symbols": _UC.stored_symbols()}
+
+
+@app.post("/api/upstox/refresh_instruments")
+def upstox_refresh_instruments():
+    """
+    Download the latest NSE instruments master from Upstox CDN.
+    Run this once after setup, or whenever new stocks are listed.
+    """
+    return _upstox().refresh_instruments()
+
+
+@app.get("/api/upstox/intervals")
+def upstox_intervals():
+    """List all supported candle intervals."""
+    return {"intervals": ALL_INTERVALS}
 
 
 # ---------- Root handler: OAuth callback OR redirect to /live.html ----------
