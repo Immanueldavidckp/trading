@@ -1,0 +1,68 @@
+name: Deploy Trading Backend
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy to Lightsail
+        run: |
+          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.SERVER_HOST }} 'bash -s' <<'EOF'
+            set -e
+
+            # ── 1. Pull latest code ────────────────────────────────────────
+            if [ ! -d ~/trading ]; then
+              git clone https://github.com/Immanueldavidckp/trading.git ~/trading
+              echo "Cloned trading repo"
+            else
+              cd ~/trading
+              git pull origin main
+              echo "Pulled latest code"
+            fi
+
+            cd ~/trading/backend
+
+            # ── 2. Install / upgrade Python dependencies ───────────────────
+            pip3 install -r requirements.txt --quiet --upgrade
+
+            # ── 3. Create data directory (ignored by git) ──────────────────
+            mkdir -p local_data
+
+            # ── 4. Write .env from GitHub secrets (overwrites on every deploy)
+            cat > .env <<'ENVEOF'
+UPSTOX_API_KEY=${{ secrets.UPSTOX_API_KEY }}
+UPSTOX_API_SECRET=${{ secrets.UPSTOX_API_SECRET }}
+UPSTOX_REDIRECT_URI=http://${{ secrets.SERVER_HOST }}:8000/api/upstox/callback
+SHOONYA_USER_ID=${{ secrets.SHOONYA_USER_ID }}
+SHOONYA_PASSWORD=${{ secrets.SHOONYA_PASSWORD }}
+SHOONYA_VENDOR_CODE=${{ secrets.SHOONYA_VENDOR_CODE }}
+SHOONYA_API_KEY=${{ secrets.SHOONYA_API_KEY }}
+SHOONYA_TOTP_SECRET=${{ secrets.SHOONYA_TOTP_SECRET }}
+SHOONYA_IMEI=abc1234
+GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+MOCK_MODE=true
+ENVEOF
+
+            # ── 5. Start (first time) or restart (subsequent deploys) ──────
+            if pm2 list | grep -q 'trading-backend'; then
+              pm2 restart trading-backend
+              echo "Restarted trading-backend"
+            else
+              pm2 start ecosystem.config.js
+              echo "Started trading-backend for first time"
+            fi
+
+            pm2 save
+            echo "Deploy complete"
+          EOF
