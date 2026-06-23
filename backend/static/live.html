@@ -211,6 +211,7 @@
         <button class="ind-chip on" data-smc="structure">Structure</button>
         <button class="ind-chip on" data-smc="fvg">FVG</button>
         <button class="ind-chip on" data-smc="ob">Order Blocks</button>
+        <button class="ind-chip on" data-smc="swings">Swings (HH/HL)</button>
         <button class="ind-chip" data-smc="sweeps">Liquidity</button>
         <button class="ind-chip" data-smc="range">Prem/Disc·OTE</button>
         <span class="ind-sep"></span>
@@ -412,7 +413,7 @@ const UP='#00d68f', DN='#ff5677';
 
 // indicator + pane toggles
 const IND={ema9:true,ema21:true,sma20:true,sma50:false,bb:false,vwap:false,vol:true,rsi:true,macd:true};
-const SMC={structure:true,fvg:true,ob:true,sweeps:false,range:false};
+const SMC={structure:true,fvg:true,ob:true,swings:true,sweeps:false,range:false};
 const MTF={'1m':true,'15m':true,'1h':true,'4h':true};   // which TFs to overlay
 let smc=null;              // single-TF result for the active interval (structure/sweeps/range)
 let smcMulti={};           // {tf: analyze-result} for all enabled MTF layers
@@ -729,23 +730,27 @@ function buildSMCOverlays(xs){
   layers.sort((a,b)=>(TF_STYLE[a[0]]?.weight||0)-(TF_STYLE[b[0]]?.weight||0));
 
   // ── FVG boxes (per-TF) ──
+  // Always draw a horizontal mid-line so tiny zones (a few cents on 1m) are
+  // still visible; the box itself is the gap range with a small border so even
+  // 0.01% gaps register on the eye.
   if(SMC.fvg){
     layers.forEach(([tf,r])=>{
       if(!r.fvg) return;
       const st=TF_STYLE[tf]||TF_STYLE['1m'];
       r.fvg.filter(g=>!g.mitigated).forEach(g=>{
         const col=g.kind==='bull'?st.fillBull:st.fillBear;
-        const item={color:col};
-        if(st.border>0){
-          item.borderColor=g.kind==='bull'?st.borderBull:st.borderBear;
-          item.borderWidth=st.border;
-        }
+        const bord=g.kind==='bull'?(st.borderBull||'#00d68f'):(st.borderBear||'#ff5677');
         areas.push([
-          {xAxis:pickT(g.t_mid),yAxis:g.top,itemStyle:item,
-           name:`${tf} FVG`,label:{show:st.border>0,formatter:`FVG ${st.label}`,
-             position:'insideTopLeft',fontSize:9,color:'#cdd6e6',distance:2}},
+          {xAxis:pickT(g.t_mid),yAxis:g.top,
+           itemStyle:{color:col,borderColor:bord,borderWidth:Math.max(0.6,st.border||0.6),borderType:'solid'},
+           name:`${tf} FVG`,label:{show:true,formatter:`FVG·${st.label}`,
+             position:'insideTopLeft',fontSize:9,color:bord,fontWeight:600,distance:2}},
           {xAxis:rightT,yAxis:g.bottom}
         ]);
+        // dashed line at the FVG midpoint — guarantees visibility on tiny gaps
+        const mid=(g.top+g.bottom)/2;
+        lines.push({yAxis:mid,lineStyle:{color:bord,type:'dashed',width:0.6,opacity:0.5},
+          label:{show:false}});
       });
     });
   }
@@ -757,18 +762,36 @@ function buildSMCOverlays(xs){
       const st=TF_STYLE[tf]||TF_STYLE['1m'];
       r.order_blocks.filter(o=>!o.mitigated).forEach(o=>{
         const col=o.kind==='bull'?st.obBull:st.obBear;
-        const item={color:col};
-        if(st.border>0){
-          item.borderColor=o.kind==='bull'?st.borderBull:st.borderBear;
-          item.borderWidth=st.border;
-        }
+        const bord=o.kind==='bull'?(st.borderBull||'#5e8eff'):(st.borderBear||'#ffb84d');
+        const tag=o.from_event==='impulse'?'OB*':'OB';   // * = impulse-detected
         areas.push([
-          {xAxis:pickT(o.t),yAxis:o.top,itemStyle:item,
-           name:`${tf} OB`,label:{show:st.border>0,formatter:`OB ${st.label}`,
-             position:'insideBottomLeft',fontSize:9,color:'#cdd6e6',distance:2}},
+          {xAxis:pickT(o.t),yAxis:o.top,
+           itemStyle:{color:col,borderColor:bord,borderWidth:Math.max(0.8,st.border||0.8),borderType:'solid'},
+           name:`${tf} OB`,label:{show:true,formatter:`${tag}·${st.label}`,
+             position:'insideBottomLeft',fontSize:9,color:bord,fontWeight:600,distance:2}},
           {xAxis:rightT,yAxis:o.bottom}
         ]);
       });
+    });
+  }
+
+  // ── Swing markers with HH/HL/LH/LL labels (active TF only) ──
+  if(SMC.swings && smc && smc.swings){
+    smc.swings.slice(-60).forEach(s=>{
+      const isHi=s.kind==='H';
+      const lbl=s.label||s.kind;
+      // colour by structural meaning: HH/HL = bullish-stamped, LH/LL = bearish-stamped
+      const col=(lbl==='HH'||lbl==='HL')?'#00d68f'
+              :(lbl==='LH'||lbl==='LL')?'#ff5677'
+              :'#9ba6b8';
+      points.push({coord:[pickT(s.t),s.price],value:lbl,
+        symbol:isHi?'triangle':'triangle',
+        symbolRotate:isHi?180:0,           // ▽ on highs, △ on lows
+        symbolSize:9,
+        itemStyle:{color:col,borderColor:'#0e1320',borderWidth:1},
+        label:{show:true,formatter:lbl,fontSize:9,color:col,fontWeight:700,
+          position:isHi?'top':'bottom',distance:4,
+          textBorderColor:'#0e1320',textBorderWidth:2}});
     });
   }
 
@@ -824,9 +847,22 @@ async function loadSMC(){
 function updateSMCBadge(){
   const el=document.getElementById('srcTag'); if(!el)return;
   if(smc&&smc.ok){
-    const b=(smc.bias||'—').toUpperCase(), z=smc.price_zone||'—';
-    const col=smc.bias==='bull'?'var(--green)':smc.bias==='bear'?'var(--red)':'var(--text-3)';
-    el.innerHTML=`Upstox · bias <b style="color:${col}">${b}</b> · ${z}`;
+    const f=smc.forecast||{};
+    const trend=(f.trend||smc.bias||'—').toUpperCase();
+    const next=f.next_move||smc.price_zone||'—';
+    const hLbl=f.last_high_label||'—', lLbl=f.last_low_label||'—';
+    const trendCol = (f.trend==='bullish')?'var(--green)'
+                   :(f.trend==='bearish')?'var(--red)'
+                   :(f.trend==='compression'||f.trend==='transition')?'var(--yellow)'
+                   :'var(--text-3)';
+    const nextCol  = next.includes('buy')?'var(--green)'
+                   : next.includes('sell')?'var(--red)'
+                   :'var(--text-3)';
+    el.innerHTML =
+      `Upstox · trend <b style="color:${trendCol}">${trend}</b> ` +
+      `· last H/L <b class="mono">${hLbl}/${lLbl}</b> ` +
+      `· <b style="color:${nextCol}">${next}</b>`;
+    el.title = f.rationale || '';
   } else el.textContent='Upstox';
 }
 function fireSMCAlerts(){

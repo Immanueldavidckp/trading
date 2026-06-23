@@ -46,6 +46,32 @@ def swing_points(candles: List[dict], left: int = 2, right: int = 2) -> List[dic
     return out
 
 
+def classify_swings(swings: List[dict]) -> List[dict]:
+    """Label each swing HH / HL / LH / LL by comparing to the previous same-kind
+    swing. The first H is 'H'; the first L is 'L' (no prior to compare).
+    HH = Higher High, HL = Higher Low, LH = Lower High, LL = Lower Low."""
+    last_h: Optional[float] = None
+    last_l: Optional[float] = None
+    for s in swings:
+        if s["kind"] == "H":
+            if last_h is None:
+                s["label"] = "H"
+            elif s["price"] > last_h:
+                s["label"] = "HH"
+            else:
+                s["label"] = "LH"
+            last_h = s["price"]
+        else:
+            if last_l is None:
+                s["label"] = "L"
+            elif s["price"] > last_l:
+                s["label"] = "HL"
+            else:
+                s["label"] = "LL"
+            last_l = s["price"]
+    return swings
+
+
 # ── market structure: BOS / CHoCH ──────────────────────────────────────────
 
 def market_structure(candles: List[dict], swings: List[dict]) -> Dict:
@@ -178,6 +204,84 @@ def _last_match(candles, before_idx, pred):
     return None
 
 
+def impulse_order_blocks(candles: List[dict], min_pct: float = 0.25,
+                         lookahead: int = 6) -> List[dict]:
+    """Find ALL order blocks, not just those tied to a structural break.
+
+    Rule: the last opposite-colour candle before an impulse leg that travels at
+    least `min_pct` of price within the next `lookahead` bars. Catches many more
+    institutional zones than the BOS-only detector. Each OB gets a `strength`
+    score = the size of the impulse leg as a percentage of price."""
+    out: List[dict] = []
+    n = len(candles)
+    for i in range(1, n - 1):
+        c = candles[i]
+        base = c["c"]
+        if base <= 0:
+            continue
+
+        # Bullish OB: down-close candle followed by a strong UPward leg.
+        if c["c"] < c["o"]:
+            top_n = max(
+                (candles[j]["h"] for j in range(i + 1, min(i + lookahead + 1, n))),
+                default=base,
+            )
+            rise = (top_n - c["h"]) / base * 100.0
+            if rise >= min_pct:
+                top, bottom = c["h"], c["l"]
+                mitigated, mit_t = _zone_mitigation(candles, i + 1, "bull", top, bottom)
+                out.append({"kind": "bull", "top": top, "bottom": bottom,
+                            "t": c["t"], "from_event": "impulse",
+                            "strength": round(rise, 3),
+                            "mitigated": mitigated, "mit_t": mit_t})
+
+        # Bearish OB: up-close candle followed by a strong DOWNward leg.
+        elif c["c"] > c["o"]:
+            bot_n = min(
+                (candles[j]["l"] for j in range(i + 1, min(i + lookahead + 1, n))),
+                default=base,
+            )
+            drop = (c["l"] - bot_n) / base * 100.0
+            if drop >= min_pct:
+                top, bottom = c["h"], c["l"]
+                mitigated, mit_t = _zone_mitigation(candles, i + 1, "bear", top, bottom)
+                out.append({"kind": "bear", "top": top, "bottom": bottom,
+                            "t": c["t"], "from_event": "impulse",
+                            "strength": round(drop, 3),
+                            "mitigated": mitigated, "mit_t": mit_t})
+    return out
+
+
+def _zone_mitigation(candles, start_idx, kind, top, bottom):
+    """A zone is mitigated when price RE-ENTERS it (first touch back).
+    Bullish zone (price gapped up out of it) → mitigated when later low <= top.
+    Bearish zone (price dropped from it) → mitigated when later high >= bottom."""
+    for j in range(start_idx, len(candles)):
+        c = candles[j]
+        if kind == "bull" and c["l"] <= top:
+            return True, c["t"]
+        if kind == "bear" and c["h"] >= bottom:
+            return True, c["t"]
+    return False, None
+
+
+def _dedupe_zones(zones: List[dict], tol_pct: float = 0.05) -> List[dict]:
+    """Drop zones whose top+bottom both land within tol_pct of an earlier one —
+    BOS-OBs and impulse-OBs often coincide at the same candle."""
+    out: List[dict] = []
+    for z in zones:
+        mid = (z["top"] + z["bottom"]) / 2.0
+        dupe = False
+        for kept in out:
+            kmid = (kept["top"] + kept["bottom"]) / 2.0
+            if kept["kind"] == z["kind"] and abs(mid - kmid) / max(mid, 1e-9) * 100 < tol_pct:
+                dupe = True
+                break
+        if not dupe:
+            out.append(z)
+    return out
+
+
 # ── liquidity sweeps (turtle soup) + inducement ────────────────────────────
 
 def liquidity_sweeps(candles: List[dict], swings: List[dict]) -> List[dict]:
@@ -240,6 +344,71 @@ def dealing_range(candles: List[dict], structure: Dict) -> Optional[Dict]:
 
 # ── top-level ──────────────────────────────────────────────────────────────
 
+def trend_forecast(swings: List[dict], structure_bias: Optional[str],
+                   last_price: float, rng: Optional[Dict]) -> Dict:
+    """Read the last few HH/HL/LH/LL labels and project a directional bias.
+
+    Pattern → trend:
+      HH + HL  = bullish (textbook uptrend)
+      LH + LL  = bearish (textbook downtrend)
+      HH + LL  = expansion (range widening, likely reversal soon)
+      LH + HL  = compression (range tightening, breakout pending)
+
+    Combines with structure bias and Premium/Discount zone for the next-move
+    expectation. The forecast is plain English the chart can show directly."""
+    highs = [s for s in swings if s["kind"] == "H"]
+    lows = [s for s in swings if s["kind"] == "L"]
+    last_h_lbl = highs[-1].get("label") if highs else None
+    last_l_lbl = lows[-1].get("label") if lows else None
+
+    trend = "unclear"
+    if last_h_lbl in ("HH", "H") and last_l_lbl in ("HL", "L"):
+        trend = "bullish"
+    elif last_h_lbl in ("LH",) and last_l_lbl in ("LL",):
+        trend = "bearish"
+    elif last_h_lbl == "HH" and last_l_lbl == "LL":
+        trend = "expansion"
+    elif last_h_lbl == "LH" and last_l_lbl == "HL":
+        trend = "compression"
+    elif last_h_lbl and last_l_lbl:
+        trend = "transition"
+
+    zone = None
+    if rng:
+        span = rng["high"] - rng["low"]
+        if span > 0:
+            pct = (last_price - rng["low"]) / span * 100.0
+            zone = "premium" if pct > 55 else "discount" if pct < 45 else "equilibrium"
+
+    # Next-move expectation = trend × zone × bias confluence
+    next_move = "wait"
+    rationale = []
+    if trend == "bullish" and zone == "discount":
+        next_move = "buy bias"; rationale.append("uptrend + discount = expect bounce up")
+    elif trend == "bearish" and zone == "premium":
+        next_move = "sell bias"; rationale.append("downtrend + premium = expect drop")
+    elif trend == "bullish" and zone == "premium":
+        next_move = "wait (overbought)"; rationale.append("uptrend but premium — wait for pullback to HL")
+    elif trend == "bearish" and zone == "discount":
+        next_move = "wait (oversold)"; rationale.append("downtrend but discount — wait for retrace to LH")
+    elif trend == "compression":
+        next_move = "wait for break"; rationale.append("LH + HL = range tightening, breakout pending")
+    elif trend == "expansion":
+        next_move = "reversal watch"; rationale.append("HH + LL = volatility expanding; reversal likely")
+
+    if structure_bias and structure_bias != trend.replace("ish", ""):
+        rationale.append(f"structure bias is {structure_bias} (note: divergence)")
+
+    return {
+        "trend": trend,
+        "last_high_label": last_h_lbl,
+        "last_low_label": last_l_lbl,
+        "zone": zone,
+        "next_move": next_move,
+        "rationale": "; ".join(rationale) if rationale else "no clean confluence",
+    }
+
+
 def analyze(candles: List[dict], swing_lookback: int = 2,
             fvg_min_pct: float = 0.0) -> Dict:
     """Run the full SMC suite over a candle series (oldest-first)."""
@@ -247,9 +416,15 @@ def analyze(candles: List[dict], swing_lookback: int = 2,
         return {"ok": False, "error": "not enough candles", "n": len(candles)}
 
     swings = swing_points(candles, swing_lookback, swing_lookback)
+    swings = classify_swings(swings)
     structure = market_structure(candles, swings)
     fvg = fair_value_gaps(candles, fvg_min_pct)
-    obs = order_blocks(candles, structure)
+
+    # Merge BOS-anchored OBs with impulse-detected OBs (and de-dupe overlaps).
+    obs_bos = order_blocks(candles, structure)
+    obs_imp = impulse_order_blocks(candles)
+    obs = _dedupe_zones(obs_bos + obs_imp)
+
     sweeps = liquidity_sweeps(candles, swings)
     rng = dealing_range(candles, structure)
 
@@ -258,6 +433,8 @@ def analyze(candles: List[dict], swing_lookback: int = 2,
     if rng:
         pct = (last_price - rng["low"]) / (rng["high"] - rng["low"]) * 100.0
         zone = "premium" if pct > 55 else "discount" if pct < 45 else "equilibrium"
+
+    forecast = trend_forecast(swings, structure["bias"], last_price, rng)
 
     return {
         "ok": True,
@@ -271,6 +448,7 @@ def analyze(candles: List[dict], swing_lookback: int = 2,
         "order_blocks": obs,
         "sweeps": sweeps,
         "range": rng,
+        "forecast": forecast,
     }
 
 
