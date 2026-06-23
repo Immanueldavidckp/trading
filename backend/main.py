@@ -1012,15 +1012,35 @@ def upstox_fetch(req: UpstoxFetchModel):
 
 
 @app.get("/api/upstox/candles")
-def upstox_candles(tsym: str, interval: str = "1d", limit: int = 500):
+def upstox_candles(tsym: str, interval: str = "1d", limit: int = 500,
+                   auto: int = 1, refresh: int = 0):
     """
-    Read stored candles from local DB for the given symbol and interval.
-    Call /api/upstox/fetch first to populate the data.
-    Returns oldest-first list: [{ts, o, h, l, c, v, oi}, ...]
+    Read stored candles for a symbol/interval. Oldest-first.
+
+    auto=1   : if nothing is stored yet, fetch from Upstox automatically
+               (so any watchlist symbol works on first view).
+    refresh=1: always re-fetch the latest from Upstox before returning
+               (picks up today's new candles).
+
+    Each candle is {t, o, h, l, c, v, oi} where t is a millisecond epoch —
+    matching the shape the chart already renders.
     """
     from upstox_client import UpstoxClient as _UC
     rows = _UC.query(tsym=tsym, interval=interval, limit=limit)
-    return {"stat": "Ok", "tsym": tsym, "interval": interval, "candles": rows}
+
+    fetched = None
+    if refresh or (auto and not rows):
+        fetched = _upstox().fetch_candles(tsym=tsym, interval=interval)
+        rows = _UC.query(tsym=tsym, interval=interval, limit=limit)
+
+    # query() returns {ts(ms), o, h, l, c, v, oi}; the chart wants `t`.
+    candles = [{"t": r["ts"], "o": r["o"], "h": r["h"], "l": r["l"],
+                "c": r["c"], "v": r["v"], "oi": r["oi"]} for r in rows]
+
+    resp = {"stat": "Ok", "tsym": tsym.upper(), "interval": interval, "candles": candles}
+    if fetched is not None and not fetched.get("ok"):
+        resp["fetch_error"] = fetched.get("error")
+    return resp
 
 
 @app.get("/api/upstox/symbols")
