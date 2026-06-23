@@ -305,15 +305,43 @@ class UpstoxClient:
 
     def _fetch_raw(self, instrument_key: str, upstox_interval: str,
                    from_date: str, to_date: str) -> dict:
-        """Call Upstox historical-candle endpoint."""
-        k   = urllib.parse.quote(instrument_key, safe="")
-        url = f"{BASE}/historical-candle/{k}/{upstox_interval}/{to_date}/{from_date}"
+        """Call Upstox historical-candle endpoint.
+
+        Upstox v2 caps the 1minute interval at ~30 days per request, so we
+        split longer ranges into <=28-day windows and concatenate. Daily/
+        weekly/monthly have no such limit and run in a single request.
+        """
+        k = urllib.parse.quote(instrument_key, safe="")
+
+        # Build the list of (from, to) windows to request.
+        if upstox_interval == "1minute":
+            windows = []
+            start = datetime.fromisoformat(from_date)
+            end   = datetime.fromisoformat(to_date)
+            cur   = start
+            while cur <= end:
+                win_end = min(cur + timedelta(days=27), end)
+                windows.append((cur.strftime("%Y-%m-%d"), win_end.strftime("%Y-%m-%d")))
+                cur = win_end + timedelta(days=1)
+        else:
+            windows = [(from_date, to_date)]
+
+        all_candles: list = []
         try:
-            r = requests.get(url, headers=self._headers(), timeout=20)
-            d = r.json()
-            if d.get("status") == "success":
-                return {"ok": True, "candles": d["data"]["candles"]}
-            return {"ok": False, "error": str(d)}
+            for w_from, w_to in windows:
+                url = f"{BASE}/historical-candle/{k}/{upstox_interval}/{w_to}/{w_from}"
+                r = requests.get(url, headers=self._headers(), timeout=30)
+                d = r.json()
+                if d.get("status") != "success":
+                    # Skip empty windows (e.g. before listing date) but fail hard otherwise.
+                    msg = str(d.get("errors", d))
+                    if "Invalid date range" in msg or "No data" in msg:
+                        continue
+                    return {"ok": False, "error": str(d)}
+                all_candles.extend(d["data"]["candles"])
+            # Upstox returns newest-first; merge windows then sort oldest-first by timestamp.
+            all_candles.sort(key=lambda c: c[0])
+            return {"ok": True, "candles": all_candles}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
