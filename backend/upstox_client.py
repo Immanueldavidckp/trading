@@ -44,9 +44,9 @@ INST_FILE  = os.path.join(os.path.dirname(__file__), "local_data", "upstox_instr
 _NATIVE = {
     "1m":  "1minute",
     "30m": "30minute",
-    "1d":  "1day",
-    "1w":  "1week",
-    "1mo": "1month",
+    "1d":  "day",
+    "1w":  "week",
+    "1mo": "month",
 }
 
 # Derived intervals — fetched as 1m candles then aggregated
