@@ -1046,6 +1046,28 @@ def upstox_candles(tsym: str, interval: str = "1d", limit: int = 500,
     return resp
 
 
+@app.get("/api/smc/multi")
+def smc_multi(tsym: str, intervals: str = "1m,15m,1h,4h", limit: int = 600,
+              swing: int = 2):
+    """Run SMC on multiple timeframes — auto-fetches any missing intervals.
+    Used so a 1m chart can overlay HTF (15m/1h/4h) order blocks and FVGs.
+    Returns {tsym, by_tf: {interval: <analyze result>, ...}}."""
+    from upstox_client import UpstoxClient as _UC
+    import smc_engine
+
+    out = {}
+    sw = max(1, min(int(swing), 5))
+    for iv in [x.strip() for x in intervals.split(",") if x.strip()]:
+        rows = _UC.query(tsym=tsym, interval=iv, limit=limit)
+        if not rows:
+            _upstox().fetch_candles(tsym=tsym, interval=iv)
+            rows = _UC.query(tsym=tsym, interval=iv, limit=limit)
+        candles = [{"t": r["ts"], "o": r["o"], "h": r["h"], "l": r["l"],
+                    "c": r["c"], "v": r["v"]} for r in rows]
+        out[iv] = smc_engine.analyze(candles, swing_lookback=sw)
+    return {"tsym": tsym.upper(), "by_tf": out}
+
+
 @app.get("/api/smc")
 def smc_analyze(tsym: str, interval: str = "15m", limit: int = 500, auto: int = 1,
                 swing: int = 2):

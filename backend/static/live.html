@@ -214,6 +214,12 @@
         <button class="ind-chip" data-smc="sweeps">Liquidity</button>
         <button class="ind-chip" data-smc="range">Prem/Disc·OTE</button>
         <span class="ind-sep"></span>
+        <span class="ind-label">MTF:</span>
+        <button class="ind-chip on" data-mtf="1m">1m</button>
+        <button class="ind-chip on" data-mtf="15m">15m</button>
+        <button class="ind-chip on" data-mtf="1h">1h</button>
+        <button class="ind-chip on" data-mtf="4h">4h</button>
+        <span class="ind-sep"></span>
         <button class="ind-chip ctrl" onclick="resetZoom()">⤢ Reset zoom</button>
         <button class="ind-chip ctrl" id="logBtn" onclick="toggleLogScale()">Log scale: off</button>
         <span class="ind-hint">scroll = zoom time · shift+scroll = zoom price · drag chart = pan · drag bottom axis = stretch time · drag right axis = stretch price · dbl-click right axis = auto-fit</span>
@@ -407,7 +413,9 @@ const UP='#00d68f', DN='#ff5677';
 // indicator + pane toggles
 const IND={ema9:true,ema21:true,sma20:true,sma50:false,bb:false,vwap:false,vol:true,rsi:true,macd:true};
 const SMC={structure:true,fvg:true,ob:true,sweeps:false,range:false};
-let smc=null;              // last /api/smc result for the active symbol+interval
+const MTF={'1m':true,'15m':true,'1h':true,'4h':true};   // which TFs to overlay
+let smc=null;              // single-TF result for the active interval (structure/sweeps/range)
+let smcMulti={};           // {tf: analyze-result} for all enabled MTF layers
 const seenSignals=new Set(); // de-dupe alert signal ids
 let logScale=false;
 let lastZoom={start:0,end:100};    // remember user's zoom window across data refreshes
@@ -549,49 +557,65 @@ chart.setOption(buildChartOption());
 chart.on('dataZoom',()=>{ const dz=chart.getOption().dataZoom[0]; if(dz){lastZoom={start:dz.start,end:dz.end};} });
 window.addEventListener('resize',()=>chart.resize());
 
-/* ---------- broker-style axis drag scaling ------------------------------- */
-/* Drag horizontally over the bottom time-axis strip → stretch/compress time */
-/* Drag vertically over the right-side price-axis strip → stretch/compress price */
+/* ---------- broker-style axis-drag scaling ------------------------------- */
+/* Drag the RIGHT price-axis labels vertically → stretch/compress price.
+   Drag the BOTTOM time-axis labels horizontally → stretch/compress time.
+   The hit zones avoid the dataZoom slider that lives in the bottom ~28px. */
 (function attachAxisDrag(){
-  const el = document.getElementById('proChart');
-  let mode=null, startX=0, startY=0, startSpan=0, startMin=null, startMax=null, manualY=false;
-  const STRIP=44;  // px hit-strip on the right (price) and bottom (time)
+  const el=document.getElementById('proChart');
+  let mode=null, sx=0, sy=0, startSpan=0, startMin=null, startMax=null, manualY=false;
+
+  // Right strip = the 56px column where ECharts paints the price labels
+  // (matches the `right:58` in our grid config).
+  // Bottom strip = ~28px tall, positioned above the 26-32px dataZoom slider.
   function hit(e){
     const r=el.getBoundingClientRect();
     const x=e.clientX-r.left, y=e.clientY-r.top;
-    if(x>r.width-STRIP) return 'price';
-    if(y>r.height-STRIP) return 'time';
+    if(x>=r.width-58 && y<r.height-32) return 'price';   // never the slider
+    if(y>=r.height-60 && y<=r.height-32 && x<r.width-58) return 'time';
     return null;
   }
+  function setCursor(c){ el.style.cursor=c||''; }
+
+  // Hover feedback — change cursor only when over a drag strip.
+  el.addEventListener('mousemove',(e)=>{
+    if(mode) return;
+    const h=hit(e);
+    setCursor(h==='price'?'ns-resize':h==='time'?'ew-resize':'');
+  });
+  el.addEventListener('mouseleave',()=>{ if(!mode) setCursor(''); });
+
   el.addEventListener('mousedown',(e)=>{
     const h=hit(e); if(!h) return;
-    mode=h; startX=e.clientX; startY=e.clientY; el.style.cursor=h==='price'?'ns-resize':'ew-resize';
-    if(mode==='time'){ startSpan=Math.max(1, lastZoom.end - lastZoom.start); }
+    mode=h; sx=e.clientX; sy=e.clientY;
+    setCursor(h==='price'?'ns-resize':'ew-resize');
+    if(mode==='time'){ startSpan=Math.max(0.5, lastZoom.end-lastZoom.start); }
     if(mode==='price'){
-      // capture current visible price range so the drag scales relative to it
       const ext=chart.getModel().getComponent('yAxis',0).axis.scale.getExtent();
       startMin=ext[0]; startMax=ext[1];
     }
     e.preventDefault();
   });
+
   window.addEventListener('mousemove',(e)=>{
     if(!mode) return;
     if(mode==='time'){
-      // drag right (positive dx) → narrow window (zoom in); left → widen
-      const dx=e.clientX-startX;
-      const factor=Math.exp(-dx/220);            // smooth exponential feel
-      let newSpan=Math.min(100, Math.max(1, startSpan*factor));
-      const center=(lastZoom.start+lastZoom.end)/2;
-      let s=Math.max(0, center-newSpan/2), en=Math.min(100, center+newSpan/2);
-      if(en-s<1){ en=s+1; }
+      // drag RIGHT = compress (zoom in), drag LEFT = expand (zoom out).
+      // Linear-ish; 200 px = 2× change.
+      const dx=e.clientX-sx;
+      const factor=Math.max(0.05, Math.min(20, 1 - dx/200));
+      let span=Math.min(100, Math.max(0.5, startSpan*factor));
+      const c=(lastZoom.start+lastZoom.end)/2;
+      let s=Math.max(0, c-span/2), en=Math.min(100, c+span/2);
+      if(en-s<0.5) en=s+0.5;
       lastZoom={start:s,end:en};
       chart.dispatchAction({type:'dataZoom',start:s,end:en});
     } else if(mode==='price'){
-      // drag down (positive dy) → expand price range (zoom out); up → compress
-      const dy=e.clientY-startY;
-      const factor=Math.exp(dy/180);
+      // drag DOWN = expand price range (zoom out), drag UP = compress.
+      const dy=e.clientY-sy;
+      const factor=Math.max(0.05, Math.min(20, 1 + dy/200));
       const mid=(startMin+startMax)/2;
-      const half=(startMax-startMin)/2*factor;
+      const half=Math.max(1e-6,(startMax-startMin)/2*factor);
       manualY=true;
       chart.setOption({yAxis:[{gridIndex:0,scale:true,position:'right',
         min:mid-half,max:mid+half,
@@ -599,11 +623,12 @@ window.addEventListener('resize',()=>chart.resize());
         splitLine:{lineStyle:{color:'rgba(35,42,56,0.5)'}},axisLine:{show:false}}]});
     }
   });
-  window.addEventListener('mouseup',()=>{ mode=null; el.style.cursor=''; });
-  // Double-click the price strip to release the manual scale (back to auto-fit).
+  window.addEventListener('mouseup',()=>{ if(!mode) return; mode=null; setCursor(''); });
+
+  // Double-click price strip → release manual price scale (back to auto-fit).
   el.addEventListener('dblclick',(e)=>{
-    if(hit(e)!=='price' || !manualY) return;
-    manualY=false; rebuildChart();
+    if(hit(e)==='price' && manualY){ manualY=false; rebuildChart(); }
+    else if(hit(e)==='time'){ resetZoom(); }
   });
 })();
 
@@ -622,30 +647,119 @@ document.getElementById('indBar').addEventListener('click',(e)=>{
   const k=c.dataset.smc; SMC[k]=!SMC[k]; c.classList.toggle('on',SMC[k]);
   renderChart(true);
 });
+document.getElementById('indBar').addEventListener('click',(e)=>{
+  const c=e.target.closest('.ind-chip[data-mtf]'); if(!c)return;
+  const k=c.dataset.mtf; MTF[k]=!MTF[k]; c.classList.toggle('on',MTF[k]);
+  renderChart(true);
+});
 
-/* ---------- SMC overlays (boxes / lines / pins on the price grid) ---------- */
+/* ---------- SMC overlays ---------------------------------------------------
+   Draws FVG and Order Block zones from ALL enabled timeframes (1m/15m/1h/4h)
+   on the current chart. Structure lines, sweeps and Premium/Discount come from
+   the active timeframe only (per-TF context, would be noise from many TFs). */
+
+/* Per-TF visual style. Higher timeframes are visually heavier so the eye
+   weights them more — a 4h order block trumps a 1m one for HTF bias. */
+const TF_STYLE={
+  '1m': {fillBull:'rgba(94,142,255,0.07)', fillBear:'rgba(255,143,171,0.07)',
+         obBull :'rgba(94,142,255,0.08)',  obBear :'rgba(255,184,77,0.08)',
+         border:0,    label:'1m',  weight:0},
+  '5m': {fillBull:'rgba(94,142,255,0.10)', fillBear:'rgba(255,143,171,0.10)',
+         obBull :'rgba(94,142,255,0.12)',  obBear :'rgba(255,184,77,0.12)',
+         border:0,    label:'5m',  weight:1},
+  '15m':{fillBull:'rgba(0,214,143,0.13)',  fillBear:'rgba(255,86,119,0.13)',
+         obBull :'rgba(0,214,143,0.14)',   obBear :'rgba(255,86,119,0.14)',
+         border:1,    label:'15m', weight:2, borderBull:'#00d68f', borderBear:'#ff5677'},
+  '1h': {fillBull:'rgba(255,184,77,0.18)', fillBear:'rgba(179,114,255,0.18)',
+         obBull :'rgba(255,184,77,0.20)',  obBear :'rgba(179,114,255,0.20)',
+         border:1.4,  label:'1h',  weight:3, borderBull:'#ffb84d', borderBear:'#b372ff'},
+  '4h': {fillBull:'rgba(0,214,143,0.22)',  fillBear:'rgba(255,86,119,0.22)',
+         obBull :'rgba(0,214,143,0.24)',   obBear :'rgba(255,86,119,0.24)',
+         border:2,    label:'4h',  weight:4, borderBull:'#00d68f', borderBear:'#ff5677'},
+  '1d': {fillBull:'rgba(94,142,255,0.26)', fillBear:'rgba(255,86,119,0.26)',
+         obBull :'rgba(94,142,255,0.28)',  obBear :'rgba(255,86,119,0.28)',
+         border:2.4,  label:'1d',  weight:5, borderBull:'#5e8eff', borderBear:'#ff5677'},
+};
+
 function buildSMCOverlays(xs){
   const areas=[], lines=[], points=[];
-  if(!smc || !smc.ok || !xs.length) return {areas,lines,points};
+  if(!xs.length) return {areas,lines,points};
   const rightT=xs[xs.length-1], leftT=xs[0];
-  const catOf=t=>String(t);
+  const leftN=Number(leftT), rightN=Number(rightT);
+  const xsSet=new Set(xs);
+  const xsNums=xs.map(Number);
 
-  if(SMC.fvg && smc.fvg){
-    smc.fvg.filter(g=>!g.mitigated).slice(-40).forEach(g=>{
-      const col=g.kind==='bull'?'rgba(0,214,143,0.13)':'rgba(255,86,119,0.13)';
-      areas.push([{xAxis:catOf(g.t_mid),yAxis:g.top,itemStyle:{color:col}},
-                  {xAxis:rightT,yAxis:g.bottom}]);
+  // Map any timestamp to a category that EXISTS in the chart's x-axis.
+  // ECharts category axis requires exact values; otherwise the marker is
+  // dropped silently. We clamp to the visible window and snap to the
+  // nearest 1m candle on either side.
+  function pickT(t){
+    if(t<=leftN) return leftT;
+    if(t>=rightN) return rightT;
+    const s=String(t);
+    if(xsSet.has(s)) return s;
+    // binary search for nearest >= t
+    let lo=0, hi=xsNums.length-1;
+    while(lo<hi){ const m=(lo+hi)>>1; if(xsNums[m]<t) lo=m+1; else hi=m; }
+    return xs[lo];
+  }
+
+  // Collect MTF layers, sorted weakest→strongest so heavy HTF zones paint on top.
+  const layers=[];
+  const seenTf=new Set();
+  if(smc && smc.ok){ layers.push([interval, smc]); seenTf.add(interval); }
+  Object.keys(smcMulti||{}).forEach(tf=>{
+    if(!MTF[tf] || seenTf.has(tf)) return;
+    const r=smcMulti[tf]; if(r && r.ok){ layers.push([tf,r]); seenTf.add(tf); }
+  });
+  layers.sort((a,b)=>(TF_STYLE[a[0]]?.weight||0)-(TF_STYLE[b[0]]?.weight||0));
+
+  // ── FVG boxes (per-TF) ──
+  if(SMC.fvg){
+    layers.forEach(([tf,r])=>{
+      if(!r.fvg) return;
+      const st=TF_STYLE[tf]||TF_STYLE['1m'];
+      r.fvg.filter(g=>!g.mitigated).forEach(g=>{
+        const col=g.kind==='bull'?st.fillBull:st.fillBear;
+        const item={color:col};
+        if(st.border>0){
+          item.borderColor=g.kind==='bull'?st.borderBull:st.borderBear;
+          item.borderWidth=st.border;
+        }
+        areas.push([
+          {xAxis:pickT(g.t_mid),yAxis:g.top,itemStyle:item,
+           name:`${tf} FVG`,label:{show:st.border>0,formatter:`FVG ${st.label}`,
+             position:'insideTopLeft',fontSize:9,color:'#cdd6e6',distance:2}},
+          {xAxis:rightT,yAxis:g.bottom}
+        ]);
+      });
     });
   }
-  if(SMC.ob && smc.order_blocks){
-    smc.order_blocks.filter(o=>!o.mitigated).slice(-30).forEach(o=>{
-      const col=o.kind==='bull'?'rgba(94,142,255,0.16)':'rgba(255,184,77,0.16)';
-      areas.push([{xAxis:catOf(o.t),yAxis:o.top,itemStyle:{color:col,
-                   borderColor:o.kind==='bull'?'#5e8eff':'#ffb84d',borderWidth:1}},
-                  {xAxis:rightT,yAxis:o.bottom}]);
+
+  // ── Order Blocks (per-TF) ──
+  if(SMC.ob){
+    layers.forEach(([tf,r])=>{
+      if(!r.order_blocks) return;
+      const st=TF_STYLE[tf]||TF_STYLE['1m'];
+      r.order_blocks.filter(o=>!o.mitigated).forEach(o=>{
+        const col=o.kind==='bull'?st.obBull:st.obBear;
+        const item={color:col};
+        if(st.border>0){
+          item.borderColor=o.kind==='bull'?st.borderBull:st.borderBear;
+          item.borderWidth=st.border;
+        }
+        areas.push([
+          {xAxis:pickT(o.t),yAxis:o.top,itemStyle:item,
+           name:`${tf} OB`,label:{show:st.border>0,formatter:`OB ${st.label}`,
+             position:'insideBottomLeft',fontSize:9,color:'#cdd6e6',distance:2}},
+          {xAxis:rightT,yAxis:o.bottom}
+        ]);
+      });
     });
   }
-  if(SMC.range && smc.range){
+
+  // ── Structure / Sweeps / Range — active TF only (HTF would be noise) ──
+  if(SMC.range && smc && smc.range){
     const r=smc.range;
     areas.push([{xAxis:leftT,yAxis:r.high,itemStyle:{color:'rgba(255,86,119,0.05)'}},{xAxis:rightT,yAxis:r.eq}]);
     areas.push([{xAxis:leftT,yAxis:r.eq,itemStyle:{color:'rgba(0,214,143,0.05)'}},{xAxis:rightT,yAxis:r.low}]);
@@ -653,18 +767,18 @@ function buildSMCOverlays(xs){
     lines.push({yAxis:r.eq,lineStyle:{color:'#9ba6b8',type:'dotted',width:1},
                 label:{show:true,formatter:'EQ',position:'insideEndTop',color:'#9ba6b8',fontSize:9}});
   }
-  if(SMC.structure && smc.structure){
-    smc.structure.slice(-24).forEach(ev=>{
+  if(SMC.structure && smc && smc.structure){
+    smc.structure.slice(-30).forEach(ev=>{
       const col=ev.dir==='bull'?'#00d68f':'#ff5677';
-      lines.push([{coord:[catOf(ev.broke_t),ev.level],lineStyle:{color:col,type:'solid',width:1.2},
+      lines.push([{coord:[pickT(ev.broke_t),ev.level],lineStyle:{color:col,type:'solid',width:1.2},
                    label:{show:true,formatter:ev.kind,position:'start',color:col,fontSize:9,fontWeight:700}},
-                  {coord:[catOf(ev.t),ev.level]}]);
+                  {coord:[pickT(ev.t),ev.level]}]);
     });
   }
-  if(SMC.sweeps && smc.sweeps){
-    smc.sweeps.slice(-12).forEach(s=>{
+  if(SMC.sweeps && smc && smc.sweeps){
+    smc.sweeps.slice(-15).forEach(s=>{
       const bsl=s.kind==='BSL';
-      points.push({coord:[catOf(s.t),s.price],value:s.kind,
+      points.push({coord:[pickT(s.t),s.price],value:s.kind,
         itemStyle:{color:bsl?'#ff5677':'#00d68f'},
         label:{show:true,formatter:s.kind,fontSize:8,color:'#fff'}});
     });
@@ -672,13 +786,23 @@ function buildSMCOverlays(xs){
   return {areas,lines,points};
 }
 
-/* ---------- load SMC analysis + fire alerts ---------- */
+/* ---------- load SMC analysis (single TF + multi-TF) + alerts -------------- */
 async function loadSMC(){
-  if(!active){smc=null;return;}
+  if(!active){smc=null;smcMulti={};return;}
+  // 1) single-TF (current interval) — drives structure/sweeps/range + alerts
   try{
-    const r=await fetch(`/api/smc?tsym=${encodeURIComponent(active)}&interval=${interval}&limit=400`);
+    const r=await fetch(`/api/smc?tsym=${encodeURIComponent(active)}&interval=${interval}&limit=500`);
     smc=await r.json();
-  }catch(e){ smc=null; return; }
+  }catch(e){ smc=null; }
+  // 2) multi-TF zones (1m/15m/1h/4h) so HTF OB/FVG overlay any active chart
+  try{
+    const tfs=Object.keys(MTF).filter(k=>MTF[k]).join(',');
+    if(tfs){
+      const r2=await fetch(`/api/smc/multi?tsym=${encodeURIComponent(active)}&intervals=${tfs}&limit=600`);
+      const j2=await r2.json();
+      smcMulti=j2.by_tf||{};
+    } else smcMulti={};
+  }catch(e){ smcMulti={}; }
   updateSMCBadge();
   fireSMCAlerts();
   renderChart(true);
