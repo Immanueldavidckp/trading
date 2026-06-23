@@ -496,8 +496,11 @@ function buildChartOption(){
      borderColor:'#2f3848',handleStyle:{color:'#5e8eff'},
      dataBackground:{lineStyle:{color:'#2f3848'},areaStyle:{color:'rgba(94,142,255,0.08)'}},
      textStyle:{color:'#5e6776',fontSize:9},labelFormatter:()=>'' },
-    // SHIFT+wheel over the price pane scales the price axis (broker-style)
-    {type:'inside',yAxisIndex:0,filterMode:'none',zoomOnMouseWheel:'shift',moveOnMouseMove:false,moveOnMouseWheel:false}
+    // Price-axis: SHIFT+wheel zooms; left-drag inside the chart pans
+    // vertically (combined with the x-axis dataZoom above this gives full
+    // 2D pan — left-click & drag to move the chart anywhere).
+    {type:'inside',yAxisIndex:0,filterMode:'none',zoomOnMouseWheel:'shift',
+     moveOnMouseMove:true,moveOnMouseWheel:false,preventDefaultMouseMove:true}
   ];
 
   const series=[
