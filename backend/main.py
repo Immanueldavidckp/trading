@@ -1013,14 +1013,14 @@ def upstox_fetch(req: UpstoxFetchModel):
 
 @app.get("/api/upstox/candles")
 def upstox_candles(tsym: str, interval: str = "1d", limit: int = 500,
-                   auto: int = 1, refresh: int = 0):
+                   auto: int = 1, refresh: int = 0, today: int = 0):
     """
     Read stored candles for a symbol/interval. Oldest-first.
 
-    auto=1   : if nothing is stored yet, fetch from Upstox automatically
-               (so any watchlist symbol works on first view).
-    refresh=1: always re-fetch the latest from Upstox before returning
-               (picks up today's new candles).
+    auto=1   : if nothing is stored yet, fetch full history from Upstox.
+    refresh=1: re-fetch full history + today before returning.
+    today=1  : cheap — fetch only today's intraday candles and upsert them
+               (used for live polling so the forming candle updates).
 
     Each candle is {t, o, h, l, c, v, oi} where t is a millisecond epoch —
     matching the shape the chart already renders.
@@ -1031,6 +1031,9 @@ def upstox_candles(tsym: str, interval: str = "1d", limit: int = 500,
     fetched = None
     if refresh or (auto and not rows):
         fetched = _upstox().fetch_candles(tsym=tsym, interval=interval)
+        rows = _UC.query(tsym=tsym, interval=interval, limit=limit)
+    elif today:
+        fetched = _upstox().fetch_candles(tsym=tsym, interval=interval, today_only=True)
         rows = _UC.query(tsym=tsym, interval=interval, limit=limit)
 
     # query() returns {ts(ms), o, h, l, c, v, oi}; the chart wants `t`.

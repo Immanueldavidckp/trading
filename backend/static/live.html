@@ -748,7 +748,7 @@ async function loadChart(refresh){
   ro.innerHTML=`<span class="dim">Loading ${active} ${interval} from Upstox…</span>`;
   let fetchErr=null;
   try{
-    const r=await fetch(`/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${interval}&limit=${limit}&auto=1${refresh?'&refresh=1':''}`);
+    const r=await fetch(`/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${interval}&limit=${limit}&auto=1&today=1${refresh?'&refresh=1':''}`);
     const j=await r.json();
     candles=(j.candles||[]).map(c=>({t:c.t,o:c.o,h:c.h,l:c.l,c:c.c,v:c.v}));
     fetchErr=j.fetch_error||null;
@@ -770,6 +770,23 @@ function refreshUpstox(){
   const b=document.getElementById('liveModeBtn');
   const old=b.textContent; b.textContent='↻ fetching…';
   loadChart(true).finally(()=>{ b.textContent=old; });
+}
+
+/* ---------- live poll: pull today's forming candle, keep zoom ---------- */
+let polling=false;
+async function pollLive(){
+  if(!active||paused||polling)return;
+  polling=true;
+  try{
+    const limit=document.getElementById('backlogSel').value;
+    const r=await fetch(`/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${interval}&limit=${limit}&auto=0&today=1`);
+    const j=await r.json();
+    if(j.candles&&j.candles.length){
+      candles=j.candles.map(c=>({t:c.t,o:c.o,h:c.h,l:c.l,c:c.c,v:c.v}));
+      renderChart();   // no force → preserves the user's zoom/pan
+    }
+  }catch(e){}
+  finally{ polling=false; }
 }
 
 /* ---------- merge live tick into candles ---------- */
@@ -1057,7 +1074,8 @@ setAction('B');
 // reflect existing notification permission on the button
 (function(){const btn=document.getElementById('notifBtn');
   if(btn&&'Notification'in window&&Notification.permission==='granted'){btn.textContent='🔔 popups on';btn.classList.add('on');}})();
-// re-run SMC + alerts periodically so zone touches fire while you watch
+// live: pull today's forming candle every 20s; re-run SMC + alerts every 60s
+setInterval(pollLive, 20000);
 setInterval(()=>{ if(active) loadSMC(); }, 60000);
 </script>
 </body>

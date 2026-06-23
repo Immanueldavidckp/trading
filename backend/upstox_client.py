@@ -246,6 +246,7 @@ class UpstoxClient:
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
         store: bool = True,
+        today_only: bool = False,
     ) -> dict:
         """
         Fetch OHLCV candles from Upstox and (optionally) store in SQLite.
@@ -275,17 +276,34 @@ class UpstoxClient:
             else:
                 from_date = (datetime.now() - timedelta(days=100)).strftime("%Y-%m-%d")
 
-        # Derived intervals need 1m raw data first
+        # Historical candles stop at the previous trading day; today's forming
+        # candles come from the separate intraday endpoint. We fetch both and
+        # merge so the chart shows continuous data through the current minute.
+        # today_only=True skips the (heavy) history fetch — used for live polling.
         if interval in _DERIVED:
-            raw = self._fetch_raw(key, "1minute", from_date, to_dt)
-            if not raw["ok"]:
-                return raw
-            candles = self._aggregate(raw["candles"], _DERIVED[interval])
+            base = []
+            if not today_only:
+                raw = self._fetch_raw(key, "1minute", from_date, to_dt)
+                if not raw["ok"]:
+                    return raw
+                base = raw["candles"]
+            base = self._dedupe(base + self._fetch_intraday(key, "1minute"))
+            candles = self._aggregate(base, _DERIVED[interval])
         elif interval in _NATIVE:
-            raw = self._fetch_raw(key, _NATIVE[interval], from_date, to_dt)
-            if not raw["ok"]:
-                return raw
-            candles = raw["candles"]
+            ui = _NATIVE[interval]
+            candles = []
+            if not today_only:
+                raw = self._fetch_raw(key, ui, from_date, to_dt)
+                if not raw["ok"]:
+                    return raw
+                candles = raw["candles"]
+            if ui in ("1minute", "30minute"):
+                candles = self._dedupe(candles + self._fetch_intraday(key, ui))
+            elif ui == "day":
+                # synthesise today's still-forming daily candle from 1m intraday
+                today1m = self._fetch_intraday(key, "1minute")
+                if today1m:
+                    candles = self._dedupe(candles + [self._daily_from_1m(today1m)])
         else:
             return {"ok": False, "error": f"Unknown interval '{interval}'. Choose from: {ALL_INTERVALS}"}
 
@@ -345,6 +363,45 @@ class UpstoxClient:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def _fetch_intraday(self, instrument_key: str, upstox_interval: str) -> list:
+        """Today's (still-forming) candles. Upstox intraday supports only
+        1minute and 30minute; other intervals return []. Never raises."""
+        if upstox_interval not in ("1minute", "30minute"):
+            return []
+        k = urllib.parse.quote(instrument_key, safe="")
+        url = f"{BASE}/historical-candle/intraday/{k}/{upstox_interval}"
+        try:
+            r = requests.get(url, headers=self._headers(), timeout=20)
+            d = r.json()
+            if d.get("status") == "success":
+                cs = list(d["data"]["candles"])
+                cs.sort(key=lambda c: c[0])
+                return cs
+        except Exception:
+            pass
+        return []
+
+    @staticmethod
+    def _dedupe(candles: list) -> list:
+        """Merge candle lists, keyed by timestamp string. Later entries win
+        (intraday is appended after history, so today's data overrides), and
+        the result is sorted oldest-first."""
+        by: dict = {}
+        for c in candles:
+            by[c[0]] = c
+        return [by[t] for t in sorted(by)]
+
+    @staticmethod
+    def _daily_from_1m(cs_1m: list) -> list:
+        """Build today's single daily candle from today's 1m intraday candles."""
+        o = cs_1m[0][1]
+        h = max(c[2] for c in cs_1m)
+        l = min(c[3] for c in cs_1m)
+        c_ = cs_1m[-1][4]
+        v = sum((c[5] or 0) for c in cs_1m)
+        ts = cs_1m[0][0][:10] + "T00:00:00+05:30"   # match historical daily ts
+        return [ts, o, h, l, c_, v, 0]
+
     def _aggregate(self, candles_1m: list, minutes: int) -> list:
         """
         Aggregate raw 1-minute Upstox candles into N-minute candles.
@@ -387,15 +444,21 @@ class UpstoxClient:
         PH  = _db.PLACE
         if _db.USE_MYSQL:
             sql = (
-                f"INSERT IGNORE INTO candles "
+                f"INSERT INTO candles "
                 f"(tsym,instrument_key,`interval`,ts,open,high,low,close,volume,oi,fetched_at) "
-                f"VALUES ({','.join([PH]*11)})"
+                f"VALUES ({','.join([PH]*11)}) "
+                f"ON DUPLICATE KEY UPDATE open=VALUES(open),high=VALUES(high),"
+                f"low=VALUES(low),close=VALUES(close),volume=VALUES(volume),"
+                f"fetched_at=VALUES(fetched_at)"
             )
         else:
             sql = (
-                f"INSERT OR IGNORE INTO candles "
+                f"INSERT INTO candles "
                 f"(tsym,instrument_key,interval,ts,open,high,low,close,volume,oi,fetched_at) "
-                f"VALUES ({','.join([PH]*11)})"
+                f"VALUES ({','.join([PH]*11)}) "
+                f"ON CONFLICT(tsym,interval,ts) DO UPDATE SET open=excluded.open,"
+                f"high=excluded.high,low=excluded.low,close=excluded.close,"
+                f"volume=excluded.volume,fetched_at=excluded.fetched_at"
             )
 
         conn = _db.connect()
