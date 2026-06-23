@@ -523,6 +523,15 @@ function buildChartOption(){
      areaStyle:{color:'rgba(94,142,255,0.05)'},data:[]},
     {name:'VWAP',type:'line',xAxisIndex:0,yAxisIndex:0,showSymbol:false,
      lineStyle:{color:'#ffd24d',width:1.4},itemStyle:{color:'#ffd24d'},data:[]},
+    // Dedicated scatter series for HH/HL/LH/LL swing labels. Using a scatter
+    // series (rather than markPoint) guarantees rendering: ECharts treats it
+    // as a first-class layer with reliable label positioning and z-order.
+    {name:'Swings',type:'scatter',xAxisIndex:0,yAxisIndex:0,
+     symbol:'diamond',symbolSize:9,z:12,silent:false,
+     itemStyle:{borderColor:'#0e1320',borderWidth:1},
+     label:{show:true,fontSize:10,fontWeight:700,
+       textBorderColor:'#0e1320',textBorderWidth:3},
+     data:[]},
   ];
   if(IND.vol) series.push({name:'Volume',type:'bar',xAxisIndex:paneGridIndex.vol,yAxisIndex:yIdx.vol,data:[]});
   if(IND.rsi) series.push({name:'RSI 14',type:'line',xAxisIndex:paneGridIndex.rsi,yAxisIndex:yIdx.rsi,showSymbol:false,
@@ -713,8 +722,8 @@ const TF_STYLE={
 };
 
 function buildSMCOverlays(xs){
-  const areas=[], lines=[], points=[];
-  if(!xs.length) return {areas,lines,points};
+  const areas=[], lines=[], points=[], swings=[];
+  if(!xs.length) return {areas,lines,points,swings};
   const rightT=xs[xs.length-1], leftT=xs[0];
   const leftN=Number(leftT), rightN=Number(rightT);
   const xsSet=new Set(xs);
@@ -791,23 +800,26 @@ function buildSMCOverlays(xs){
     });
   }
 
-  // ── Swing markers with HH/HL/LH/LL labels (active TF only) ──
+  // ── Swing markers (active TF only) — go into the dedicated Swings series ──
   if(SMC.swings && smc && smc.swings){
-    smc.swings.slice(-60).forEach(s=>{
+    smc.swings.forEach(s=>{
       const isHi=s.kind==='H';
       const lbl=s.label||s.kind;
-      // colour by structural meaning: HH/HL = bullish-stamped, LH/LL = bearish-stamped
+      // green = bullish structure (HH/HL), red = bearish (LH/LL)
       const col=(lbl==='HH'||lbl==='HL')?'#00d68f'
               :(lbl==='LH'||lbl==='LL')?'#ff5677'
               :'#9ba6b8';
-      points.push({coord:[pickT(s.t),s.price],value:lbl,
-        symbol:isHi?'triangle':'triangle',
-        symbolRotate:isHi?180:0,           // ▽ on highs, △ on lows
-        symbolSize:9,
-        itemStyle:{color:col,borderColor:'#0e1320',borderWidth:1},
-        label:{show:true,formatter:lbl,fontSize:9,color:col,fontWeight:700,
-          position:isHi?'top':'bottom',distance:4,
-          textBorderColor:'#0e1320',textBorderWidth:2}});
+      swings.push({
+        value:[pickT(s.t), s.price],
+        name:lbl,
+        symbol:'diamond',
+        symbolSize:(lbl.length===2 ? 11 : 8),
+        itemStyle:{color:col, borderColor:'#0e1320', borderWidth:1},
+        label:{show:true, formatter:lbl, color:col,
+          position:(isHi?'top':'bottom'), distance:6,
+          fontSize:10, fontWeight:700,
+          textBorderColor:'#0e1320', textBorderWidth:3}
+      });
     });
   }
 
@@ -836,7 +848,7 @@ function buildSMCOverlays(xs){
         label:{show:true,formatter:s.kind,fontSize:8,color:'#fff'}});
     });
   }
-  return {areas,lines,points};
+  return {areas,lines,points,swings};
 }
 
 /* ---------- load SMC analysis (single TF + multi-TF) + alerts -------------- */
@@ -944,6 +956,8 @@ function renderChart(force){
       {name:'SMA 20',data:sma20},{name:'SMA 50',data:sma50},
       {name:'BB up',data:bb.up},{name:'BB low',data:bb.lo},
       {name:'VWAP',data:vwap},
+      // Swings scatter — order must match buildChartOption so ECharts maps it.
+      {name:'Swings',data:ov.swings||[]},
     ];
     if(IND.vol) ser.push({name:'Volume',data:vols});
     if(IND.rsi) ser.push({name:'RSI 14',data:rsi});
