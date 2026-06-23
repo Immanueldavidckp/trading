@@ -386,7 +386,8 @@ const UP='#00d68f', DN='#ff5677';
 // indicator + pane toggles
 const IND={ema9:true,ema21:true,sma20:true,sma50:false,bb:false,vwap:false,vol:true,rsi:true,macd:true};
 let logScale=false;
-let lastZoom={start:60,end:100};   // remember user's zoom window across data refreshes
+let lastZoom={start:0,end:100};    // remember user's zoom window across data refreshes
+let zoomReset=false;               // when true, next render snaps zoom to full range
 
 function bollinger(closes,n=20,k=2){
   const mid=smaArr(closes,n), up=new Array(closes.length).fill(null), lo=new Array(closes.length).fill(null);
@@ -576,6 +577,8 @@ function renderChart(force){
     const nGrid=chart.getOption().grid.length;
     const axisData=[]; for(let i=0;i<nGrid;i++)axisData.push({data:xs});
     chart.setOption({xAxis:axisData,series:ser});
+    if(zoomReset){ zoomReset=false; lastZoom={start:0,end:100};
+      chart.dispatchAction({type:'dataZoom',start:0,end:100}); }
     document.getElementById('ptCount').textContent=candles.length.toLocaleString();
     updateReadout(candles.length-1);
   }, force?0:280);
@@ -619,6 +622,7 @@ async function loadChart(refresh){
     candles=(j.candles||[]).map(c=>({t:c.t,o:c.o,h:c.h,l:c.l,c:c.c,v:c.v}));
     fetchErr=j.fetch_error||null;
   }catch(e){ fetchErr='network error'; }
+  zoomReset=true;            // show the full fetched range on a fresh load
   renderChart(true);
   if(!candles.length){
     ro.innerHTML = fetchErr
