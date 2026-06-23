@@ -1043,6 +1043,32 @@ def upstox_candles(tsym: str, interval: str = "1d", limit: int = 500,
     return resp
 
 
+@app.get("/api/smc")
+def smc_analyze(tsym: str, interval: str = "15m", limit: int = 500, auto: int = 1,
+                swing: int = 2):
+    """
+    Run Smart Money Concepts analysis on a symbol/interval.
+    Auto-fetches Upstox candles if none are stored yet.
+    Returns swings, BOS/CHoCH structure, FVGs, order blocks, liquidity sweeps,
+    premium/discount range + OTE, and live alert signals.
+    """
+    from upstox_client import UpstoxClient as _UC
+    import smc_engine
+
+    rows = _UC.query(tsym=tsym, interval=interval, limit=limit)
+    if auto and not rows:
+        _upstox().fetch_candles(tsym=tsym, interval=interval)
+        rows = _UC.query(tsym=tsym, interval=interval, limit=limit)
+
+    candles = [{"t": r["ts"], "o": r["o"], "h": r["h"], "l": r["l"],
+                "c": r["c"], "v": r["v"]} for r in rows]
+    result = smc_engine.analyze(candles, swing_lookback=max(1, min(int(swing), 5)))
+    result["signals"] = smc_engine.live_signals(candles, result)
+    result["tsym"] = tsym.upper()
+    result["interval"] = interval
+    return result
+
+
 @app.get("/api/upstox/symbols")
 def upstox_symbols():
     """List all symbols and intervals currently stored in the candles table."""
