@@ -758,46 +758,68 @@ function buildSMCOverlays(xs){
   layers.sort((a,b)=>(TF_STYLE[a[0]]?.weight||0)-(TF_STYLE[b[0]]?.weight||0));
 
   // ── FVG boxes (per-TF) ──
-  // Always draw a horizontal mid-line so tiny zones (a few cents on 1m) are
-  // still visible; the box itself is the gap range with a small border so even
-  // 0.01% gaps register on the eye.
+  // Active TF: show BOTH unmitigated (live) AND mitigated (filled) zones —
+  //   unmitigated extend to the current bar with bright fill + solid border;
+  //   mitigated end at the fill candle with subdued fill + dashed border
+  //   (lower-case 'fvg' label = filled, marker for "this gap was respected").
+  // HTF layers (MTF overlays): unmitigated only — HTF mitigated would clutter.
   if(SMC.fvg){
     layers.forEach(([tf,r])=>{
       if(!r.fvg) return;
       const st=TF_STYLE[tf]||TF_STYLE['1m'];
-      r.fvg.filter(g=>!g.mitigated).forEach(g=>{
-        const col=g.kind==='bull'?st.fillBull:st.fillBear;
+      const isActive=(tf===interval);
+      const list=isActive ? r.fvg.slice() : r.fvg.filter(g=>!g.mitigated);
+      list.forEach(g=>{
         const bord=g.kind==='bull'?(st.borderBull||'#00d68f'):(st.borderBear||'#ff5677');
+        const alive=!g.mitigated;
+        const fill=alive ? (g.kind==='bull'?st.fillBull:st.fillBear)
+                         : (g.kind==='bull'?'rgba(0,214,143,0.03)':'rgba(255,86,119,0.03)');
+        const endX=alive ? rightT : pickT(g.mit_t);
         areas.push([
           {xAxis:pickT(g.t_mid),yAxis:g.top,
-           itemStyle:{color:col,borderColor:bord,borderWidth:Math.max(0.6,st.border||0.6),borderType:'solid'},
-           name:`${tf} FVG`,label:{show:true,formatter:`FVG·${st.label}`,
-             position:'insideTopLeft',fontSize:9,color:bord,fontWeight:600,distance:2}},
-          {xAxis:rightT,yAxis:g.bottom}
+           itemStyle:{color:fill,borderColor:bord,
+             borderWidth:alive?Math.max(0.6,st.border||0.6):0.4,
+             borderType:alive?'solid':'dashed',opacity:alive?1:0.7},
+           name:`${tf} FVG`,label:{show:alive,
+             formatter:alive?`FVG·${st.label}`:`fvg·${st.label}`,
+             position:'insideTopLeft',fontSize:9,color:bord,
+             fontWeight:alive?600:400,distance:2,opacity:alive?1:0.55}},
+          {xAxis:endX,yAxis:g.bottom}
         ]);
-        // dashed line at the FVG midpoint — guarantees visibility on tiny gaps
-        const mid=(g.top+g.bottom)/2;
-        lines.push({yAxis:mid,lineStyle:{color:bord,type:'dashed',width:0.6,opacity:0.5},
-          label:{show:false}});
+        // dashed midline only for ALIVE FVGs (so tiny live gaps still register)
+        if(alive){
+          const mid=(g.top+g.bottom)/2;
+          lines.push({yAxis:mid,lineStyle:{color:bord,type:'dashed',width:0.6,opacity:0.5},
+            label:{show:false}});
+        }
       });
     });
   }
 
-  // ── Order Blocks (per-TF) ──
+  // ── Order Blocks (per-TF) — same alive/filled treatment as FVG ──
   if(SMC.ob){
     layers.forEach(([tf,r])=>{
       if(!r.order_blocks) return;
       const st=TF_STYLE[tf]||TF_STYLE['1m'];
-      r.order_blocks.filter(o=>!o.mitigated).forEach(o=>{
-        const col=o.kind==='bull'?st.obBull:st.obBear;
+      const isActive=(tf===interval);
+      const list=isActive ? r.order_blocks.slice() : r.order_blocks.filter(o=>!o.mitigated);
+      list.forEach(o=>{
         const bord=o.kind==='bull'?(st.borderBull||'#5e8eff'):(st.borderBear||'#ffb84d');
-        const tag=o.from_event==='impulse'?'OB*':'OB';   // * = impulse-detected
+        const alive=!o.mitigated;
+        const fill=alive ? (o.kind==='bull'?st.obBull:st.obBear)
+                         : (o.kind==='bull'?'rgba(94,142,255,0.03)':'rgba(255,184,77,0.03)');
+        const endX=alive ? rightT : pickT(o.mit_t);
+        const tag=(o.from_event==='impulse'?'OB*':'OB');
         areas.push([
           {xAxis:pickT(o.t),yAxis:o.top,
-           itemStyle:{color:col,borderColor:bord,borderWidth:Math.max(0.8,st.border||0.8),borderType:'solid'},
-           name:`${tf} OB`,label:{show:true,formatter:`${tag}·${st.label}`,
-             position:'insideBottomLeft',fontSize:9,color:bord,fontWeight:600,distance:2}},
-          {xAxis:rightT,yAxis:o.bottom}
+           itemStyle:{color:fill,borderColor:bord,
+             borderWidth:alive?Math.max(0.8,st.border||0.8):0.5,
+             borderType:alive?'solid':'dashed',opacity:alive?1:0.7},
+           name:`${tf} OB`,label:{show:alive,
+             formatter:alive?`${tag}·${st.label}`:`${tag.toLowerCase()}·${st.label}`,
+             position:'insideBottomLeft',fontSize:9,color:bord,
+             fontWeight:alive?600:400,distance:2,opacity:alive?1:0.55}},
+          {xAxis:endX,yAxis:o.bottom}
         ]);
       });
     });
