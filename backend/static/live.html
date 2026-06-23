@@ -221,6 +221,13 @@
         <button class="ind-chip on" data-mtf="1h">1h</button>
         <button class="ind-chip on" data-mtf="4h">4h</button>
         <span class="ind-sep"></span>
+        <span class="ind-label">Window:</span>
+        <button class="ind-chip" data-win="50">50</button>
+        <button class="ind-chip on" data-win="100">100</button>
+        <button class="ind-chip" data-win="200">200</button>
+        <button class="ind-chip" data-win="500">500</button>
+        <button class="ind-chip" data-win="0">Full</button>
+        <span class="ind-sep"></span>
         <button class="ind-chip ctrl" onclick="resetZoom()">⤢ Reset zoom</button>
         <button class="ind-chip ctrl" id="logBtn" onclick="toggleLogScale()">Log scale: off</button>
         <span class="ind-hint">scroll = zoom time · shift+scroll = zoom price · drag chart = pan · drag bottom axis = stretch time · drag right axis = stretch price · dbl-click right axis = auto-fit</span>
@@ -415,6 +422,7 @@ const UP='#00d68f', DN='#ff5677';
 const IND={ema9:true,ema21:true,sma20:true,sma50:false,bb:false,vwap:false,vol:true,rsi:true,macd:true};
 const SMC={structure:true,fvg:true,ob:true,swings:true,sweeps:false,range:false};
 const MTF={'1m':true,'15m':true,'1h':true,'4h':true};   // which TFs to overlay
+let smcWindow=100;   // SMC analysis window — last N candles (0 = full)
 let smc=null;              // single-TF result for the active interval (structure/sweeps/range)
 let smcMulti={};           // {tf: analyze-result} for all enabled MTF layers
 const seenSignals=new Set(); // de-dupe alert signal ids
@@ -667,6 +675,14 @@ document.getElementById('indBar').addEventListener('click',(e)=>{
   const k=c.dataset.mtf; MTF[k]=!MTF[k]; c.classList.toggle('on',MTF[k]);
   renderChart(true);
 });
+document.getElementById('indBar').addEventListener('click',(e)=>{
+  const c=e.target.closest('.ind-chip[data-win]'); if(!c)return;
+  // single-select: only one window can be active at a time
+  document.querySelectorAll('.ind-chip[data-win]').forEach(x=>x.classList.remove('on'));
+  c.classList.add('on');
+  smcWindow=parseInt(c.dataset.win);
+  loadSMC();   // re-run SMC with the new window (chart data unchanged)
+});
 
 /* ---------- SMC overlays ---------------------------------------------------
    Draws FVG and Order Block zones from ALL enabled timeframes (1m/15m/1h/4h)
@@ -828,14 +844,14 @@ async function loadSMC(){
   if(!active){smc=null;smcMulti={};return;}
   // 1) single-TF (current interval) — drives structure/sweeps/range + alerts
   try{
-    const r=await fetch(`/api/smc?tsym=${encodeURIComponent(active)}&interval=${interval}&limit=500`);
+    const r=await fetch(`/api/smc?tsym=${encodeURIComponent(active)}&interval=${interval}&limit=500&recent=${smcWindow}`);
     smc=await r.json();
   }catch(e){ smc=null; }
   // 2) multi-TF zones (1m/15m/1h/4h) so HTF OB/FVG overlay any active chart
   try{
     const tfs=Object.keys(MTF).filter(k=>MTF[k]).join(',');
     if(tfs){
-      const r2=await fetch(`/api/smc/multi?tsym=${encodeURIComponent(active)}&intervals=${tfs}&limit=600`);
+      const r2=await fetch(`/api/smc/multi?tsym=${encodeURIComponent(active)}&intervals=${tfs}&limit=600&recent=${smcWindow}`);
       const j2=await r2.json();
       smcMulti=j2.by_tf||{};
     } else smcMulti={};

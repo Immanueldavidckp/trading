@@ -1048,15 +1048,17 @@ def upstox_candles(tsym: str, interval: str = "1d", limit: int = 500,
 
 @app.get("/api/smc/multi")
 def smc_multi(tsym: str, intervals: str = "1m,15m,1h,4h", limit: int = 600,
-              swing: int = 2):
+              swing: int = 2, recent: int = 150):
     """Run SMC on multiple timeframes — auto-fetches any missing intervals.
-    Used so a 1m chart can overlay HTF (15m/1h/4h) order blocks and FVGs.
+    `recent` slices each TF to the most-recent N candles before analyzing
+    (sharper swings + zones). 0 = use the full window.
     Returns {tsym, by_tf: {interval: <analyze result>, ...}}."""
     from upstox_client import UpstoxClient as _UC
     import smc_engine
 
     out = {}
     sw = max(1, min(int(swing), 5))
+    rn = max(0, min(int(recent), 5000))
     for iv in [x.strip() for x in intervals.split(",") if x.strip()]:
         rows = _UC.query(tsym=tsym, interval=iv, limit=limit)
         if not rows:
@@ -1064,13 +1066,13 @@ def smc_multi(tsym: str, intervals: str = "1m,15m,1h,4h", limit: int = 600,
             rows = _UC.query(tsym=tsym, interval=iv, limit=limit)
         candles = [{"t": r["ts"], "o": r["o"], "h": r["h"], "l": r["l"],
                     "c": r["c"], "v": r["v"]} for r in rows]
-        out[iv] = smc_engine.analyze(candles, swing_lookback=sw)
-    return {"tsym": tsym.upper(), "by_tf": out}
+        out[iv] = smc_engine.analyze(candles, swing_lookback=sw, recent_n=rn)
+    return {"tsym": tsym.upper(), "by_tf": out, "recent_n": rn}
 
 
 @app.get("/api/smc")
 def smc_analyze(tsym: str, interval: str = "15m", limit: int = 500, auto: int = 1,
-                swing: int = 2):
+                swing: int = 2, recent: int = 150):
     """
     Run Smart Money Concepts analysis on a symbol/interval.
     Auto-fetches Upstox candles if none are stored yet.
@@ -1087,10 +1089,17 @@ def smc_analyze(tsym: str, interval: str = "15m", limit: int = 500, auto: int = 
 
     candles = [{"t": r["ts"], "o": r["o"], "h": r["h"], "l": r["l"],
                 "c": r["c"], "v": r["v"]} for r in rows]
-    result = smc_engine.analyze(candles, swing_lookback=max(1, min(int(swing), 5)))
-    result["signals"] = smc_engine.live_signals(candles, result)
+    rn = max(0, min(int(recent), 5000))
+    result = smc_engine.analyze(candles,
+                                swing_lookback=max(1, min(int(swing), 5)),
+                                recent_n=rn)
+    # Use the same recent window for live signals so alerts fire on the
+    # same candles the chart highlights.
+    sig_window = candles[-rn:] if (rn > 0 and len(candles) > rn) else candles
+    result["signals"] = smc_engine.live_signals(sig_window, result)
     result["tsym"] = tsym.upper()
     result["interval"] = interval
+    result["recent_n"] = rn
     return result
 
 

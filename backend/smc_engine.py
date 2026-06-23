@@ -410,10 +410,19 @@ def trend_forecast(swings: List[dict], structure_bias: Optional[str],
 
 
 def analyze(candles: List[dict], swing_lookback: int = 2,
-            fvg_min_pct: float = 0.0) -> Dict:
-    """Run the full SMC suite over a candle series (oldest-first)."""
+            fvg_min_pct: float = 0.0, recent_n: int = 0) -> Dict:
+    """Run the full SMC suite over a candle series (oldest-first).
+
+    `recent_n > 0` slices to the most recent N candles before analyzing —
+    SMC concepts (active dealing range, fresh swings, unmitigated zones) decay
+    fast. Comparing today's HH against last week's HH is meaningless; a tighter
+    window produces sharper labels and zones that match what a trader actually
+    cares about right now.
+    """
     if not candles or len(candles) < 5:
         return {"ok": False, "error": "not enough candles", "n": len(candles)}
+    if recent_n > 0 and len(candles) > recent_n:
+        candles = candles[-recent_n:]
 
     swings = swing_points(candles, swing_lookback, swing_lookback)
     swings = classify_swings(swings)
