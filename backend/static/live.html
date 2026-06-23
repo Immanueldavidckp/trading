@@ -216,7 +216,7 @@
         <span class="ind-sep"></span>
         <button class="ind-chip ctrl" onclick="resetZoom()">⤢ Reset zoom</button>
         <button class="ind-chip ctrl" id="logBtn" onclick="toggleLogScale()">Log scale: off</button>
-        <span class="ind-hint">scroll = zoom time · scroll over price axis = zoom price · drag = pan · drag axis = stretch</span>
+        <span class="ind-hint">scroll = zoom time · shift+scroll = zoom price · drag chart = pan · drag bottom axis = stretch time · drag right axis = stretch price · dbl-click right axis = auto-fit</span>
       </div>
       <div class="ohlc-readout" id="ohlcReadout"><span class="dim">hover the chart…</span></div>
       <div id="proChart"></div>
@@ -548,6 +548,64 @@ function buildChartOption(){
 chart.setOption(buildChartOption());
 chart.on('dataZoom',()=>{ const dz=chart.getOption().dataZoom[0]; if(dz){lastZoom={start:dz.start,end:dz.end};} });
 window.addEventListener('resize',()=>chart.resize());
+
+/* ---------- broker-style axis drag scaling ------------------------------- */
+/* Drag horizontally over the bottom time-axis strip → stretch/compress time */
+/* Drag vertically over the right-side price-axis strip → stretch/compress price */
+(function attachAxisDrag(){
+  const el = document.getElementById('proChart');
+  let mode=null, startX=0, startY=0, startSpan=0, startMin=null, startMax=null, manualY=false;
+  const STRIP=44;  // px hit-strip on the right (price) and bottom (time)
+  function hit(e){
+    const r=el.getBoundingClientRect();
+    const x=e.clientX-r.left, y=e.clientY-r.top;
+    if(x>r.width-STRIP) return 'price';
+    if(y>r.height-STRIP) return 'time';
+    return null;
+  }
+  el.addEventListener('mousedown',(e)=>{
+    const h=hit(e); if(!h) return;
+    mode=h; startX=e.clientX; startY=e.clientY; el.style.cursor=h==='price'?'ns-resize':'ew-resize';
+    if(mode==='time'){ startSpan=Math.max(1, lastZoom.end - lastZoom.start); }
+    if(mode==='price'){
+      // capture current visible price range so the drag scales relative to it
+      const ext=chart.getModel().getComponent('yAxis',0).axis.scale.getExtent();
+      startMin=ext[0]; startMax=ext[1];
+    }
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove',(e)=>{
+    if(!mode) return;
+    if(mode==='time'){
+      // drag right (positive dx) → narrow window (zoom in); left → widen
+      const dx=e.clientX-startX;
+      const factor=Math.exp(-dx/220);            // smooth exponential feel
+      let newSpan=Math.min(100, Math.max(1, startSpan*factor));
+      const center=(lastZoom.start+lastZoom.end)/2;
+      let s=Math.max(0, center-newSpan/2), en=Math.min(100, center+newSpan/2);
+      if(en-s<1){ en=s+1; }
+      lastZoom={start:s,end:en};
+      chart.dispatchAction({type:'dataZoom',start:s,end:en});
+    } else if(mode==='price'){
+      // drag down (positive dy) → expand price range (zoom out); up → compress
+      const dy=e.clientY-startY;
+      const factor=Math.exp(dy/180);
+      const mid=(startMin+startMax)/2;
+      const half=(startMax-startMin)/2*factor;
+      manualY=true;
+      chart.setOption({yAxis:[{gridIndex:0,scale:true,position:'right',
+        min:mid-half,max:mid+half,
+        axisLabel:{color:'#9ba6b8',fontFamily:'JetBrains Mono',fontSize:10},
+        splitLine:{lineStyle:{color:'rgba(35,42,56,0.5)'}},axisLine:{show:false}}]});
+    }
+  });
+  window.addEventListener('mouseup',()=>{ mode=null; el.style.cursor=''; });
+  // Double-click the price strip to release the manual scale (back to auto-fit).
+  el.addEventListener('dblclick',(e)=>{
+    if(hit(e)!=='price' || !manualY) return;
+    manualY=false; rebuildChart();
+  });
+})();
 
 function rebuildChart(){ chart.setOption(buildChartOption(),true); renderChart(true); }
 function resetZoom(){ lastZoom={start:0,end:100}; chart.dispatchAction({type:'dataZoom',start:0,end:100}); }

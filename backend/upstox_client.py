@@ -402,9 +402,15 @@ class UpstoxClient:
         ts = cs_1m[0][0][:10] + "T00:00:00+05:30"   # match historical daily ts
         return [ts, o, h, l, c_, v, 0]
 
+    # IST is UTC+5:30. Aligning bucket boundaries to UTC produces ugly off-clock
+    # candles (a "1h" candle stamped 08:30 IST rather than 09:00 IST), which is
+    # what you'd never see on a broker chart. Shift by this offset before
+    # flooring and shift back, so buckets snap to IST wall-clock boundaries.
+    _IST_OFFSET = 5 * 3600 + 30 * 60
+
     def _aggregate(self, candles_1m: list, minutes: int) -> list:
         """
-        Aggregate raw 1-minute Upstox candles into N-minute candles.
+        Aggregate raw 1-minute Upstox candles into N-minute candles, IST-aligned.
         Upstox candle format: [timestamp_str, open, high, low, close, volume, oi]
         """
         buckets: dict = {}
@@ -416,7 +422,7 @@ class UpstoxClient:
                 ts = int(datetime.fromisoformat(str(c[0])).timestamp())
             except Exception:
                 continue
-            b = (ts // bucket_secs) * bucket_secs
+            b = ((ts + self._IST_OFFSET) // bucket_secs) * bucket_secs - self._IST_OFFSET
             if b not in buckets:
                 buckets[b] = {
                     "ts": b, "o": c[1], "h": c[2], "l": c[3],
