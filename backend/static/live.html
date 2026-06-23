@@ -439,8 +439,10 @@ function vwapArr(cs){ // candles array -> cumulative VWAP using typical price*vo
 function buildChartOption(){
   const subs=['vol','rsi','macd'].filter(k=>IND[k]);   // stacked panes under price
   const n=subs.length;
-  const top=2, gap=2, subH=12, sliderArea=6;
-  const priceH=100-top-sliderArea-n*(subH+gap);
+  // sliderArea reserved at the TOP for the time-zoom slider (moved out of the
+  // way of the chart action). bottomMargin leaves room for the x-axis labels.
+  const sliderArea=5, top=sliderArea+1, gap=2, subH=12, bottomMargin=3;
+  const priceH=100-top-bottomMargin-n*(subH+gap);
   const grids=[{left:64,right:58,top:top+'%',height:priceH+'%'}];
   const paneGridIndex={};   // 'vol'->gridIdx
   subs.forEach((k,i)=>{
@@ -480,7 +482,7 @@ function buildChartOption(){
   const dataZoom=[
     {type:'inside',xAxisIndex:allX,filterMode:'filter',start:lastZoom.start,end:lastZoom.end,
      zoomOnMouseWheel:true,moveOnMouseMove:true,moveOnMouseWheel:false},
-    {type:'slider',xAxisIndex:allX,height:18,bottom:8,
+    {type:'slider',xAxisIndex:allX,height:18,top:6,
      backgroundColor:'rgba(26,31,43,0.6)',fillerColor:'rgba(94,142,255,0.15)',
      borderColor:'#2f3848',handleStyle:{color:'#5e8eff'},
      dataBackground:{lineStyle:{color:'#2f3848'},areaStyle:{color:'rgba(94,142,255,0.08)'}},
@@ -563,16 +565,19 @@ window.addEventListener('resize',()=>chart.resize());
    The hit zones avoid the dataZoom slider that lives in the bottom ~28px. */
 (function attachAxisDrag(){
   const el=document.getElementById('proChart');
-  let mode=null, sx=0, sy=0, startSpan=0, startMin=null, startMax=null, manualY=false;
+  let mode=null, sx=0, sy=0, startSpan=0, startMin=null, startMax=null,
+      startAnchor=null, manualY=false;
 
-  // Right strip = the 56px column where ECharts paints the price labels
-  // (matches the `right:58` in our grid config).
-  // Bottom strip = ~28px tall, positioned above the 26-32px dataZoom slider.
+  // Right strip = the rightmost 56px where ECharts paints price labels.
+  // Bottom strip = the bottom 36px where the x-axis labels sit. The dataZoom
+  // slider is now at the TOP of the chart so the bottom is unobstructed.
   function hit(e){
     const r=el.getBoundingClientRect();
     const x=e.clientX-r.left, y=e.clientY-r.top;
-    if(x>=r.width-58 && y<r.height-32) return 'price';   // never the slider
-    if(y>=r.height-60 && y<=r.height-32 && x<r.width-58) return 'time';
+    // skip the top area where the slider lives (top 30px)
+    if(y<30) return null;
+    if(x>=r.width-58) return 'price';
+    if(y>=r.height-36 && x<r.width-58) return 'time';
     return null;
   }
   function setCursor(c){ el.style.cursor=c||''; }
@@ -593,6 +598,11 @@ window.addEventListener('resize',()=>chart.resize());
     if(mode==='price'){
       const ext=chart.getModel().getComponent('yAxis',0).axis.scale.getExtent();
       startMin=ext[0]; startMax=ext[1];
+      // Anchor the scale on the current price so the candles stay where they
+      // are visually — only the spread of the price axis changes around them.
+      startAnchor=(candles.length && candles[candles.length-1].c!=null)
+        ? candles[candles.length-1].c
+        : (startMin+startMax)/2;
     }
     e.preventDefault();
   });
@@ -611,14 +621,18 @@ window.addEventListener('resize',()=>chart.resize());
       lastZoom={start:s,end:en};
       chart.dispatchAction({type:'dataZoom',start:s,end:en});
     } else if(mode==='price'){
-      // drag DOWN = expand price range (zoom out), drag UP = compress.
+      // drag DOWN = expand price range (candles look smaller), drag UP =
+      // compress (candles look bigger). The anchor (last close) keeps its
+      // vertical pixel position so the chart doesn't shift up or down.
       const dy=e.clientY-sy;
       const factor=Math.max(0.05, Math.min(20, 1 + dy/200));
-      const mid=(startMin+startMax)/2;
-      const half=Math.max(1e-6,(startMax-startMin)/2*factor);
+      const a=startAnchor;
+      const newMin=a - (a-startMin)*factor;
+      const newMax=a + (startMax-a)*factor;
+      if(newMax-newMin<1e-6) return;
       manualY=true;
       chart.setOption({yAxis:[{gridIndex:0,scale:true,position:'right',
-        min:mid-half,max:mid+half,
+        min:newMin,max:newMax,
         axisLabel:{color:'#9ba6b8',fontFamily:'JetBrains Mono',fontSize:10},
         splitLine:{lineStyle:{color:'rgba(35,42,56,0.5)'}},axisLine:{show:false}}]});
     }
