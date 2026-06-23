@@ -217,8 +217,10 @@ class UpstoxClient:
             for item in data:
                 sym = (item.get("tradingsymbol") or item.get("trading_symbol", "")).strip().upper()
                 key = item.get("instrument_key", "")
+                seg = item.get("segment", "")
                 itype = item.get("instrument_type", "")
-                if sym and key and itype == "EQUITY":
+                # NSE cash-market equities: segment NSE_EQ, type EQ (normal) or BE (trade-to-trade)
+                if sym and key and seg == "NSE_EQ" and itype in ("EQ", "BE"):
                     inst[sym]           = key   # e.g. "RELIANCE"
                     inst[sym + "-EQ"]   = key   # e.g. "RELIANCE-EQ"  (matches watchlist tsym)
             with self._inst_lock:
