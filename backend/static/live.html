@@ -675,27 +675,21 @@ document.getElementById('indBar').addEventListener('click',(e)=>{
    on the current chart. Structure lines, sweeps and Premium/Discount come from
    the active timeframe only (per-TF context, would be noise from many TFs). */
 
-/* Per-TF visual style. Higher timeframes are visually heavier so the eye
-   weights them more — a 4h order block trumps a 1m one for HTF bias. */
+/* Colour scheme: the FILL tells you the zone TYPE, the BORDER tells you the
+   TIMEFRAME. Green fill = FVG, blue fill = Order Block. Border colour:
+   1m red · 5m coral · 15m orange · 1h yellow · 4h white · 1d cyan.
+   Higher timeframes get a thicker border + higher weight (paint on top). */
+const FVG_FILL='rgba(0,214,143,0.13)';        // green  — Fair Value Gap
+const FVG_FILL_DEAD='rgba(0,214,143,0.04)';   // filled FVG (subdued)
+const OB_FILL='rgba(94,142,255,0.15)';        // blue   — Order Block
+const OB_FILL_DEAD='rgba(94,142,255,0.04)';   // filled OB (subdued)
 const TF_STYLE={
-  '1m': {fillBull:'rgba(94,142,255,0.07)', fillBear:'rgba(255,143,171,0.07)',
-         obBull :'rgba(94,142,255,0.08)',  obBear :'rgba(255,184,77,0.08)',
-         border:0,    label:'1m',  weight:0},
-  '5m': {fillBull:'rgba(94,142,255,0.10)', fillBear:'rgba(255,143,171,0.10)',
-         obBull :'rgba(94,142,255,0.12)',  obBear :'rgba(255,184,77,0.12)',
-         border:0,    label:'5m',  weight:1},
-  '15m':{fillBull:'rgba(0,214,143,0.13)',  fillBear:'rgba(255,86,119,0.13)',
-         obBull :'rgba(0,214,143,0.14)',   obBear :'rgba(255,86,119,0.14)',
-         border:1,    label:'15m', weight:2, borderBull:'#00d68f', borderBear:'#ff5677'},
-  '1h': {fillBull:'rgba(255,184,77,0.18)', fillBear:'rgba(179,114,255,0.18)',
-         obBull :'rgba(255,184,77,0.20)',  obBear :'rgba(179,114,255,0.20)',
-         border:1.4,  label:'1h',  weight:3, borderBull:'#ffb84d', borderBear:'#b372ff'},
-  '4h': {fillBull:'rgba(0,214,143,0.22)',  fillBear:'rgba(255,86,119,0.22)',
-         obBull :'rgba(0,214,143,0.24)',   obBear :'rgba(255,86,119,0.24)',
-         border:2,    label:'4h',  weight:4, borderBull:'#00d68f', borderBear:'#ff5677'},
-  '1d': {fillBull:'rgba(94,142,255,0.26)', fillBear:'rgba(255,86,119,0.26)',
-         obBull :'rgba(94,142,255,0.28)',  obBear :'rgba(255,86,119,0.28)',
-         border:2.4,  label:'1d',  weight:5, borderBull:'#5e8eff', borderBear:'#ff5677'},
+  '1m': {border:'#ff5677', width:1.0, label:'1m',  weight:0},  // red
+  '5m': {border:'#ff8c69', width:1.2, label:'5m',  weight:1},  // coral
+  '15m':{border:'#ffa726', width:1.5, label:'15m', weight:2},  // orange
+  '1h': {border:'#ffe14d', width:1.9, label:'1h',  weight:3},  // yellow
+  '4h': {border:'#ffffff', width:2.4, label:'4h',  weight:4},  // white
+  '1d': {border:'#7fd8ff', width:2.6, label:'1d',  weight:5},  // cyan
 };
 
 function buildSMCOverlays(xs){
@@ -744,33 +738,26 @@ function buildSMCOverlays(xs){
       const isActive=(tf===interval);
       const list=isActive ? r.fvg.slice() : r.fvg.filter(g=>!g.mitigated);
       list.forEach(g=>{
-        const bord=g.kind==='bull'?(st.borderBull||'#00d68f'):(st.borderBear||'#ff5677');
         const alive=!g.mitigated;
-        const fill=alive ? (g.kind==='bull'?st.fillBull:st.fillBear)
-                         : (g.kind==='bull'?'rgba(0,214,143,0.03)':'rgba(255,86,119,0.03)');
+        const fill=alive?FVG_FILL:FVG_FILL_DEAD;     // green = FVG
+        const bord=st.border;                        // border colour = timeframe
         const endX=alive ? rightT : pickT(g.mit_t);
         areas.push([
           {xAxis:pickT(g.t_mid),yAxis:g.top,
            itemStyle:{color:fill,borderColor:bord,
-             borderWidth:alive?Math.max(0.6,st.border||0.6):0.4,
-             borderType:alive?'solid':'dashed',opacity:alive?1:0.7},
+             borderWidth:alive?st.width:0.5,
+             borderType:alive?'solid':'dashed',opacity:alive?1:0.55},
            name:`${tf} FVG`,label:{show:alive,
              formatter:alive?`FVG·${st.label}`:`fvg·${st.label}`,
              position:'insideTopLeft',fontSize:9,color:bord,
-             fontWeight:alive?600:400,distance:2,opacity:alive?1:0.55}},
+             fontWeight:alive?600:400,distance:2,opacity:alive?1:0.5}},
           {xAxis:endX,yAxis:g.bottom}
         ]);
-        // dashed midline only for ALIVE FVGs (so tiny live gaps still register)
-        if(alive){
-          const mid=(g.top+g.bottom)/2;
-          lines.push({yAxis:mid,lineStyle:{color:bord,type:'dashed',width:0.6,opacity:0.5},
-            label:{show:false}});
-        }
       });
     });
   }
 
-  // ── Order Blocks (per-TF) — same alive/filled treatment as FVG ──
+  // ── Order Blocks (per-TF) — blue fill, TF-coloured border ──
   if(SMC.ob){
     layers.forEach(([tf,r])=>{
       if(!r.order_blocks) return;
@@ -778,21 +765,20 @@ function buildSMCOverlays(xs){
       const isActive=(tf===interval);
       const list=isActive ? r.order_blocks.slice() : r.order_blocks.filter(o=>!o.mitigated);
       list.forEach(o=>{
-        const bord=o.kind==='bull'?(st.borderBull||'#5e8eff'):(st.borderBear||'#ffb84d');
         const alive=!o.mitigated;
-        const fill=alive ? (o.kind==='bull'?st.obBull:st.obBear)
-                         : (o.kind==='bull'?'rgba(94,142,255,0.03)':'rgba(255,184,77,0.03)');
+        const fill=alive?OB_FILL:OB_FILL_DEAD;       // blue = Order Block
+        const bord=st.border;                        // border colour = timeframe
         const endX=alive ? rightT : pickT(o.mit_t);
         const tag=(o.from_event==='impulse'?'OB*':'OB');
         areas.push([
           {xAxis:pickT(o.t),yAxis:o.top,
            itemStyle:{color:fill,borderColor:bord,
-             borderWidth:alive?Math.max(0.8,st.border||0.8):0.5,
-             borderType:alive?'solid':'dashed',opacity:alive?1:0.7},
+             borderWidth:alive?st.width:0.5,
+             borderType:alive?'solid':'dashed',opacity:alive?1:0.55},
            name:`${tf} OB`,label:{show:alive,
              formatter:alive?`${tag}·${st.label}`:`${tag.toLowerCase()}·${st.label}`,
              position:'insideBottomLeft',fontSize:9,color:bord,
-             fontWeight:alive?600:400,distance:2,opacity:alive?1:0.55}},
+             fontWeight:alive?600:400,distance:2,opacity:alive?1:0.5}},
           {xAxis:endX,yAxis:o.bottom}
         ]);
       });
