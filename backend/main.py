@@ -142,6 +142,23 @@ def upstox_depth(tsym: str):
     return {"stat": "Ok", "tsym": tsym.upper(), **d}
 
 
+# ---------- Analysis + Suggestion modes ----------
+@app.get("/api/analysis/ticks")
+def analysis_ticks(tsym: str, limit: int = 400):
+    """Tick-by-tick replay: aggressor (buyer/seller), traded volume, order-book
+    imbalance, and the SMC zone (FVG/OB) each tick reacted at — plus a
+    who's-in-control summary."""
+    import analysis
+    return analysis.analysis_ticks(tsym, limit=max(20, min(int(limit), 2000)))
+
+
+@app.get("/api/suggestion")
+def api_suggestion(tsym: str):
+    """Multi-timeframe directional call (1m/5m/15m/1h/4h/1d) with target + entry."""
+    import analysis
+    return analysis.suggestions(tsym)
+
+
 @app.get("/api/candles_db")
 def candles_db(tsym: str, tf: int = 60, limit: int = 500, day: Optional[str] = None, full: int = 0):
     """
