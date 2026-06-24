@@ -151,10 +151,7 @@
       <div class="crumb"><h1 id="hdrSym">—</h1><span class="sub" id="hdrName"></span></div>
       <div class="ctrls">
         <div class="conn" id="conn"><span class="conn-dot"></span><span id="connText">connecting…</span></div>
-        <div class="conn" id="ftConn"><span class="conn-dot"></span><span id="ftConnText">Flattrade: …</span></div>
         <button class="btn" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
-        <button class="btn" id="ftLoginBtn" onclick="ftLogin()">Connect Flattrade</button>
-        <button class="btn" onclick="document.getElementById('orderModal').style.display='flex'">Place order</button>
       </div>
     </div>
 
@@ -296,52 +293,29 @@
         </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><div><div class="panel-title">Order book (top)</div><div class="panel-sub">Yahoo · 1 level</div></div></div>
-        <div class="order-book">
-          <div class="book-side"><h4 class="bid">▲ Bid</h4>
-            <div class="book-row bid"><span>Price</span><span class="v" id="bookBid">—</span></div>
-            <div class="book-row bid"><span>Size</span><span class="v" id="bookBidSize">—</span></div></div>
-          <div class="book-side"><h4 class="ask">▼ Ask</h4>
-            <div class="book-row ask"><span>Price</span><span class="v" id="bookAsk">—</span></div>
-            <div class="book-row ask"><span>Size</span><span class="v" id="bookAskSize">—</span></div></div>
+        <div class="panel-head"><div><div class="panel-title">Order book — 5 level (Upstox)</div><div class="panel-sub" id="depthSub">live order depth</div></div></div>
+        <div id="depthLadder" style="font-family:'JetBrains Mono',monospace;font-size:12px;padding:4px 0">
+          <div class="dim" style="padding:14px;text-align:center">waiting for depth…</div>
+        </div>
+        <!-- Order-book imbalance bar: green = buy pressure, red = sell pressure -->
+        <div style="padding:8px 12px 4px">
+          <div style="display:flex;justify-content:space-between;font-size:10.5px;margin-bottom:3px">
+            <span class="green" id="imbBuyTxt">Buy —</span>
+            <span class="dim" id="imbPct">imbalance</span>
+            <span class="red" id="imbSellTxt">Sell —</span>
+          </div>
+          <div style="height:8px;border-radius:4px;overflow:hidden;background:var(--red-bg);display:flex">
+            <div id="imbBar" style="height:100%;width:50%;background:var(--green);transition:width .3s"></div>
+          </div>
         </div>
         <div class="book-info" id="bookInfo">Mid: — · Spread: — · Microprice: —</div>
       </div>
     </div>
 
     <div class="footer">
-      Yahoo → MySQL <code>price_changes</code> → candles aggregated server-side · all times <b>IST</b>
+      Upstox real-time feed → MySQL <code>price_changes</code> + <code>market_depth</code> · candles & SMC from Upstox · all times <b>IST</b>
     </div>
   </main>
-</div>
-
-<!-- Order modal -->
-<div id="orderModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);backdrop-filter:blur(6px);z-index:100;align-items:center;justify-content:center;padding:20px">
-  <div style="background:var(--panel);border:1px solid var(--border-bright);border-radius:14px;width:420px;max-width:100%;overflow:hidden">
-    <div style="padding:15px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-      <div style="font-weight:700;font-size:15px">Place order — Flattrade</div>
-      <button onclick="document.getElementById('orderModal').style.display='none'" style="background:none;border:none;color:var(--text-3);font-size:22px;cursor:pointer">×</button>
-    </div>
-    <div style="padding:18px">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:13px">
-        <button id="actionBuy" class="btn primary" onclick="setAction('B')" style="padding:10px">BUY</button>
-        <button id="actionSell" class="btn" onclick="setAction('S')" style="padding:10px">SELL</button>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:12px">
-        <div><div class="kpi-label">Symbol</div><input id="ordSym" class="ord-input" placeholder="RELIANCE-EQ"></div>
-        <div><div class="kpi-label">Exchange</div><select id="ordExch" class="ord-input"><option>NSE</option><option>BSE</option><option>NFO</option></select></div>
-        <div><div class="kpi-label">Type</div><select id="ordPrctyp" class="ord-input" onchange="toggleLimit()"><option value="MKT">MARKET</option><option value="LMT">LIMIT</option></select></div>
-        <div><div class="kpi-label">Product</div><select id="ordPrd" class="ord-input"><option value="C">CNC (Delivery)</option><option value="I">MIS (Intraday)</option></select></div>
-        <div><div class="kpi-label">Quantity</div><input id="ordQty" type="number" min="1" value="1" class="ord-input"></div>
-        <div><div class="kpi-label">Limit ₹</div><input id="ordPrc" type="number" step="0.05" value="0" class="ord-input" disabled></div>
-      </div>
-      <div style="background:rgba(255,184,77,0.08);border:1px solid rgba(255,184,77,0.3);color:var(--yellow);padding:9px 12px;border-radius:8px;font-size:11.5px;margin-bottom:13px">
-        ⚠️ Places a <b>real order</b> with real money.
-      </div>
-      <button class="btn primary" style="width:100%;padding:12px" onclick="placeOrder()"><span id="ordSubmitText">Place BUY order</span></button>
-      <div id="ordResult" style="margin-top:11px;font-size:12px;font-family:'JetBrains Mono',monospace"></div>
-    </div>
-  </div>
 </div>
 
 <script>
@@ -1051,6 +1025,7 @@ async function loadChart(refresh){
   reconnectWS(60);
   loadAnalysis();
   loadSMC();
+  pollDepth();   // refresh the 5-level order book immediately for this symbol
 }
 
 function refreshUpstox(){
@@ -1111,16 +1086,56 @@ function applyLatest(r){
   const sp=(r.bid!=null&&r.ask!=null)?(r.ask-r.bid).toFixed(2):null;
   document.getElementById('kpiSpread').textContent=sp==null?'—':'₹'+sp;
   document.getElementById('kpiVol').textContent=fmtCompact(r.volume);
-  document.getElementById('bookBid').textContent=fmtNum(r.bid);
-  document.getElementById('bookAsk').textContent=fmtNum(r.ask);
-  document.getElementById('bookBidSize').textContent=r.bid_size==null?'—':fmtCompact(r.bid_size);
-  document.getElementById('bookAskSize').textContent=r.ask_size==null?'—':fmtCompact(r.ask_size);
-  const mid=(r.bid!=null&&r.ask!=null)?((r.bid+r.ask)/2).toFixed(3):'—';
+}
+
+/* ---------- Live 5-level order book (Upstox depth) ---------- */
+let depthTimer=null;
+async function pollDepth(){
+  if(!active){return;}
+  try{
+    const r=await fetch(`/api/upstox/depth?tsym=${encodeURIComponent(active)}`);
+    const d=await r.json();
+    if(d.stat==='Ok') renderDepth(d);
+  }catch(e){}
+}
+function renderDepth(d){
+  const buy=d.buy||[], sell=d.sell||[];
+  const maxQ=Math.max(1,...buy.map(x=>x.quantity),...sell.map(x=>x.quantity));
+  const row=(side,lvl)=>{
+    const col=side==='ask'?'255,86,119':'0,214,143';
+    const w=Math.round((lvl.quantity/maxQ)*100);
+    const align=side==='ask'?'right':'left';
+    return `<div style="position:relative;display:flex;justify-content:space-between;padding:3px 12px;${side==='ask'?'flex-direction:row-reverse':''}">
+      <div style="position:absolute;top:0;${align}:0;height:100%;width:${w}%;background:rgba(${col},0.13)"></div>
+      <span style="position:relative;color:rgb(${col});font-weight:600">${fmtNum(lvl.price)}</span>
+      <span style="position:relative;color:var(--text-2)">${fmtCompact(lvl.quantity)}<span class="dim" style="font-size:9px"> ·${lvl.orders}</span></span>
+    </div>`;
+  };
+  // 5 ask rows (highest price on top → lowest near spread), then 5 bid rows
+  const askRows=sell.slice(0,5).reverse().map(l=>row('ask',l)).join('');
+  const bidRows=buy.slice(0,5).map(l=>row('bid',l)).join('');
+  const bestBid=buy[0]?.price, bestAsk=sell[0]?.price;
+  const spread=(bestBid!=null&&bestAsk!=null)?(bestAsk-bestBid).toFixed(2):'—';
+  const mid=(bestBid!=null&&bestAsk!=null)?((bestBid+bestAsk)/2).toFixed(2):'—';
+  document.getElementById('depthLadder').innerHTML=
+    askRows+
+    `<div style="text-align:center;padding:4px 12px;border-block:1px dashed var(--border);color:var(--text-3);font-size:10.5px">spread ${spread} · mid ${mid}</div>`+
+    bidRows;
+  // imbalance = total buy qty vs total sell qty across the whole book
+  const tb=d.total_buy_qty||0, ts=d.total_sell_qty||0, tot=tb+ts;
+  const buyPct=tot>0?Math.round(tb/tot*100):50;
+  document.getElementById('imbBar').style.width=buyPct+'%';
+  document.getElementById('imbBuyTxt').textContent='Buy '+fmtCompact(tb);
+  document.getElementById('imbSellTxt').textContent='Sell '+fmtCompact(ts);
+  document.getElementById('imbPct').textContent=buyPct>=50?`+${buyPct}% buy`:`+${100-buyPct}% sell`;
+  document.getElementById('imbPct').className=buyPct>=50?'green':'red';
+  // microprice from best levels
   let micro='—';
-  if(r.bid!=null&&r.ask!=null&&r.bid_size&&r.ask_size)
-    micro=((r.bid*r.ask_size+r.ask*r.bid_size)/(r.bid_size+r.ask_size)).toFixed(3);
+  const bq=buy[0]?.quantity, aq=sell[0]?.quantity;
+  if(bestBid!=null&&bestAsk!=null&&bq&&aq)
+    micro=((bestBid*aq+bestAsk*bq)/(bq+aq)).toFixed(2);
   document.getElementById('bookInfo').innerHTML=
-    `Mid: <b class="mono">${mid}</b> · Spread: <b class="mono">${sp??'—'}</b> · Microprice: <b class="mono">${micro}</b>`;
+    `Mid: <b class="mono">${mid}</b> · Spread: <b class="mono">${spread}</b> · Microprice: <b class="mono">${micro}</b> · OI: <b class="mono">${fmtCompact(d.oi||0)}</b>`;
 }
 function renderTable(){
   if(paused)return;
@@ -1245,43 +1260,6 @@ async function removeStock(tsym){
   await loadSymbols();
 }
 
-/* ---------- Flattrade ---------- */
-let ftAction='B';
-async function ftStatus(){
-  try{
-    const r=await fetch('/api/flattrade/status');const s=await r.json();
-    const box=document.getElementById('ftConn'),txt=document.getElementById('ftConnText'),btn=document.getElementById('ftLoginBtn');
-    if(s.logged_in){box.classList.add('on');txt.textContent='Flattrade: '+(s.uname||s.user_id);btn.textContent='Logout';btn.onclick=ftLogout;}
-    else if(s.configured){box.classList.remove('on');txt.textContent='Flattrade: not logged in';btn.textContent='Connect Flattrade';btn.onclick=ftLogin;}
-    else{box.classList.remove('on');txt.textContent='Flattrade: not configured';btn.style.display='none';}
-  }catch(e){}
-}
-async function ftLogin(){try{const r=await fetch('/api/flattrade/login_url');const j=await r.json();if(j.login_url)location.href=j.login_url;}catch(e){}}
-async function ftLogout(){await fetch('/api/flattrade/logout');ftStatus();}
-function setAction(a){ftAction=a;
-  document.getElementById('actionBuy').classList.toggle('primary',a==='B');
-  document.getElementById('actionSell').classList.toggle('primary',a==='S');
-  document.getElementById('ordSubmitText').textContent=a==='B'?'Place BUY order':'Place SELL order';}
-function toggleLimit(){document.getElementById('ordPrc').disabled=document.getElementById('ordPrctyp').value==='MKT';}
-async function placeOrder(){
-  const body={exch:document.getElementById('ordExch').value,
-    tsym:document.getElementById('ordSym').value.trim().toUpperCase(),
-    qty:Math.max(1,parseInt(document.getElementById('ordQty').value||1)),
-    prc:parseFloat(document.getElementById('ordPrc').value||0),
-    trantype:ftAction,prctyp:document.getElementById('ordPrctyp').value,
-    prd:document.getElementById('ordPrd').value,confirm:true};
-  if(!body.tsym){alert('Symbol required');return;}
-  if(!confirm(`REAL ${ftAction==='B'?'BUY':'SELL'}: ${body.qty} × ${body.tsym} @ ${body.prctyp}${body.prctyp==='LMT'?' ₹'+body.prc:''}?`))return;
-  const result=document.getElementById('ordResult');
-  result.textContent='placing…';result.style.color='var(--text-3)';
-  try{
-    const r=await fetch('/api/flattrade/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const j=await r.json();
-    if(j.stat==='Ok'){result.style.color='var(--green)';result.textContent='✓ Order #'+(j.norenordno||'?');}
-    else{result.style.color='var(--red)';result.textContent='✗ '+(j.emsg||JSON.stringify(j));}
-  }catch(e){result.style.color='var(--red)';result.textContent='Network error';}
-}
-
 /* ---------- Per-interval analysis ---------- */
 let anRows=[];
 async function loadAnalysis(){
@@ -1354,16 +1332,14 @@ setInterval(refreshMarketState, 5000);
 
 /* ---------- Boot ---------- */
 loadSymbols();
-ftStatus();
 setInterval(loadSymbols,8000);
-setInterval(ftStatus,20000);
-setAction('B');
 // reflect existing notification permission on the button
 (function(){const btn=document.getElementById('notifBtn');
   if(btn&&'Notification'in window&&Notification.permission==='granted'){btn.textContent='🔔 popups on';btn.classList.add('on');}})();
-// live: pull today's forming candle every 20s; re-run SMC + alerts every 60s
+// live: forming candle every 20s; SMC every 60s; 5-level order book every ~1.5s
 setInterval(pollLive, 20000);
 setInterval(()=>{ if(active) loadSMC(); }, 60000);
+setInterval(pollDepth, 1500);
 </script>
 </body>
 </html>
