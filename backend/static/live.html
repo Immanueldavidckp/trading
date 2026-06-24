@@ -635,10 +635,15 @@ function _setYRange(mn,mx){
       chart.dispatchAction({type:'dataZoom',start:s,end:en});
     } else if(mode==='price'){
       e.preventDefault();
-      const factor=Math.max(0.05,Math.min(20,1+dy/200));
+      // drag DOWN = zoom IN (finer intervals: 10/20/30 -> 5/10/15);
+      // drag UP = zoom OUT (coarser). Scaled around the last-price anchor.
+      const factor=Math.max(0.02,Math.min(20,1-dy/200));
       const a=startAnchor;
-      const mn=a-(a-startMin)*factor, mx=a+(startMax-a)*factor;
-      if(mx-mn<1e-6) return;
+      let mn=a-(a-startMin)*factor, mx=a+(startMax-a)*factor;
+      // Floor: don't let the price interval go below ~0.10. ECharts draws ~5
+      // gridlines, so a 0.5 minimum span keeps the smallest interval at 0.10.
+      const MIN_RANGE=0.5;
+      if(mx-mn<MIN_RANGE){ mn=a-MIN_RANGE/2; mx=a+MIN_RANGE/2; }
       manualY=true; _setYRange(mn,mx);
     } else { // body: shift the price window by the vertical drag (ECharts pans x)
       const rng=panY[1]-panY[0];
