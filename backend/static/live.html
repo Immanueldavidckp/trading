@@ -23,6 +23,11 @@
   body{background:radial-gradient(ellipse at top,rgba(94,142,255,0.05),transparent 50%),var(--bg);
     color:var(--text);font-family:'Inter',system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;overflow-x:hidden}
   .app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+  .app.nosidebar{grid-template-columns:0 1fr}
+  .app.nosidebar .sidebar{display:none}
+  .side-toggle{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;
+    width:30px;height:30px;font-size:15px;cursor:pointer;display:grid;place-items:center;flex:0 0 auto}
+  .side-toggle:hover{background:var(--panel);border-color:var(--border-bright)}
 
   /* Sidebar */
   .sidebar{background:var(--bg-2);border-right:1px solid var(--border);padding:16px 12px;position:sticky;top:0;height:100vh;overflow-y:auto}
@@ -148,6 +153,7 @@
   <!-- MAIN -->
   <main class="main">
     <div class="topbar">
+      <button class="side-toggle" id="sideToggle" onclick="toggleSidebar()" title="Hide / show watchlist">☰</button>
       <div class="crumb"><h1 id="hdrSym">—</h1><span class="sub" id="hdrName"></span></div>
       <div class="ctrls">
         <div class="conn" id="conn"><span class="conn-dot"></span><span id="connText">connecting…</span></div>
@@ -643,6 +649,11 @@ window.addEventListener('resize',()=>chart.resize());
 
 function rebuildChart(){ chart.setOption(buildChartOption(),true); renderChart(true); }
 function resetZoom(){ lastZoom={start:0,end:100}; chart.dispatchAction({type:'dataZoom',start:0,end:100}); }
+function toggleSidebar(){
+  document.querySelector('.app').classList.toggle('nosidebar');
+  // the main pane resized — let ECharts recompute its width
+  setTimeout(()=>chart.resize(), 30);
+}
 function toggleLogScale(){ logScale=!logScale; document.getElementById('logBtn').textContent='Log scale: '+(logScale?'on':'off'); rebuildChart(); }
 
 /* indicator chip handlers */
@@ -695,7 +706,10 @@ const TF_STYLE={
 function buildSMCOverlays(xs){
   const areas=[], lines=[], points=[], swings=[];
   if(!xs.length) return {areas,lines,points,swings};
-  const rightT=xs[xs.length-1], leftT=xs[0];
+  // rightT = last REAL candle (xs may have blank padding slots after it, so we
+  // must not extend zones into the empty right offset).
+  const leftT=xs[0];
+  const rightT=candles.length?String(candles[candles.length-1].t):xs[xs.length-1];
   const leftN=Number(leftT), rightN=Number(rightT);
   const xsSet=new Set(xs);
   const xsNums=xs.map(Number);
@@ -917,6 +931,16 @@ function renderChart(force){
   setTimeout(()=>{
     chartDirty=false;
     const xs=candles.map(c=>String(c.t));
+    // Right-side padding: append blank future slots so the latest candle isn't
+    // jammed in the corner — you can pan/drag it toward the centre with empty
+    // space to its right (like TradingView's right offset). Series data is
+    // unchanged, so these extra categories render empty.
+    if(candles.length>1){
+      const step=candles[candles.length-1].t-candles[candles.length-2].t;
+      const lastT=candles[candles.length-1].t;
+      const pad=Math.max(20,Math.round(candles.length*0.12));
+      for(let i=1;i<=pad;i++) xs.push(String(lastT+i*step));
+    }
     const closes=candles.map(c=>c.c);
     const kdata=candles.map(c=>[c.o,c.c,c.l,c.h]);
     const lineData=candles.map(c=>c.c);
