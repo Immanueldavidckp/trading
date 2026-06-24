@@ -23,7 +23,10 @@
   body{background:radial-gradient(ellipse at top,rgba(94,142,255,0.05),transparent 50%),var(--bg);
     color:var(--text);font-family:'Inter',system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;overflow-x:hidden}
   .app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
-  .app.nosidebar{grid-template-columns:0 1fr}
+  /* collapsed: a SINGLE 1fr column so .main fills the whole width
+     (with the hidden sidebar removed from the grid it must not land in a
+      leftover 240px track) */
+  .app.nosidebar{grid-template-columns:1fr}
   .app.nosidebar .sidebar{display:none}
   .side-toggle{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;
     width:30px;height:30px;font-size:15px;cursor:pointer;display:grid;place-items:center;flex:0 0 auto}
