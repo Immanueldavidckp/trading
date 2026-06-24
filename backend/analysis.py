@@ -12,6 +12,7 @@ suggestions(tsym)     — multi-timeframe directional call (1m/5m/15m/1h/4h/1d):
                         entry derived from the nearest SMC levels.
 """
 
+import json
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
@@ -21,6 +22,8 @@ from upstox_client import UpstoxClient
 
 IST = timezone(timedelta(hours=5, minutes=30))
 SUGGEST_TFS = ["1m", "5m", "15m", "1h", "4h", "1d"]
+_TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400,
+               "1d": 86400, "30m": 1800, "1w": 604800}
 
 
 def _ist_hms(received_at: str) -> str:
@@ -141,6 +144,82 @@ def analysis_ticks(tsym: str, limit: int = 400) -> dict:
         "last_agg": events[-1]["agg"] if events else "—",
         "zones": zones,
         "events": notable,
+    }
+
+
+# ── single-candle drill-down: every tick + its 5-level book ─────────────────
+
+def candle_ticks(tsym: str, interval: str, start_ms: int) -> dict:
+    """All ticks that fell inside ONE candle (interval starting at start_ms),
+    each with traded volume, aggressor, book imbalance and the full 5-level
+    order book. start_ms is the candle's millisecond epoch (UTC)."""
+    tsym = tsym.upper()
+    dur = _TF_SECONDS.get(interval, 60)
+    start_s = start_ms / 1000.0
+    start_iso = datetime.utcfromtimestamp(start_s).isoformat(timespec="milliseconds")
+    end_iso = datetime.utcfromtimestamp(start_s + dur).isoformat(timespec="milliseconds")
+    PH = _db.PLACE
+
+    conn = _db.connect()
+    try:
+        cur = conn.cursor()
+        # seed prev ltp/volume from the tick just before the window (for the
+        # first tick's delta + aggressor)
+        cur.execute(
+            f"SELECT ltp, volume FROM market_depth WHERE tsym={PH} AND received_at < {PH} "
+            f"ORDER BY id DESC LIMIT 1", [tsym, start_iso])
+        seed = cur.fetchone()
+        prev_ltp = float(seed[0]) if seed and seed[0] is not None else None
+        prev_vol = int(seed[1]) if seed and seed[1] is not None else None
+        cur.execute(
+            f"SELECT received_at, ltp, volume, oi, total_buy_qty, total_sell_qty, "
+            f"buy_depth, sell_depth FROM market_depth WHERE tsym={PH} "
+            f"AND received_at >= {PH} AND received_at < {PH} ORDER BY id ASC",
+            [tsym, start_iso, end_iso])
+        rows = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+
+    ticks = []
+    buy_vol = sell_vol = 0
+    o = h = l = c = None
+    for received_at, ltp, vol, oi, tbq, tsq, bd, sd in rows:
+        ltp = float(ltp) if ltp is not None else None
+        vol = int(vol) if vol is not None else None
+        vd = max(0, (vol - prev_vol)) if (vol is not None and prev_vol is not None) else 0
+        tot = (tbq or 0) + (tsq or 0)
+        imb = round((tbq or 0) / tot * 100, 1) if tot > 0 else 50.0
+        if prev_ltp is None or ltp == prev_ltp:
+            agg = ("BUY" if imb > 55 else "SELL" if imb < 45 else "FLAT") if prev_ltp is not None else "—"
+        else:
+            agg = "BUY" if ltp > prev_ltp else "SELL"
+        if agg == "BUY":
+            buy_vol += vd
+        elif agg == "SELL":
+            sell_vol += vd
+        if ltp is not None:
+            o = ltp if o is None else o
+            h = ltp if h is None else max(h, ltp)
+            l = ltp if l is None else min(l, ltp)
+            c = ltp
+        ticks.append({
+            "t": _ist_hms(received_at), "ltp": ltp, "vol": vd, "agg": agg, "imb": imb,
+            "oi": int(oi) if oi is not None else 0,
+            "tbq": int(tbq) if tbq is not None else 0,
+            "tsq": int(tsq) if tsq is not None else 0,
+            "buy": json.loads(bd or "[]"), "sell": json.loads(sd or "[]"),
+        })
+        prev_ltp, prev_vol = ltp, vol
+
+    total = buy_vol + sell_vol
+    return {
+        "ok": True, "tsym": tsym, "interval": interval, "start_ms": start_ms,
+        "n": len(ticks), "buy_vol": buy_vol, "sell_vol": sell_vol,
+        "buy_pct": round(buy_vol / total * 100, 1) if total else 50.0,
+        "controller": "BUYERS" if buy_vol > sell_vol else "SELLERS" if sell_vol > buy_vol else "BALANCED",
+        "ohlc": {"o": o, "h": h, "l": l, "c": c},
+        "ticks": ticks,
     }
 
 

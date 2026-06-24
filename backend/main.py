@@ -152,6 +152,14 @@ def analysis_ticks(tsym: str, limit: int = 400):
     return analysis.analysis_ticks(tsym, limit=max(20, min(int(limit), 2000)))
 
 
+@app.get("/api/analysis/candle")
+def analysis_candle(tsym: str, interval: str, start: int):
+    """Every tick inside ONE candle (interval starting at `start` ms epoch),
+    each with traded volume, aggressor, imbalance and full 5-level order book."""
+    import analysis
+    return analysis.candle_ticks(tsym, interval, int(start))
+
+
 @app.get("/api/suggestion")
 def api_suggestion(tsym: str):
     """Multi-timeframe directional call (1m/5m/15m/1h/4h/1d) with target + entry."""
