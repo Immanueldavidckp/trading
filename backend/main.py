@@ -952,10 +952,12 @@ def upstox_status():
 
 
 @app.get("/api/upstox/login_url")
-def upstox_login_url():
+def upstox_login_url(redirect: int = 1):
     """
-    Returns the URL the user must open in their browser to log in to Upstox.
-    After approving, the browser is redirected to /api/upstox/callback automatically.
+    Sends you to the Upstox login page. By default (redirect=1) the browser is
+    bounced straight to Upstox so you just log in — no JSON to copy. Pass
+    ?redirect=0 to get the raw URL as JSON instead.
+    After approving, Upstox redirects back to /api/upstox/callback automatically.
     """
     u = _upstox()
     if not u.has_creds():
@@ -964,6 +966,8 @@ def upstox_login_url():
             detail="UPSTOX_API_KEY and UPSTOX_API_SECRET are not set in backend/.env"
         )
     url = u.login_url()
+    if redirect:
+        return RedirectResponse(url)
     return {
         "login_url": url,
         "instruction": "Open this URL in your browser, log in with your Upstox account, then approve access.",
