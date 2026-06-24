@@ -31,6 +31,13 @@
   .side-toggle{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;
     width:30px;height:30px;font-size:15px;cursor:pointer;display:grid;place-items:center;flex:0 0 auto}
   .side-toggle:hover{background:var(--panel);border-color:var(--border-bright)}
+  .mode-switch{display:flex;gap:2px;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:3px}
+  .mode-btn{background:none;border:none;color:var(--text-3);font-family:inherit;font-size:12.5px;font-weight:700;
+    padding:6px 14px;border-radius:7px;cursor:pointer;transition:all .15s}
+  .mode-btn:hover{color:var(--text)}
+  .mode-btn.active{background:var(--accent,#5e8eff);color:#04101f}
+  .view-pad{padding:2px 0 14px}
+  .ana-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
 
   /* Sidebar */
   .sidebar{background:var(--bg-2);border-right:1px solid var(--border);padding:16px 12px;position:sticky;top:0;height:100vh;overflow-y:auto}
@@ -158,6 +165,11 @@
     <div class="topbar">
       <button class="side-toggle" id="sideToggle" onclick="toggleSidebar()" title="Hide / show watchlist">☰</button>
       <div class="crumb"><h1 id="hdrSym">—</h1><span class="sub" id="hdrName"></span></div>
+      <div class="mode-switch" id="modeSwitch">
+        <button class="mode-btn active" data-mode="normal" onclick="setMode('normal')">Normal</button>
+        <button class="mode-btn" data-mode="analysis" onclick="setMode('analysis')">Analysis</button>
+        <button class="mode-btn" data-mode="suggestion" onclick="setMode('suggestion')">Suggestion</button>
+      </div>
       <div class="ctrls">
         <div class="conn" id="conn"><span class="conn-dot"></span><span id="connText">connecting…</span></div>
         <button class="btn" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
@@ -174,6 +186,8 @@
       <div class="kpi"><span class="k">IST</span><span class="v mono dim" id="kpiTs" style="font-size:13px">—</span></div>
     </div>
 
+    <!-- ===================== NORMAL VIEW ===================== -->
+    <div id="normalView">
     <!-- PRO CHART -->
     <div class="chart-card">
       <div class="chart-toolbar">
@@ -318,6 +332,42 @@
           </div>
         </div>
         <div class="book-info" id="bookInfo">Mid: — · Spread: — · Microprice: —</div>
+      </div>
+    </div>
+    </div><!-- /normalView -->
+
+    <!-- ===================== ANALYSIS VIEW ===================== -->
+    <div id="analysisView" class="view-pad" style="display:none">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px">
+        <div class="ana-card"><div class="kpi-label">In control</div><div id="anController" style="font-size:22px;font-weight:800">—</div><div class="dim" id="anLastAgg" style="font-size:11px">last tick —</div></div>
+        <div class="ana-card"><div class="kpi-label">Buy volume (aggressor)</div><div id="anBuyVol" class="green" style="font-size:20px;font-weight:800;font-family:monospace">—</div></div>
+        <div class="ana-card"><div class="kpi-label">Sell volume (aggressor)</div><div id="anSellVol" class="red" style="font-size:20px;font-weight:800;font-family:monospace">—</div></div>
+        <div class="ana-card"><div class="kpi-label">Buy / Sell pressure</div>
+          <div style="height:12px;border-radius:6px;overflow:hidden;background:var(--red-bg);display:flex;margin-top:6px">
+            <div id="anPressureBar" style="height:100%;width:50%;background:var(--green);transition:width .3s"></div></div>
+          <div class="dim" id="anBuyPct" style="font-size:11px;margin-top:4px">—</div></div>
+      </div>
+      <div class="ana-card">
+        <div class="panel-title" style="margin-bottom:4px">Tick-by-tick — why price moved here</div>
+        <div class="panel-sub" style="margin-bottom:10px">Each notable tick: aggressor (buyer/seller), traded volume, order-book imbalance, and the SMC zone (FVG / Order Block) price reacted at.</div>
+        <div class="scroll" style="max-height:480px;overflow:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="text-align:left;color:var(--text-3)">
+              <th style="padding:6px 8px">Time</th><th>Price</th><th>Aggressor</th><th>Vol</th><th>Book imb.</th><th>SMC zone — the "why"</th></tr></thead>
+            <tbody id="anTickBody"><tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-3)">loading ticks…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== SUGGESTION VIEW ===================== -->
+    <div id="suggestionView" class="view-pad" style="display:none">
+      <div class="ana-card" style="margin-bottom:12px">
+        <div class="panel-title">Where is price heading? — multi-timeframe call</div>
+        <div class="panel-sub">SMC trend + next move + expected target and a pullback entry, per timeframe. Align lower TFs with the higher-TF direction.</div>
+      </div>
+      <div id="suggestionGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div class="dim" style="padding:20px">loading…</div>
       </div>
     </div>
 
@@ -671,6 +721,78 @@ function toggleSidebar(){
   document.querySelector('.app').classList.toggle('nosidebar');
   // the main pane resized — let ECharts recompute its width
   setTimeout(()=>chart.resize(), 30);
+}
+
+/* ---------- Mode switch: Normal / Analysis / Suggestion ---------- */
+let currentMode='normal';
+function setMode(m){
+  currentMode=m;
+  document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===m));
+  document.getElementById('normalView').style.display    = m==='normal'?'':'none';
+  document.getElementById('analysisView').style.display  = m==='analysis'?'':'none';
+  document.getElementById('suggestionView').style.display= m==='suggestion'?'':'none';
+  if(m==='normal') setTimeout(()=>chart.resize(),30);
+  else if(m==='analysis') loadAnalysisMode();
+  else if(m==='suggestion') loadSuggestionMode();
+}
+
+async function loadAnalysisMode(){
+  if(!active) return;
+  const body=document.getElementById('anTickBody');
+  body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-3)">loading ticks…</td></tr>';
+  try{
+    const r=await fetch(`/api/analysis/ticks?tsym=${encodeURIComponent(active)}&limit=600`);
+    const d=await r.json();
+    if(!d.ok){ body.innerHTML=`<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-3)">${d.error||'no tick data yet'}</td></tr>`; return; }
+    const ctl=document.getElementById('anController');
+    ctl.textContent=d.controller; ctl.className=d.controller==='BUYERS'?'green':d.controller==='SELLERS'?'red':'';
+    document.getElementById('anLastAgg').textContent='last tick '+d.last_agg+' · '+d.ticks+' ticks';
+    document.getElementById('anBuyVol').textContent=fmtCompact(d.buy_vol);
+    document.getElementById('anSellVol').textContent=fmtCompact(d.sell_vol);
+    document.getElementById('anPressureBar').style.width=d.buy_pct+'%';
+    document.getElementById('anBuyPct').textContent=d.buy_pct+'% buy / '+(100-d.buy_pct).toFixed(1)+'% sell';
+    const rows=(d.events||[]).slice().reverse();   // newest first
+    body.innerHTML = rows.length ? rows.map(e=>{
+      const aggCol=e.agg==='BUY'?'var(--green)':e.agg==='SELL'?'var(--red)':'var(--text-3)';
+      const zCol=e.zone&&e.zone.includes('bull')?'var(--green)':e.zone&&e.zone.includes('bear')?'var(--red)':'var(--text-2)';
+      return `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:5px 8px" class="mono dim">${e.t}</td>
+        <td class="mono">${fmtNum(e.ltp)}</td>
+        <td style="color:${aggCol};font-weight:700">${e.agg}${e.flip?' ⚡':''}</td>
+        <td class="mono">${e.vol?fmtCompact(e.vol):'·'}</td>
+        <td class="mono dim">${e.imb}%</td>
+        <td style="color:${zCol};font-weight:${e.zone?600:400}">${e.zone||'—'}</td></tr>`;
+    }).join('') : '<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-3)">no notable ticks recorded</td></tr>';
+  }catch(e){ body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--red)">error loading analysis</td></tr>'; }
+}
+
+async function loadSuggestionMode(){
+  if(!active) return;
+  const grid=document.getElementById('suggestionGrid');
+  grid.innerHTML='<div class="dim" style="padding:20px">analysing all timeframes…</div>';
+  try{
+    const r=await fetch(`/api/suggestion?tsym=${encodeURIComponent(active)}`);
+    const d=await r.json();
+    const cards=(d.suggestions||[]).map(s=>{
+      if(!s.ok) return `<div class="ana-card"><div style="font-size:16px;font-weight:800">${s.interval}</div><div class="dim">no data</div></div>`;
+      const dirCol=s.direction==='UP'?'var(--green)':s.direction==='DOWN'?'var(--red)':'var(--yellow)';
+      const arrow=s.direction==='UP'?'▲':s.direction==='DOWN'?'▼':'↔';
+      return `<div class="ana-card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:17px;font-weight:800">${s.interval}</div>
+          <div style="color:${dirCol};font-weight:800;font-size:14px">${arrow} ${s.direction}</div></div>
+        <div class="dim" style="font-size:11px;margin:5px 0 9px">trend <b style="color:${dirCol}">${(s.trend||'').toUpperCase()}</b> · H/L ${s.hl} · ${s.zone||''}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-family:monospace;font-size:12px">
+          <div><span class="dim">Now</span><br><b>${fmtNum(s.last_price)}</b></div>
+          <div><span class="dim">Target</span><br><b style="color:${dirCol}">${s.target!=null?fmtNum(s.target):'—'}</b></div>
+          <div><span class="dim">Entry (pullback)</span><br><b>${s.entry!=null?fmtNum(s.entry):'—'}</b></div>
+          <div><span class="dim">Next move</span><br><b style="font-size:11px">${s.next_move||'—'}</b></div>
+        </div>
+        <div class="dim" style="font-size:10.5px;margin-top:9px;line-height:1.45">${s.rationale||''}</div>
+      </div>`;
+    }).join('');
+    grid.innerHTML=cards||'<div class="dim" style="padding:20px">no data</div>';
+  }catch(e){ grid.innerHTML='<div style="padding:20px;color:var(--red)">error loading suggestions</div>'; }
 }
 function toggleLogScale(){ logScale=!logScale; document.getElementById('logBtn').textContent='Log scale: '+(logScale?'on':'off'); rebuildChart(); }
 
@@ -1054,6 +1176,9 @@ async function loadChart(refresh){
   loadAnalysis();
   loadSMC();
   pollDepth();   // refresh the 5-level order book immediately for this symbol
+  // keep the active mode view in sync with the selected symbol
+  if(currentMode==='analysis') loadAnalysisMode();
+  else if(currentMode==='suggestion') loadSuggestionMode();
 }
 
 function refreshUpstox(){
