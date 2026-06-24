@@ -92,7 +92,7 @@
   .chart-tools select{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:4px 8px;font-size:11.5px;outline:none;font-family:inherit}
   .ohlc-readout{display:flex;gap:13px;padding:8px 16px;font-family:'JetBrains Mono',monospace;font-size:12px;border-bottom:1px solid var(--border);background:var(--bg-2);flex-wrap:wrap;min-height:35px;align-items:center}
   .ohlc-readout span b{font-weight:600}
-  #proChart{height:720px;width:100%}
+  #proChart{height:720px;width:100%;touch-action:none}  /* touch-action:none → JS gets touch gestures (no page scroll/zoom) */
   .ind-bar{display:flex;align-items:center;gap:6px;padding:8px 16px;border-bottom:1px solid var(--border);background:var(--bg-2);flex-wrap:wrap}
   .ind-label{font-size:10px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-right:2px}
   .ind-chip{background:var(--panel-2);border:1px solid var(--border);color:var(--text-3);border-radius:7px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace;transition:.12s}
@@ -482,8 +482,11 @@ function buildChartOption(){
     // Price-axis: SHIFT+wheel zooms; left-drag inside the chart pans
     // vertically (combined with the x-axis dataZoom above this gives full
     // 2D pan — left-click & drag to move the chart anywhere).
+    // y-axis: shift+wheel zooms price. Vertical drag-pan is handled by the
+    // custom pointer handler below (ECharts y-drag was unreliable), so disable
+    // moveOnMouseMove here to avoid double-panning.
     {type:'inside',yAxisIndex:0,filterMode:'none',zoomOnMouseWheel:'shift',
-     moveOnMouseMove:true,moveOnMouseWheel:false,preventDefaultMouseMove:true}
+     moveOnMouseMove:false,moveOnMouseWheel:false}
   ];
 
   const series=[
@@ -567,86 +570,93 @@ window.addEventListener('resize',()=>chart.resize());
 /* Drag the RIGHT price-axis labels vertically → stretch/compress price.
    Drag the BOTTOM time-axis labels horizontally → stretch/compress time.
    The hit zones avoid the dataZoom slider that lives in the bottom ~28px. */
+/* Pointer-based chart interaction — works for BOTH mouse and touch.
+   · right price-axis strip  → drag vertical = stretch/compress price
+   · bottom time-axis strip  → drag horizontal = stretch/compress time
+   · anywhere else (body)    → drag = pan. ECharts handles the horizontal pan;
+                               this handler adds the VERTICAL (price) pan so you
+                               can move the chart up/down too.
+   Two-finger gestures are ignored here so ECharts can pinch-zoom on mobile. */
+function _setYRange(mn,mx){
+  if(!(mx>mn)) return;
+  chart.setOption({yAxis:[{gridIndex:0,scale:true,position:'right',min:mn,max:mx,
+    axisLabel:{color:'#9ba6b8',fontFamily:'JetBrains Mono',fontSize:10},
+    splitLine:{lineStyle:{color:'rgba(35,42,56,0.5)'}},axisLine:{show:false}}]});
+}
 (function attachAxisDrag(){
   const el=document.getElementById('proChart');
-  let mode=null, sx=0, sy=0, startSpan=0, startMin=null, startMax=null,
-      startAnchor=null, manualY=false;
+  const active=new Set();
+  let mode=null, sx=0, sy=0;
+  let startSpan=0, startMin=null, startMax=null, startAnchor=null, manualY=false;
+  let panY=null, plotH=1;
 
-  // Right strip = the rightmost 56px where ECharts paints price labels.
-  // Bottom strip = the bottom 36px where the x-axis labels sit. The dataZoom
-  // slider is now at the TOP of the chart so the bottom is unobstructed.
   function hit(e){
     const r=el.getBoundingClientRect();
     const x=e.clientX-r.left, y=e.clientY-r.top;
-    // skip the top area where the slider lives (top 30px)
-    if(y<30) return null;
-    if(x>=r.width-58) return 'price';
-    if(y>=r.height-36 && x<r.width-58) return 'time';
-    return null;
+    if(y<30) return null;                       // top strip = zoom slider
+    if(x>=r.width-58) return 'price';            // right price-axis strip
+    if(y>=r.height-36 && x<r.width-58) return 'time';  // bottom time-axis strip
+    return 'body';
   }
+  function yExt(){ try{ return chart.getModel().getComponent('yAxis',0).axis.scale.getExtent(); }catch(_){ return [0,1]; } }
+  function plotSize(){ try{ const g=chart.getModel().getComponent('grid',0).coordinateSystem.getRect(); return g.height||1; }catch(_){ return el.clientHeight*0.6||1; } }
   function setCursor(c){ el.style.cursor=c||''; }
 
-  // Hover feedback — change cursor only when over a drag strip.
-  el.addEventListener('mousemove',(e)=>{
-    if(mode) return;
-    const h=hit(e);
-    setCursor(h==='price'?'ns-resize':h==='time'?'ew-resize':'');
-  });
-  el.addEventListener('mouseleave',()=>{ if(!mode) setCursor(''); });
-
-  el.addEventListener('mousedown',(e)=>{
+  el.addEventListener('pointerdown',(e)=>{
+    active.add(e.pointerId);
+    if(active.size>1){ mode=null; setCursor(''); return; }   // 2 fingers → ECharts pinch
     const h=hit(e); if(!h) return;
     mode=h; sx=e.clientX; sy=e.clientY;
-    setCursor(h==='price'?'ns-resize':'ew-resize');
-    if(mode==='time'){ startSpan=Math.max(0.5, lastZoom.end-lastZoom.start); }
-    if(mode==='price'){
-      const ext=chart.getModel().getComponent('yAxis',0).axis.scale.getExtent();
-      startMin=ext[0]; startMax=ext[1];
-      // Anchor the scale on the current price so the candles stay where they
-      // are visually — only the spread of the price axis changes around them.
-      startAnchor=(candles.length && candles[candles.length-1].c!=null)
-        ? candles[candles.length-1].c
-        : (startMin+startMax)/2;
+    if(mode==='time'){ startSpan=Math.max(0.5,lastZoom.end-lastZoom.start); setCursor('ew-resize'); e.preventDefault(); }
+    else if(mode==='price'){
+      const ext=yExt(); startMin=ext[0]; startMax=ext[1];
+      startAnchor=(candles.length&&candles[candles.length-1].c!=null)?candles[candles.length-1].c:(startMin+startMax)/2;
+      setCursor('ns-resize'); e.preventDefault();
+    } else { // body — vertical pan (ECharts does the horizontal)
+      const ext=yExt(); panY=[ext[0],ext[1]]; plotH=plotSize(); setCursor('grabbing');
     }
-    e.preventDefault();
   });
 
-  window.addEventListener('mousemove',(e)=>{
-    if(!mode) return;
+  window.addEventListener('pointermove',(e)=>{
+    if(!mode){
+      if(active.size===0){ const h=hit(e); setCursor(h==='price'?'ns-resize':h==='time'?'ew-resize':h==='body'?'grab':''); }
+      return;
+    }
+    if(active.size>1) return;
+    const dx=e.clientX-sx, dy=e.clientY-sy;
     if(mode==='time'){
-      // drag RIGHT = compress (zoom in), drag LEFT = expand (zoom out).
-      // Linear-ish; 200 px = 2× change.
-      const dx=e.clientX-sx;
-      const factor=Math.max(0.05, Math.min(20, 1 - dx/200));
-      let span=Math.min(100, Math.max(0.5, startSpan*factor));
+      e.preventDefault();
+      const factor=Math.max(0.05,Math.min(20,1-dx/200));
+      let span=Math.min(100,Math.max(0.5,startSpan*factor));
       const c=(lastZoom.start+lastZoom.end)/2;
-      let s=Math.max(0, c-span/2), en=Math.min(100, c+span/2);
+      let s=Math.max(0,c-span/2), en=Math.min(100,c+span/2);
       if(en-s<0.5) en=s+0.5;
       lastZoom={start:s,end:en};
       chart.dispatchAction({type:'dataZoom',start:s,end:en});
     } else if(mode==='price'){
-      // drag DOWN = expand price range (candles look smaller), drag UP =
-      // compress (candles look bigger). The anchor (last close) keeps its
-      // vertical pixel position so the chart doesn't shift up or down.
-      const dy=e.clientY-sy;
-      const factor=Math.max(0.05, Math.min(20, 1 + dy/200));
+      e.preventDefault();
+      const factor=Math.max(0.05,Math.min(20,1+dy/200));
       const a=startAnchor;
-      const newMin=a - (a-startMin)*factor;
-      const newMax=a + (startMax-a)*factor;
-      if(newMax-newMin<1e-6) return;
-      manualY=true;
-      chart.setOption({yAxis:[{gridIndex:0,scale:true,position:'right',
-        min:newMin,max:newMax,
-        axisLabel:{color:'#9ba6b8',fontFamily:'JetBrains Mono',fontSize:10},
-        splitLine:{lineStyle:{color:'rgba(35,42,56,0.5)'}},axisLine:{show:false}}]});
+      const mn=a-(a-startMin)*factor, mx=a+(startMax-a)*factor;
+      if(mx-mn<1e-6) return;
+      manualY=true; _setYRange(mn,mx);
+    } else { // body: shift the price window by the vertical drag (ECharts pans x)
+      const rng=panY[1]-panY[0];
+      const shift=(dy/plotH)*rng;       // drag DOWN → show higher prices
+      manualY=true; _setYRange(panY[0]+shift, panY[1]+shift);
     }
   });
-  window.addEventListener('mouseup',()=>{ if(!mode) return; mode=null; setCursor(''); });
 
-  // Double-click price strip → release manual price scale (back to auto-fit).
+  function end(e){ active.delete(e.pointerId); if(active.size===0){ mode=null; setCursor(''); } }
+  window.addEventListener('pointerup',end);
+  window.addEventListener('pointercancel',end);
+  el.addEventListener('pointerleave',()=>{ if(!mode) setCursor(''); });
+
+  // Double-click / double-tap the price strip → release manual scale (auto-fit).
   el.addEventListener('dblclick',(e)=>{
-    if(hit(e)==='price' && manualY){ manualY=false; rebuildChart(); }
-    else if(hit(e)==='time'){ resetZoom(); }
+    const h=hit(e);
+    if(h==='price' && manualY){ manualY=false; rebuildChart(); }
+    else if(h==='time'){ resetZoom(); }
   });
 })();
 
