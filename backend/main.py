@@ -57,6 +57,21 @@ def startup_event():
         print(f"Upstox init failed: {e}")
         return
 
+    # If the daily token has expired, try the automated TOTP login (no manual
+    # OTP). Silently skips if the auto-login credentials aren't configured.
+    if not upstox.access_token:
+        try:
+            import upstox_autologin
+            if upstox_autologin.configured():
+                res = upstox_autologin.get_token()
+                if res.get("ok"):
+                    upstox._save_token(res["access_token"])
+                    print(f"Upstox auto-login OK as {res.get('user')}")
+                else:
+                    print(f"Upstox auto-login failed: {res.get('error')}")
+        except Exception as e:
+            print(f"Upstox auto-login error: {e}")
+
     # Auto-start the Upstox real-time feed (full-quote poll -> price_changes +
     # market_depth). Replaces the old Yahoo poller as the single data source.
     try:
@@ -497,6 +512,26 @@ def upstox_login_url(redirect: int = 1):
         "login_url": url,
         "instruction": "Open this URL in your browser, log in with your Upstox account, then approve access.",
     }
+
+
+@app.post("/api/upstox/autologin")
+@app.get("/api/upstox/autologin")
+def upstox_do_autologin():
+    """Run the automated TOTP login and save a fresh token. Called by the daily
+    cron (and on startup). Returns the new login status."""
+    import upstox_autologin
+    if not upstox_autologin.configured():
+        return {"ok": False, "error": "auto-login not configured (set UPSTOX_USERNAME/PASSWORD/PIN_CODE/TOTP_SECRET in .env)"}
+    res = upstox_autologin.get_token()
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error")}
+    u = _upstox()
+    u._save_token(res["access_token"])
+    global feed
+    if feed is None:
+        feed = UpstoxQuoteFeed(u, interval_sec=1.0)
+        feed.start()
+    return {"ok": True, "user": res.get("user"), "logged_in": True}
 
 
 @app.get("/api/upstox/callback")
