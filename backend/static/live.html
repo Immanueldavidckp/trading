@@ -387,8 +387,15 @@
     <!-- ===================== SUGGESTION VIEW ===================== -->
     <div id="suggestionView" class="view-pad" style="display:none">
       <div class="ana-card" style="margin-bottom:12px">
-        <div class="panel-title">Where is price heading? — multi-timeframe call</div>
-        <div class="panel-sub">SMC trend + next move + expected target and a pullback entry, per timeframe. Align lower TFs with the higher-TF direction.</div>
+        <div class="panel-title">FVG trade plans — backtested per timeframe</div>
+        <div class="panel-sub">For the freshest unmitigated Fair Value Gap on each timeframe: entry zone, stop, and a <b>probability ladder</b> — the historical chance price reaches each profit target <b>before</b> the stop, plus the typical time. Every number is from a look-ahead-free backtest of this exact rule on your stored candles. Hit-rates are honest (conservative), not optimistic.</div>
+      </div>
+      <div id="fvgPlanList" style="display:flex;flex-direction:column;gap:12px">
+        <div class="dim" style="padding:20px">backtesting all timeframes…</div>
+      </div>
+      <div class="ana-card" style="margin:18px 0 10px">
+        <div class="panel-title">Directional bias — multi-timeframe SMC call</div>
+        <div class="panel-sub">Trend + next move per timeframe — context for the plans above.</div>
       </div>
       <div id="suggestionGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
         <div class="dim" style="padding:20px">loading…</div>
@@ -856,10 +863,63 @@ function toggleTickDepth(i){
   row.style.display='';
 }
 
+function fmtHit(v){ return v==null?'<span class="dim">n/a</span>':(v*100).toFixed(0)+'%'; }
+function hitColor(v){ return v==null?'var(--text-3)':v>=0.5?'var(--green)':v>=0.33?'var(--yellow)':'var(--red)'; }
+function renderFvgPlan(p){
+  const tf=p.interval;
+  if(!p.setup){
+    const reason={insufficient_history:'not enough candle history',no_unmitigated_aligned_fvg:'no fresh (unmitigated) FVG right now',degenerate_gap:'gap too small to trade'}[p.reason]||p.reason;
+    return `<div class="ana-card"><div style="display:flex;gap:10px;align-items:center"><b style="font-size:16px">${tf}</b><span class="dim">— no setup: ${reason}</span></div></div>`;
+  }
+  const long=p.side==='LONG';
+  const sideCol=long?'var(--green)':'var(--red)';
+  const t=p.targets, ev=p.ev;
+  const rung=(k,lbl)=>{
+    const r=t[k]; if(!r) return '';
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:5px 8px"><b>${lbl}</b> <span class="dim">${r.rr}R</span></td>
+      <td class="mono">${fmtNum(r.price)}</td>
+      <td class="mono" style="color:${sideCol}">+${r.profit_per_share}/sh</td>
+      <td class="mono" style="color:${hitColor(r.hit_rate)};font-weight:700">${fmtHit(r.hit_rate)}${r.ci?` <span class="dim" style="font-weight:400">[${(r.ci[0]*100).toFixed(0)}-${(r.ci[1]*100).toFixed(0)}%]</span>`:''}</td>
+      <td class="mono dim">${r.eta_human||'—'}</td></tr>`;
+  };
+  const struct=t.structural?`<tr style="border-top:1px solid var(--border)"><td style="padding:5px 8px"><b>Struct</b></td><td class="mono">${fmtNum(t.structural.price)}</td><td class="mono" style="color:${sideCol}">+${(Math.abs(t.structural.price-p.entry.fill)).toFixed(2)}/sh</td><td class="dim">${t.structural.source}</td><td class="dim">—</td></tr>`:'';
+  const evCol=ev&&ev.ev_per_share>0?'var(--green)':'var(--red)';
+  const evTxt=ev?`<b style="color:${evCol}">${ev.ev_per_share>0?'+':''}${ev.ev_per_share}/sh</b> (${ev.ev_R>0?'+':''}${ev.ev_R}R)`:'<span class="dim">n/a (small sample)</span>';
+  const flag=p.accuracy&&p.accuracy.flag&&p.accuracy.flag!=='OK'?`<span style="color:var(--yellow);font-size:10px"> · ${p.accuracy.flag.replace('_',' ').toLowerCase()}</span>`:'';
+  return `<div class="ana-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <b style="font-size:18px">${tf}</b>
+        <span style="background:${long?'var(--green-bg)':'var(--red-bg)'};color:${sideCol};font-weight:800;padding:3px 10px;border-radius:6px;font-size:12px">${long?'▲ LONG':'▼ SHORT'}</span>
+        <span class="dim" style="font-size:11.5px">FVG ${fmtNum(p.fvg.bottom)}–${fmtNum(p.fvg.top)} (${p.fvg.gap_pct}%)</span>
+      </div>
+      <div class="dim" style="font-size:11.5px">Expectancy/share: ${evTxt}${flag}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,auto) 1fr;gap:14px;align-items:center;margin-bottom:8px;font-family:monospace;font-size:12.5px">
+      <div><span class="dim">Entry zone</span><br><b style="color:${sideCol}">${fmtNum(p.entry.range[0])} – ${fmtNum(p.entry.range[1])}</b> <span class="dim">@${fmtNum(p.entry.fill)}</span></div>
+      <div><span class="dim">Stop</span><br><b style="color:var(--red)">${fmtNum(p.stop)}</b></div>
+      <div><span class="dim">Risk/share</span><br><b>${p.risk_per_share}</b></div>
+      <div></div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="text-align:left;color:var(--text-3)"><th style="padding:4px 8px">Target</th><th>Price</th><th>Profit</th><th>Chance to hit (before stop)</th><th>Typical time</th></tr></thead>
+      <tbody>${rung('T1','T1')}${rung('T2','T2')}${rung('T3','T3')}${struct}</tbody>
+    </table>
+    <div class="dim" style="font-size:10px;margin-top:8px;line-height:1.4">${p.disclaimer||''}</div>
+  </div>`;
+}
+
 async function loadSuggestionMode(){
   if(!active) return;
   const grid=document.getElementById('suggestionGrid');
-  grid.innerHTML='<div class="dim" style="padding:20px">analysing all timeframes…</div>';
+  const plist=document.getElementById('fvgPlanList');
+  plist.innerHTML='<div class="dim" style="padding:20px">backtesting all timeframes… (a few seconds)</div>';
+  grid.innerHTML='<div class="dim" style="padding:20px">analysing…</div>';
+  // FVG trade plans (the main content)
+  fetch(`/api/fvg_plan?tsym=${encodeURIComponent(active)}`).then(r=>r.json()).then(d=>{
+    plist.innerHTML=(d.plans||[]).map(renderFvgPlan).join('')||'<div class="dim" style="padding:20px">no plans</div>';
+  }).catch(e=>{ plist.innerHTML='<div style="padding:20px;color:var(--red)">error loading FVG plans</div>'; });
   try{
     const r=await fetch(`/api/suggestion?tsym=${encodeURIComponent(active)}`);
     const d=await r.json();
