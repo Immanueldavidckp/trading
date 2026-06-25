@@ -223,6 +223,22 @@ def candle_ticks(tsym: str, interval: str, start_ms: int) -> dict:
     }
 
 
+# ── FVG trade plans (backtested entry/target/time/win-rate per TF) ──────────
+
+_PLAN_TFS = [("1m", 60), ("5m", 300), ("15m", 900), ("1h", 3600), ("4h", 14400)]
+
+
+def fvg_plans(tsym: str) -> dict:
+    import fvg_trade_plan
+    out = []
+    for tf, secs in _PLAN_TFS:
+        candles = _candles(tsym, tf, limit=3000)
+        plan = fvg_trade_plan.fvg_trade_plan(candles, secs)
+        plan["interval"] = tf
+        out.append(plan)
+    return {"ok": True, "tsym": tsym.upper(), "plans": out}
+
+
 # ── multi-timeframe suggestion ──────────────────────────────────────────────
 
 def suggestions(tsym: str, intervals: Optional[list] = None) -> dict:

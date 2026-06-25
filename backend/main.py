@@ -182,6 +182,14 @@ def api_suggestion(tsym: str):
     return analysis.suggestions(tsym)
 
 
+@app.get("/api/fvg_plan")
+def api_fvg_plan(tsym: str):
+    """Backtested FVG trade plans per timeframe: entry/stop/target ranges,
+    profit, win-rate (Wilson CI), expected time-to-target, EV."""
+    import analysis
+    return analysis.fvg_plans(tsym)
+
+
 @app.get("/api/candles_db")
 def candles_db(tsym: str, tf: int = 60, limit: int = 500, day: Optional[str] = None, full: int = 0):
     """
