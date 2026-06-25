@@ -88,7 +88,12 @@ def _geometry(g: dict):
 
 # ── bias-free forward backtest ──────────────────────────────────────────────
 
-def _backtest(C: List[dict]) -> List[dict]:
+def _backtest(C: List[dict], rmult: float = None) -> List[dict]:
+    """Replay the FVG rule for a given target R-multiple. Entry/stop are
+    identical across R-multiples; only the target level changes — so each rung
+    of the ladder gets its own honest, separately-backtested win-rate."""
+    if rmult is None:
+        rmult = CFG["RMULT"]
     fvgs = _dedupe(detect_causal_fvgs(C))
     trades = []
     next_free = 0
@@ -96,7 +101,8 @@ def _backtest(C: List[dict]) -> List[dict]:
 
     for g in fvgs:
         d = g["dir"]
-        fill, stop, R1, target = _geometry(g)
+        fill, stop, R1, _ = _geometry(g)
+        target = fill + d * rmult * R1
         if R1 <= 0:
             continue
 
@@ -271,23 +277,33 @@ def fvg_trade_plan(candles: List[dict], bar_seconds: int) -> dict:
         return {"setup": False, "reason": "insufficient_history",
                 "n": len(candles or []), "tf_seconds": D}
 
-    stats = _summarize(_backtest(candles), len(candles))
+    # Backtest each rung of the ladder separately (1R / 2R / 3R) — same entry &
+    # stop, different target — so every profit level has its own honest win-rate.
+    stats_by_r = {m: _summarize(_backtest(candles, m), len(candles)) for m in (1.0, 2.0, 3.0)}
+    stats = stats_by_r[2.0]   # 2R is the frozen headline
+
     g = select_live_fvg(candles)
     if g is None:
         return {"setup": False, "reason": "no_unmitigated_aligned_fvg",
                 "tf_seconds": D, "accuracy": _accuracy_block(stats, D)}
 
     d = g["dir"]
-    fill, stop, R1, target = _geometry(g)
+    fill, stop, R1, _ = _geometry(g)
     if R1 <= 0:
         return {"setup": False, "reason": "degenerate_gap", "tf_seconds": D}
 
     def tp(mult):
+        s = stats_by_r[mult]
         price = fill + d * mult * R1
+        eta = s.get("_eta")
         return {"price": round(price, 2), "profit_per_share": round(abs(price - fill), 2),
                 "rr": round(mult, 2),
                 "range": [round(price - CFG["BETA_FRAC"] * g["size"], 2),
-                          round(price + CFG["BETA_FRAC"] * g["size"], 2)]}
+                          round(price + CFG["BETA_FRAC"] * g["size"], 2)],
+                # per-rung empirical hit-rate (probability price reaches THIS target before the stop)
+                "hit_rate": s.get("win_rate"), "ci": s.get("ci"), "n": s.get("n"),
+                "flag": s.get("flag"),
+                "eta_human": _humanize(eta["bars_p50"] * D) if eta else None}
 
     T1, T2, T3 = tp(1.0), tp(2.0), tp(3.0)
     struct = _structural_target(candles, d, fill)
@@ -311,7 +327,7 @@ def fvg_trade_plan(candles: List[dict], bar_seconds: int) -> dict:
         "risk_per_share": round(R1, 2),
         "targets": {"T1": T1, "T2": T2, "T3": T3, "structural": struct, "headline_rr": CFG["RMULT"]},
         "target_range": [T1["price"], round(target_hi, 2)],
-        "accuracy": acc,
+        "accuracy": acc,   # headline = 2R
         "ev": ev,
         "eta": _eta_block(stats, D),
         "disclaimer": _disclaimer(stats, bar_seconds),
