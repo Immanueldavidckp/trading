@@ -338,23 +338,47 @@
 
     <!-- ===================== ANALYSIS VIEW ===================== -->
     <div id="analysisView" class="view-pad" style="display:none">
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px">
-        <div class="ana-card"><div class="kpi-label">In control</div><div id="anController" style="font-size:22px;font-weight:800">—</div><div class="dim" id="anLastAgg" style="font-size:11px">last tick —</div></div>
-        <div class="ana-card"><div class="kpi-label">Buy volume (aggressor)</div><div id="anBuyVol" class="green" style="font-size:20px;font-weight:800;font-family:monospace">—</div></div>
-        <div class="ana-card"><div class="kpi-label">Sell volume (aggressor)</div><div id="anSellVol" class="red" style="font-size:20px;font-weight:800;font-family:monospace">—</div></div>
+      <!-- candle picker -->
+      <div class="ana-card" style="margin-bottom:12px;display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
+        <div>
+          <div class="kpi-label" style="margin-bottom:4px">Timeframe</div>
+          <div class="tf-group" id="anTfGroup">
+            <button class="tf-btn active" data-iv="1m">1m</button>
+            <button class="tf-btn" data-iv="5m">5m</button>
+            <button class="tf-btn" data-iv="15m">15m</button>
+            <button class="tf-btn" data-iv="1h">1h</button>
+            <button class="tf-btn" data-iv="4h">4h</button>
+            <button class="tf-btn" data-iv="1d">1d</button>
+          </div>
+        </div>
+        <div style="flex:1;min-width:220px">
+          <div class="kpi-label" style="margin-bottom:4px">Candle (only candles with recorded ticks)</div>
+          <select id="anCandleSel" onchange="loadCandleTicks()" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-family:'JetBrains Mono',monospace;font-size:12px;outline:none"></select>
+        </div>
+        <button class="btn" onclick="populateCandles()">↻</button>
+      </div>
+
+      <!-- selected-candle summary -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px">
+        <div class="ana-card"><div class="kpi-label">Candle OHLC</div><div id="anCandleOHLC" class="mono" style="font-size:12px;margin-top:4px;line-height:1.6">—</div></div>
+        <div class="ana-card"><div class="kpi-label">Ticks in candle</div><div id="anTickN" style="font-size:22px;font-weight:800;font-family:monospace">—</div></div>
+        <div class="ana-card"><div class="kpi-label">In control</div><div id="anController" style="font-size:20px;font-weight:800">—</div></div>
+        <div class="ana-card"><div class="kpi-label">Buy / Sell vol</div><div style="font-size:13px;margin-top:4px;font-family:monospace"><span class="green" id="anBuyVol">—</span> / <span class="red" id="anSellVol">—</span></div></div>
         <div class="ana-card"><div class="kpi-label">Buy / Sell pressure</div>
           <div style="height:12px;border-radius:6px;overflow:hidden;background:var(--red-bg);display:flex;margin-top:6px">
             <div id="anPressureBar" style="height:100%;width:50%;background:var(--green);transition:width .3s"></div></div>
           <div class="dim" id="anBuyPct" style="font-size:11px;margin-top:4px">—</div></div>
       </div>
+
+      <!-- per-tick table; click a row to expand its 5-level book -->
       <div class="ana-card">
-        <div class="panel-title" style="margin-bottom:4px">Tick-by-tick — why price moved here</div>
-        <div class="panel-sub" style="margin-bottom:10px">Each notable tick: aggressor (buyer/seller), traded volume, order-book imbalance, and the SMC zone (FVG / Order Block) price reacted at.</div>
-        <div class="scroll" style="max-height:480px;overflow:auto">
+        <div class="panel-title" style="margin-bottom:4px">Every tick in this candle — click a tick to expand its 5-level order book</div>
+        <div class="panel-sub" style="margin-bottom:10px">Aggressor (buyer/seller), traded volume, book imbalance and OI per tick. ⚡ = control flipped.</div>
+        <div class="scroll" style="max-height:560px;overflow:auto">
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead><tr style="text-align:left;color:var(--text-3)">
-              <th style="padding:6px 8px">Time</th><th>Price</th><th>Aggressor</th><th>Vol</th><th>Book imb.</th><th>SMC zone — the "why"</th></tr></thead>
-            <tbody id="anTickBody"><tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-3)">loading ticks…</td></tr></tbody>
+              <th style="padding:6px 8px">#</th><th>Time</th><th>Price</th><th>Aggressor</th><th>Vol</th><th>Book imb.</th><th>Tot buy/sell</th><th></th></tr></thead>
+            <tbody id="anTickBody"><tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-3)">pick a candle above…</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -736,34 +760,100 @@ function setMode(m){
   else if(m==='suggestion') loadSuggestionMode();
 }
 
-async function loadAnalysisMode(){
+let anTfSel='1m';            // analysis-mode timeframe
+let anCandleData=null;       // last /api/analysis/candle response
+function loadAnalysisMode(){ populateCandles(); }
+
+// pick the analysis timeframe
+document.getElementById('anTfGroup').addEventListener('click',(e)=>{
+  const b=e.target.closest('.tf-btn'); if(!b) return;
+  document.querySelectorAll('#anTfGroup .tf-btn').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active'); anTfSel=b.dataset.iv;
+  populateCandles();
+});
+
+// fill the candle dropdown for the active symbol + timeframe (today's candles)
+async function populateCandles(){
   if(!active) return;
-  const body=document.getElementById('anTickBody');
-  body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-3)">loading ticks…</td></tr>';
+  const sel=document.getElementById('anCandleSel');
+  sel.innerHTML='<option>loading…</option>';
   try{
-    const r=await fetch(`/api/analysis/ticks?tsym=${encodeURIComponent(active)}&limit=600`);
-    const d=await r.json();
-    if(!d.ok){ body.innerHTML=`<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-3)">${d.error||'no tick data yet'}</td></tr>`; return; }
+    const r=await fetch(`/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${anTfSel}&limit=200&auto=1&today=1`);
+    const j=await r.json();
+    let cs=(j.candles||[]);
+    // keep only today's candles (that's where ticks were recorded), newest first
+    const todayStr=istDate(Date.now());
+    let today=cs.filter(c=>istDate(c.t)===todayStr);
+    if(!today.length) today=cs.slice(-30);   // fallback: last 30
+    today=today.slice().reverse();
+    sel.innerHTML=today.map(c=>{
+      const lbl=`${istDate(c.t)} ${istHMS(c.t,false).slice(0,5)}  ·  O${fmtNum(c.o)} H${fmtNum(c.h)} L${fmtNum(c.l)} C${fmtNum(c.c)}`;
+      return `<option value="${c.t}">${lbl}</option>`;
+    }).join('') || '<option value="">no candles</option>';
+    loadCandleTicks();
+  }catch(e){ sel.innerHTML='<option value="">error</option>'; }
+}
+
+async function loadCandleTicks(){
+  if(!active) return;
+  const sel=document.getElementById('anCandleSel');
+  const start=sel.value; if(!start) return;
+  const body=document.getElementById('anTickBody');
+  body.innerHTML='<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-3)">loading ticks…</td></tr>';
+  try{
+    const r=await fetch(`/api/analysis/candle?tsym=${encodeURIComponent(active)}&interval=${anTfSel}&start=${start}`);
+    const d=await r.json(); anCandleData=d;
+    if(!d.ok){ body.innerHTML=`<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-3)">${d.error||'no data'}</td></tr>`; return; }
+    const o=d.ohlc||{};
+    document.getElementById('anCandleOHLC').innerHTML=
+      `O <b>${o.o!=null?fmtNum(o.o):'—'}</b> · H <b class="green">${o.h!=null?fmtNum(o.h):'—'}</b><br>L <b class="red">${o.l!=null?fmtNum(o.l):'—'}</b> · C <b>${o.c!=null?fmtNum(o.c):'—'}</b>`;
+    document.getElementById('anTickN').textContent=d.n;
     const ctl=document.getElementById('anController');
     ctl.textContent=d.controller; ctl.className=d.controller==='BUYERS'?'green':d.controller==='SELLERS'?'red':'';
-    document.getElementById('anLastAgg').textContent='last tick '+d.last_agg+' · '+d.ticks+' ticks';
     document.getElementById('anBuyVol').textContent=fmtCompact(d.buy_vol);
     document.getElementById('anSellVol').textContent=fmtCompact(d.sell_vol);
     document.getElementById('anPressureBar').style.width=d.buy_pct+'%';
     document.getElementById('anBuyPct').textContent=d.buy_pct+'% buy / '+(100-d.buy_pct).toFixed(1)+'% sell';
-    const rows=(d.events||[]).slice().reverse();   // newest first
-    body.innerHTML = rows.length ? rows.map(e=>{
-      const aggCol=e.agg==='BUY'?'var(--green)':e.agg==='SELL'?'var(--red)':'var(--text-3)';
-      const zCol=e.zone&&e.zone.includes('bull')?'var(--green)':e.zone&&e.zone.includes('bear')?'var(--red)':'var(--text-2)';
-      return `<tr style="border-top:1px solid var(--border)">
-        <td style="padding:5px 8px" class="mono dim">${e.t}</td>
-        <td class="mono">${fmtNum(e.ltp)}</td>
-        <td style="color:${aggCol};font-weight:700">${e.agg}${e.flip?' ⚡':''}</td>
-        <td class="mono">${e.vol?fmtCompact(e.vol):'·'}</td>
-        <td class="mono dim">${e.imb}%</td>
-        <td style="color:${zCol};font-weight:${e.zone?600:400}">${e.zone||'—'}</td></tr>`;
-    }).join('') : '<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-3)">no notable ticks recorded</td></tr>';
-  }catch(e){ body.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--red)">error loading analysis</td></tr>'; }
+    if(!d.ticks.length){ body.innerHTML='<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-3)">no ticks recorded for this candle (feed wasn\'t running then)</td></tr>'; return; }
+    let prevAgg=null;
+    body.innerHTML=d.ticks.map((t,i)=>{
+      const aggCol=t.agg==='BUY'?'var(--green)':t.agg==='SELL'?'var(--red)':'var(--text-3)';
+      const flip=(t.agg==='BUY'||t.agg==='SELL')&&prevAgg&&t.agg!==prevAgg;
+      if(t.agg==='BUY'||t.agg==='SELL')prevAgg=t.agg;
+      return `<tr class="tickrow" onclick="toggleTickDepth(${i})" style="border-top:1px solid var(--border);cursor:pointer">
+        <td style="padding:5px 8px" class="dim mono">${i+1}</td>
+        <td class="mono dim">${t.t}</td>
+        <td class="mono">${fmtNum(t.ltp)}</td>
+        <td style="color:${aggCol};font-weight:700">${t.agg}${flip?' ⚡':''}</td>
+        <td class="mono">${t.vol?fmtCompact(t.vol):'·'}</td>
+        <td class="mono dim">${t.imb}%</td>
+        <td class="mono dim" style="font-size:11px">${fmtCompact(t.tbq)}/${fmtCompact(t.tsq)}</td>
+        <td class="dim" style="font-size:11px">▸ book</td></tr>
+        <tr id="depth-${i}" style="display:none"><td colspan="8" style="padding:0 8px 10px"></td></tr>`;
+    }).join('');
+  }catch(e){ body.innerHTML='<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--red)">error loading ticks</td></tr>'; }
+}
+
+// expand/collapse a tick's 5-level order book
+function toggleTickDepth(i){
+  const row=document.getElementById('depth-'+i); if(!row) return;
+  if(row.style.display!=='none'){ row.style.display='none'; return; }
+  const t=anCandleData.ticks[i];
+  const cell=row.querySelector('td');
+  const maxQ=Math.max(1,...(t.buy||[]).map(x=>x.quantity),...(t.sell||[]).map(x=>x.quantity));
+  const lvl=(side,x)=>{
+    const col=side==='ask'?'255,86,119':'0,214,143';
+    const w=Math.round(x.quantity/maxQ*100);
+    return `<div style="position:relative;display:flex;justify-content:space-between;padding:2px 8px;${side==='ask'?'flex-direction:row-reverse':''}">
+      <div style="position:absolute;top:0;${side==='ask'?'right':'left'}:0;height:100%;width:${w}%;background:rgba(${col},0.14)"></div>
+      <span style="position:relative;color:rgb(${col});font-weight:600">${fmtNum(x.price)}</span>
+      <span style="position:relative;color:var(--text-2)">${fmtCompact(x.quantity)}<span class="dim" style="font-size:9px"> ·${x.orders}</span></span></div>`;
+  };
+  const asks=(t.sell||[]).slice(0,5).reverse().map(x=>lvl('ask',x)).join('');
+  const bids=(t.buy||[]).slice(0,5).map(x=>lvl('bid',x)).join('');
+  cell.innerHTML=`<div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:11.5px;max-width:340px">
+    ${asks}<div style="text-align:center;padding:2px;border-block:1px dashed var(--border);color:var(--text-3);font-size:10px">5-level book @ ${t.t} · OI ${fmtCompact(t.oi)}</div>${bids}</div>`;
+  row.style.display='';
 }
 
 async function loadSuggestionMode(){
