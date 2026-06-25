@@ -387,8 +387,19 @@
     <!-- ===================== SUGGESTION VIEW ===================== -->
     <div id="suggestionView" class="view-pad" style="display:none">
       <div class="ana-card" style="margin-bottom:12px">
-        <div class="panel-title">FVG trade plans — backtested per timeframe</div>
-        <div class="panel-sub">For the freshest unmitigated Fair Value Gap on each timeframe: entry zone, stop, and a <b>probability ladder</b> — the historical chance price reaches each profit target <b>before</b> the stop, plus the typical time. Every number is from a look-ahead-free backtest of this exact rule on your stored candles. Hit-rates are honest (conservative), not optimistic.</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+          <div>
+            <div class="panel-title">FVG trade plans — backtested per timeframe</div>
+            <div class="panel-sub">For the freshest unmitigated Fair Value Gap on each timeframe: entry zone, stop, and the <b>chance of reaching your target profit before the stop</b> — from a look-ahead-free backtest of this exact rule on your stored candles. Honest, not optimistic.</div>
+          </div>
+          <div style="text-align:right">
+            <div class="kpi-label">Min target profit ₹</div>
+            <input id="minProfitInp" type="number" step="0.25" min="0" placeholder="auto (0.5%)"
+                   onchange="loadSuggestionMode()"
+                   style="width:120px;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-family:monospace;font-size:13px;text-align:right;margin-top:4px">
+            <div class="dim" style="font-size:10px;margin-top:3px">e.g. 1 = find a ₹1 move</div>
+          </div>
+        </div>
       </div>
       <div id="fvgPlanList" style="display:flex;flex-direction:column;gap:12px">
         <div class="dim" style="padding:20px">backtesting all timeframes…</div>
@@ -884,6 +895,22 @@ function renderFvgPlan(p){
       <td class="mono dim">${r.eta_human||'—'}</td></tr>`;
   };
   const struct=t.structural?`<tr style="border-top:1px solid var(--border)"><td style="padding:5px 8px"><b>Struct</b></td><td class="mono">${fmtNum(t.structural.price)}</td><td class="mono" style="color:${sideCol}">+${(Math.abs(t.structural.price-p.entry.fill)).toFixed(2)}/sh</td><td class="dim">${t.structural.source}</td><td class="dim">—</td></tr>`:'';
+  // the dynamic min-profit target (e.g. ₹1) — the headline the user asked for
+  const m=p.min_target;
+  let minBlock='';
+  if(m){
+    const mhr=m.hit_rate!=null?(m.hit_rate*100).toFixed(0)+'%':'n/a';
+    const mev=m.ev_per_share;
+    const mevCol=mev!=null&&mev>0?'var(--green)':'var(--red)';
+    const tight=p.risk_per_share<0.05?` <span style="color:var(--yellow)">⚠ stop ₹${p.risk_per_share} is tighter than typical slippage — real EV likely lower</span>`:'';
+    minBlock=`<div style="background:var(--panel-2);border:1px solid var(--border-bright);border-radius:9px;padding:9px 12px;margin-bottom:9px;display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-family:monospace;font-size:12.5px">
+      <span style="font-weight:800;color:${sideCol}">+₹${m.profit_per_share} target → ${fmtNum(m.price)}</span>
+      <span><span class="dim">chance</span> <b style="color:${hitColor(m.hit_rate)}">${mhr}</b>${m.ci?` <span class="dim">[${(m.ci[0]*100).toFixed(0)}-${(m.ci[1]*100).toFixed(0)}%]</span>`:''}</span>
+      <span><span class="dim">R:R</span> <b>${m.rr}</b></span>
+      <span><span class="dim">time</span> <b>${m.eta_human||'—'}</b></span>
+      <span><span class="dim">EV/sh</span> <b style="color:${mevCol}">${mev!=null?(mev>0?'+':'')+mev:'n/a'}</b></span>
+      <span class="dim">n=${m.n}</span>${tight}</div>`;
+  }
   const evCol=ev&&ev.ev_per_share>0?'var(--green)':'var(--red)';
   const evTxt=ev?`<b style="color:${evCol}">${ev.ev_per_share>0?'+':''}${ev.ev_per_share}/sh</b> (${ev.ev_R>0?'+':''}${ev.ev_R}R)`:'<span class="dim">n/a (small sample)</span>';
   const flag=p.accuracy&&p.accuracy.flag&&p.accuracy.flag!=='OK'?`<span style="color:var(--yellow);font-size:10px"> · ${p.accuracy.flag.replace('_',' ').toLowerCase()}</span>`:'';
@@ -894,8 +921,9 @@ function renderFvgPlan(p){
         <span style="background:${long?'var(--green-bg)':'var(--red-bg)'};color:${sideCol};font-weight:800;padding:3px 10px;border-radius:6px;font-size:12px">${long?'▲ LONG':'▼ SHORT'}</span>
         <span class="dim" style="font-size:11.5px">FVG ${fmtNum(p.fvg.bottom)}–${fmtNum(p.fvg.top)} (${p.fvg.gap_pct}%)</span>
       </div>
-      <div class="dim" style="font-size:11.5px">Expectancy/share: ${evTxt}${flag}</div>
+      <div class="dim" style="font-size:11.5px">2R expectancy/share: ${evTxt}${flag}</div>
     </div>
+    ${minBlock}
     <div style="display:grid;grid-template-columns:repeat(3,auto) 1fr;gap:14px;align-items:center;margin-bottom:8px;font-family:monospace;font-size:12.5px">
       <div><span class="dim">Entry zone</span><br><b style="color:${sideCol}">${fmtNum(p.entry.range[0])} – ${fmtNum(p.entry.range[1])}</b> <span class="dim">@${fmtNum(p.entry.fill)}</span></div>
       <div><span class="dim">Stop</span><br><b style="color:var(--red)">${fmtNum(p.stop)}</b></div>
@@ -916,8 +944,11 @@ async function loadSuggestionMode(){
   const plist=document.getElementById('fvgPlanList');
   plist.innerHTML='<div class="dim" style="padding:20px">backtesting all timeframes… (a few seconds)</div>';
   grid.innerHTML='<div class="dim" style="padding:20px">analysing…</div>';
-  // FVG trade plans (the main content)
-  fetch(`/api/fvg_plan?tsym=${encodeURIComponent(active)}`).then(r=>r.json()).then(d=>{
+  // FVG trade plans (the main content) — with the user's min target profit
+  const mp=parseFloat(document.getElementById('minProfitInp').value);
+  const mpq=(mp>0)?`&min_profit=${mp}`:'';
+  fetch(`/api/fvg_plan?tsym=${encodeURIComponent(active)}${mpq}`).then(r=>r.json()).then(d=>{
+    if(d.min_profit && !(mp>0)) document.getElementById('minProfitInp').placeholder='auto ₹'+d.min_profit;
     plist.innerHTML=(d.plans||[]).map(renderFvgPlan).join('')||'<div class="dim" style="padding:20px">no plans</div>';
   }).catch(e=>{ plist.innerHTML='<div style="padding:20px;color:var(--red)">error loading FVG plans</div>'; });
   try{
