@@ -6,9 +6,12 @@ token (SEBI rule). This uses the maintained `upstox-totp` package to perform
 the full login flow (mobile + password + PIN + TOTP) and return a fresh token,
 so the dashboard can stay live without a manual login each morning.
 
+Upstox login is passwordless — mobile + TOTP + PIN (the upstox-totp flow only
+calls otp/generate -> otp-totp/verify (TOTP) -> 2fa (PIN); the library's
+`password` field is never sent, so we just default it to the PIN).
+
 Credentials are read from env (set in backend/.env on the server, gitignored):
     UPSTOX_USERNAME      10-digit mobile number
-    UPSTOX_PASSWORD      login password
     UPSTOX_PIN_CODE      6-digit PIN
     UPSTOX_TOTP_SECRET   TOTP secret seed (base32)
 Client id/secret/redirect are reused from the existing UPSTOX_API_KEY /
@@ -17,9 +20,10 @@ UPSTOX_API_SECRET / UPSTOX_REDIRECT_URI.
 
 import os
 
-_REQUIRED = ["UPSTOX_USERNAME", "UPSTOX_PASSWORD", "UPSTOX_PIN_CODE",
-             "UPSTOX_TOTP_SECRET", "UPSTOX_CLIENT_ID", "UPSTOX_CLIENT_SECRET",
-             "UPSTOX_REDIRECT_URI"]
+# Only these are actually needed from the user. `password` is required by the
+# library's config model but never used in the TOTP flow, so we set it = PIN.
+_REQUIRED = ["UPSTOX_USERNAME", "UPSTOX_PIN_CODE", "UPSTOX_TOTP_SECRET",
+             "UPSTOX_CLIENT_ID", "UPSTOX_CLIENT_SECRET", "UPSTOX_REDIRECT_URI"]
 
 
 def configured() -> bool:
@@ -34,6 +38,9 @@ def _map_env():
         os.environ["UPSTOX_CLIENT_ID"] = os.environ.get("UPSTOX_API_KEY", "")
     if not os.environ.get("UPSTOX_CLIENT_SECRET"):
         os.environ["UPSTOX_CLIENT_SECRET"] = os.environ.get("UPSTOX_API_SECRET", "")
+    # password is unused by the TOTP flow but required by the lib's model — use PIN
+    if not os.environ.get("UPSTOX_PASSWORD"):
+        os.environ["UPSTOX_PASSWORD"] = os.environ.get("UPSTOX_PIN_CODE", "")
 
 
 def get_token() -> dict:
