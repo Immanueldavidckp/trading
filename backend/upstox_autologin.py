@@ -44,22 +44,51 @@ def _map_env():
 
 
 def get_token() -> dict:
-    """Return {ok, access_token, user} or {ok:False, error}."""
+    """Return {ok, access_token, user} or {ok:False, error}.
+
+    We drive the library's login flow up to the OAuth `code`, then do the final
+    token exchange ourselves. The library's high-level get_access_token() parses
+    the response into a model that REQUIRES `poa`/`is_active`, which Upstox
+    sometimes omits — that would raise even though the token was obtained.
+    """
     _map_env()
     missing = [k for k in _REQUIRED if not os.environ.get(k)]
     if missing:
         return {"ok": False, "error": "missing env vars: " + ", ".join(missing)}
     try:
         from upstox_totp import UpstoxTOTP
+        from urllib.parse import urlparse, parse_qs
+        import requests
     except Exception as e:
         return {"ok": False, "error": f"upstox-totp not installed ({e})"}
     try:
         upx = UpstoxTOTP()
-        resp = upx.app_token.get_access_token()
-        if getattr(resp, "success", False) and getattr(resp, "data", None):
-            return {"ok": True,
-                    "access_token": resp.data.access_token,
-                    "user": getattr(resp.data, "user_name", "") or getattr(resp.data, "user_id", "")}
-        return {"ok": False, "error": str(getattr(resp, "error", None) or "login failed")}
+        # full login: generate_otp -> validate_otp(TOTP) -> submit_pin(PIN) -> authorize
+        oauth = upx.app_token.oauth_authorization()
+        redirect_uri = getattr(getattr(oauth, "data", None), "redirectUri", None)
+        if not redirect_uri:
+            return {"ok": False, "error": "login ok but no redirect URI: " + str(oauth)[:200]}
+        codes = parse_qs(urlparse(redirect_uri).query).get("code")
+        if not codes:
+            return {"ok": False, "error": "no auth code in redirect"}
+        r = requests.post(
+            "https://api.upstox.com/v2/login/authorization/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Accept": "application/json"},
+            data={
+                "code": codes[0],
+                "client_id": os.environ["UPSTOX_CLIENT_ID"],
+                "client_secret": os.environ["UPSTOX_CLIENT_SECRET"],
+                "redirect_uri": os.environ["UPSTOX_REDIRECT_URI"],
+                "grant_type": "authorization_code",
+            },
+            timeout=15,
+        )
+        d = r.json()
+        token = d.get("access_token")
+        if token:
+            return {"ok": True, "access_token": token,
+                    "user": d.get("user_name") or d.get("user_id", "")}
+        return {"ok": False, "error": str(d)[:200]}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e)[:200]}
