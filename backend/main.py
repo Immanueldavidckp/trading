@@ -183,11 +183,14 @@ def api_suggestion(tsym: str):
 
 
 @app.get("/api/fvg_plan")
-def api_fvg_plan(tsym: str):
+def api_fvg_plan(tsym: str, min_profit: Optional[float] = None):
     """Backtested FVG trade plans per timeframe: entry/stop/target ranges,
-    profit, win-rate (Wilson CI), expected time-to-target, EV."""
+    profit, win-rate (Wilson CI), expected time-to-target, EV.
+    min_profit = the minimum target move in rupees (default 0.5% of price,
+    i.e. Rs.1 on a Rs.200 stock) — backtested for the chance of getting it."""
     import analysis
-    return analysis.fvg_plans(tsym)
+    mp = float(min_profit) if (min_profit is not None and min_profit > 0) else None
+    return analysis.fvg_plans(tsym, min_profit=mp)
 
 
 @app.get("/api/candles_db")

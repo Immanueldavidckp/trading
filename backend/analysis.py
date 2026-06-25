@@ -228,15 +228,18 @@ def candle_ticks(tsym: str, interval: str, start_ms: int) -> dict:
 _PLAN_TFS = [("1m", 60), ("5m", 300), ("15m", 900), ("1h", 3600), ("4h", 14400)]
 
 
-def fvg_plans(tsym: str) -> dict:
+def fvg_plans(tsym: str, min_profit: Optional[float] = None) -> dict:
     import fvg_trade_plan
     out = []
+    used_min = min_profit
     for tf, secs in _PLAN_TFS:
         candles = _candles(tsym, tf, limit=3000)
-        plan = fvg_trade_plan.fvg_trade_plan(candles, secs)
+        plan = fvg_trade_plan.fvg_trade_plan(candles, secs, min_profit=min_profit)
         plan["interval"] = tf
+        if used_min is None and plan.get("min_target"):
+            used_min = plan["min_target"]["profit_per_share"]
         out.append(plan)
-    return {"ok": True, "tsym": tsym.upper(), "plans": out}
+    return {"ok": True, "tsym": tsym.upper(), "min_profit": used_min, "plans": out}
 
 
 # ── multi-timeframe suggestion ──────────────────────────────────────────────

@@ -88,11 +88,12 @@ def _geometry(g: dict):
 
 # ── bias-free forward backtest ──────────────────────────────────────────────
 
-def _backtest(C: List[dict], rmult: float = None) -> List[dict]:
-    """Replay the FVG rule for a given target R-multiple. Entry/stop are
-    identical across R-multiples; only the target level changes — so each rung
-    of the ladder gets its own honest, separately-backtested win-rate."""
-    if rmult is None:
+def _backtest(C: List[dict], rmult: float = None, target_abs: float = None) -> List[dict]:
+    """Replay the FVG rule for a given target. Entry/stop are identical; only
+    the target level changes. Target is either an R-multiple (rmult) OR a fixed
+    rupee distance from entry (target_abs) — the latter answers 'what's the
+    chance of a >=Rs.X move before the stop'."""
+    if rmult is None and target_abs is None:
         rmult = CFG["RMULT"]
     fvgs = _dedupe(detect_causal_fvgs(C))
     trades = []
@@ -102,9 +103,9 @@ def _backtest(C: List[dict], rmult: float = None) -> List[dict]:
     for g in fvgs:
         d = g["dir"]
         fill, stop, R1, _ = _geometry(g)
-        target = fill + d * rmult * R1
         if R1 <= 0:
             continue
+        target = (fill + d * target_abs) if target_abs is not None else (fill + d * rmult * R1)
 
         # entry: earliest bar (after formation, after any open trade) whose
         # range crosses the fill price.
@@ -271,11 +272,14 @@ def _structural_target(C: List[dict], d: int, fill: float) -> Optional[dict]:
 
 # ── assembler ───────────────────────────────────────────────────────────────
 
-def fvg_trade_plan(candles: List[dict], bar_seconds: int) -> dict:
+def fvg_trade_plan(candles: List[dict], bar_seconds: int, min_profit: float = None) -> dict:
     D = bar_seconds
     if not candles or len(candles) < 30:
         return {"setup": False, "reason": "insufficient_history",
                 "n": len(candles or []), "tf_seconds": D}
+    # default minimum target move = 0.5% of price (= Rs.1 on a Rs.200 stock)
+    if min_profit is None:
+        min_profit = round(0.005 * candles[-1]["c"], 2)
 
     # Backtest each rung of the ladder separately (1R / 2R / 3R) — same entry &
     # stop, different target — so every profit level has its own honest win-rate.
@@ -309,6 +313,24 @@ def fvg_trade_plan(candles: List[dict], bar_seconds: int) -> dict:
     struct = _structural_target(candles, d, fill)
     target_hi = max(T3["price"], struct["price"]) if struct else T3["price"]
 
+    # ── the "minimum profit" target: a FIXED rupee move (e.g. Rs.1), backtested
+    # for the honest chance of getting it before the stop. This is the dynamic,
+    # price-scaled target the user wants (default 0.5% of price). ──
+    min_target = None
+    if min_profit and min_profit > 0:
+        ms = _summarize(_backtest(candles, target_abs=min_profit), len(candles))
+        mp = ms.get("win_rate")
+        eta = ms.get("_eta")
+        min_target = {
+            "profit_per_share": round(min_profit, 2),
+            "price": round(fill + d * min_profit, 2),
+            "rr": round(min_profit / R1, 2),
+            "hit_rate": mp, "ci": ms.get("ci"), "n": ms.get("n"), "flag": ms.get("flag"),
+            "fill_rate": ms.get("fill_rate"),
+            "eta_human": _humanize(eta["bars_p50"] * D) if eta else None,
+            "ev_per_share": round(mp * min_profit - (1 - mp) * R1, 2) if mp is not None else None,
+        }
+
     acc = _accuracy_block(stats, D)
     ev = None
     if acc.get("value") is not None:
@@ -326,6 +348,7 @@ def fvg_trade_plan(candles: List[dict], bar_seconds: int) -> dict:
         "stop": round(stop, 2),
         "risk_per_share": round(R1, 2),
         "targets": {"T1": T1, "T2": T2, "T3": T3, "structural": struct, "headline_rr": CFG["RMULT"]},
+        "min_target": min_target,   # the dynamic Rs.X-move target (backtested)
         "target_range": [T1["price"], round(target_hi, 2)],
         "accuracy": acc,   # headline = 2R
         "ev": ev,
