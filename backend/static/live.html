@@ -675,12 +675,14 @@ function _setYRange(mn,mx){
     axisLabel:{color:'#9ba6b8',fontFamily:'JetBrains Mono',fontSize:10},
     splitLine:{lineStyle:{color:'rgba(35,42,56,0.5)'}},axisLine:{show:false}}]});
 }
+// release any manual/locked price scale → price auto-fits the visible candles again
+function _resetYAuto(){ chart.setOption({yAxis:[{gridIndex:0,min:null,max:null}]}); }
 (function attachAxisDrag(){
   const el=document.getElementById('proChart');
   const active=new Set();
   let mode=null, sx=0, sy=0;
   let startSpan=0, startMin=null, startMax=null, startAnchor=null, manualY=false;
-  let panY=null, plotH=1;
+  let panY=null, plotH=1, timeLockY=null;
 
   function hit(e){
     const r=el.getBoundingClientRect();
@@ -699,7 +701,9 @@ function _setYRange(mn,mx){
     if(active.size>1){ mode=null; setCursor(''); return; }   // 2 fingers → ECharts pinch
     const h=hit(e); if(!h) return;
     mode=h; sx=e.clientX; sy=e.clientY;
-    if(mode==='time'){ startSpan=Math.max(0.5,lastZoom.end-lastZoom.start); setCursor('ew-resize'); e.preventDefault(); }
+    if(mode==='time'){ startSpan=Math.max(0.5,lastZoom.end-lastZoom.start);
+      // lock the current price range so stretching time only changes time
+      timeLockY=yExt(); manualY=true; setCursor('ew-resize'); e.preventDefault(); }
     else if(mode==='price'){
       const ext=yExt(); startMin=ext[0]; startMax=ext[1];
       startAnchor=(candles.length&&candles[candles.length-1].c!=null)?candles[candles.length-1].c:(startMin+startMax)/2;
@@ -725,6 +729,8 @@ function _setYRange(mn,mx){
       if(en-s<0.5) en=s+0.5;
       lastZoom={start:s,end:en};
       chart.dispatchAction({type:'dataZoom',start:s,end:en});
+      // re-pin the price scale after the time zoom so price stays put
+      if(timeLockY) _setYRange(timeLockY[0],timeLockY[1]);
     } else if(mode==='price'){
       e.preventDefault();
       // drag DOWN = zoom IN (finer intervals: 10/20/30 -> 5/10/15);
@@ -1346,6 +1352,7 @@ async function loadChart(refresh){
     fetchErr=j.fetch_error||null;
   }catch(e){ fetchErr='network error'; }
   zoomReset=true;            // show the full fetched range on a fresh load
+  _resetYAuto();             // release any locked price scale for the new data
   renderChart(true);
   if(!candles.length){
     ro.innerHTML = fetchErr
