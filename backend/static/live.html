@@ -682,7 +682,7 @@ function _resetYAuto(){ chart.setOption({yAxis:[{gridIndex:0,min:null,max:null}]
   const active=new Set();
   let mode=null, sx=0, sy=0;
   let startSpan=0, startMin=null, startMax=null, startAnchor=null, manualY=false;
-  let panY=null, plotH=1, timeLockY=null;
+  let panY=null, plotH=1;
 
   function hit(e){
     const r=el.getBoundingClientRect();
@@ -701,9 +701,7 @@ function _resetYAuto(){ chart.setOption({yAxis:[{gridIndex:0,min:null,max:null}]
     if(active.size>1){ mode=null; setCursor(''); return; }   // 2 fingers → ECharts pinch
     const h=hit(e); if(!h) return;
     mode=h; sx=e.clientX; sy=e.clientY;
-    if(mode==='time'){ startSpan=Math.max(0.5,lastZoom.end-lastZoom.start);
-      // lock the current price range so stretching time only changes time
-      timeLockY=yExt(); manualY=true; setCursor('ew-resize'); e.preventDefault(); }
+    if(mode==='time'){ startSpan=Math.max(0.5,lastZoom.end-lastZoom.start); setCursor('ew-resize'); e.preventDefault(); }
     else if(mode==='price'){
       const ext=yExt(); startMin=ext[0]; startMax=ext[1];
       startAnchor=(candles.length&&candles[candles.length-1].c!=null)?candles[candles.length-1].c:(startMin+startMax)/2;
@@ -728,9 +726,9 @@ function _resetYAuto(){ chart.setOption({yAxis:[{gridIndex:0,min:null,max:null}]
       let s=Math.max(0,c-span/2), en=Math.min(100,c+span/2);
       if(en-s<0.5) en=s+0.5;
       lastZoom={start:s,end:en};
-      chart.dispatchAction({type:'dataZoom',start:s,end:en});
-      // re-pin the price scale after the time zoom so price stays put
-      if(timeLockY) _setYRange(timeLockY[0],timeLockY[1]);
+      // dataZoomIndex:[0,1] = the x-axis inside + slider ONLY (not the y/price
+      // dataZoom at index 2) → stretching time never touches price.
+      chart.dispatchAction({type:'dataZoom',dataZoomIndex:[0,1],start:s,end:en});
     } else if(mode==='price'){
       e.preventDefault();
       // drag DOWN = zoom IN (finer intervals: 10/20/30 -> 5/10/15);
@@ -764,7 +762,7 @@ function _resetYAuto(){ chart.setOption({yAxis:[{gridIndex:0,min:null,max:null}]
 })();
 
 function rebuildChart(){ chart.setOption(buildChartOption(),true); renderChart(true); }
-function resetZoom(){ lastZoom={start:0,end:100}; chart.dispatchAction({type:'dataZoom',start:0,end:100}); }
+function resetZoom(){ lastZoom={start:0,end:100}; chart.dispatchAction({type:'dataZoom',dataZoomIndex:[0,1],start:0,end:100}); _resetYAuto(); }
 function toggleSidebar(){
   document.querySelector('.app').classList.toggle('nosidebar');
   // the main pane resized — let ECharts recompute its width
@@ -1307,7 +1305,7 @@ function renderChart(force){
     const axisData=[]; for(let i=0;i<nGrid;i++)axisData.push({data:xs});
     chart.setOption({xAxis:axisData,series:ser});
     if(zoomReset){ zoomReset=false; lastZoom={start:0,end:100};
-      chart.dispatchAction({type:'dataZoom',start:0,end:100}); }
+      chart.dispatchAction({type:'dataZoom',dataZoomIndex:[0,1],start:0,end:100}); }
     document.getElementById('ptCount').textContent=candles.length.toLocaleString();
     updateReadout(candles.length-1);
   }, force?0:280);
