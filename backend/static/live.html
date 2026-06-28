@@ -382,6 +382,29 @@
           </table>
         </div>
       </div>
+
+      <!-- ⇄ Compare two candles -->
+      <div class="ana-card" style="margin-top:14px">
+        <div class="panel-title" style="margin-bottom:4px">⇄ Compare two candles</div>
+        <div class="panel-sub" style="margin-bottom:12px">Pick any two candles — any time, any timeframe — to compare their tick stats side by side.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <div class="kpi-label" style="margin-bottom:4px;color:var(--accent,#5e8eff)">Candle A</div>
+            <div style="display:flex;gap:8px">
+              <select id="cmpTfA" onchange="populateCmpCandles('A')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-family:monospace;font-size:12px"></select>
+              <select id="cmpCandleA" onchange="loadCmpCandle('A')" style="flex:1;min-width:0;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-family:monospace;font-size:12px"></select>
+            </div>
+          </div>
+          <div>
+            <div class="kpi-label" style="margin-bottom:4px;color:var(--yellow)">Candle B</div>
+            <div style="display:flex;gap:8px">
+              <select id="cmpTfB" onchange="populateCmpCandles('B')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-family:monospace;font-size:12px"></select>
+              <select id="cmpCandleB" onchange="loadCmpCandle('B')" style="flex:1;min-width:0;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-family:monospace;font-size:12px"></select>
+            </div>
+          </div>
+        </div>
+        <div id="cmpResult" style="margin-top:14px"><div class="dim" style="padding:10px">pick a candle in both A and B…</div></div>
+      </div>
     </div>
 
     <!-- ===================== SUGGESTION VIEW ===================== -->
@@ -781,7 +804,71 @@ function setMode(m){
 
 let anTfSel='1m';            // analysis-mode timeframe
 let anCandleData=null;       // last /api/analysis/candle response
-function loadAnalysisMode(){ populateCandles(); }
+function loadAnalysisMode(){ populateCandles(); initCompare(); }
+
+/* ---------- Compare two candles side-by-side ---------- */
+const CMP_TFS=['1m','5m','15m','1h','4h','1d'];
+const cmp={A:{tf:'1m',data:null},B:{tf:'15m',data:null}};
+let cmpInit=false;
+function initCompare(){
+  // build the TF dropdowns once, then (re)load candle lists for the active symbol
+  ['A','B'].forEach(s=>{
+    const tfSel=document.getElementById('cmpTf'+s);
+    if(!cmpInit){
+      tfSel.innerHTML=CMP_TFS.map(tf=>`<option value="${tf}" ${tf===cmp[s].tf?'selected':''}>${tf}</option>`).join('');
+    }
+    populateCmpCandles(s);
+  });
+  cmpInit=true;
+}
+async function populateCmpCandles(slot){
+  if(!active) return;
+  const tf=document.getElementById('cmpTf'+slot).value; cmp[slot].tf=tf;
+  const sel=document.getElementById('cmpCandle'+slot);
+  sel.innerHTML='<option>loading…</option>';
+  try{
+    const r=await fetch(`/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${tf}&limit=600&auto=1&today=1`);
+    const j=await r.json(); let cs=j.candles||[];
+    if(!cs.length){ sel.innerHTML='<option value="">no candles</option>'; return; }
+    const lastDate=istDate(cs[cs.length-1].t);
+    let day=cs.filter(c=>istDate(c.t)===lastDate); if(!day.length) day=cs;
+    day=day.slice().reverse();
+    sel.innerHTML=day.map(c=>`<option value="${c.t}">${istHMS(c.t,false).slice(0,5)} · O${fmtNum(c.o)} C${fmtNum(c.c)}</option>`).join('');
+    loadCmpCandle(slot);
+  }catch(e){ sel.innerHTML='<option value="">error</option>'; }
+}
+async function loadCmpCandle(slot){
+  const tf=document.getElementById('cmpTf'+slot).value;
+  const start=document.getElementById('cmpCandle'+slot).value;
+  if(!active||!start) return;
+  try{
+    const r=await fetch(`/api/analysis/candle?tsym=${encodeURIComponent(active)}&interval=${tf}&start=${start}`);
+    cmp[slot].data=await r.json(); cmp[slot].tf=tf;
+  }catch(e){ cmp[slot].data=null; }
+  renderCompare();
+}
+function renderCompare(){
+  const A=cmp.A.data, B=cmp.B.data, el=document.getElementById('cmpResult');
+  if(!A||!B||!A.ok||!B.ok){ el.innerHTML='<div class="dim" style="padding:10px">pick a candle in both A and B…</div>'; return; }
+  const ohlc=d=>{const o=d.ohlc||{}; return `O${fmtNum(o.o)} H${fmtNum(o.h)} L${fmtNum(o.l)} C${fmtNum(o.c)}`;};
+  const move=d=>{const o=d.ohlc||{}; if(o.o==null||o.c==null) return '—'; const ch=o.c-o.o; const pct=o.o?ch/o.o*100:0; return `<span style="color:${ch>=0?'var(--green)':'var(--red)'}">${ch>=0?'+':''}${ch.toFixed(2)} (${pct>=0?'+':''}${pct.toFixed(2)}%)</span>`;};
+  const ctlCol=v=>v==='BUYERS'?'var(--green)':v==='SELLERS'?'var(--red)':'var(--text-3)';
+  const rows=[
+    ['Time', `${cmp.A.tf} · ${A.ticks?.[0]?.t||'-'}`, `${cmp.B.tf} · ${B.ticks?.[0]?.t||'-'}`],
+    ['OHLC', ohlc(A), ohlc(B)],
+    ['Move', move(A), move(B)],
+    ['Ticks', A.n, B.n],
+    ['In control', `<b style="color:${ctlCol(A.controller)}">${A.controller}</b>`, `<b style="color:${ctlCol(B.controller)}">${B.controller}</b>`],
+    ['Buy vol', `<span class="green">${fmtCompact(A.buy_vol)}</span>`, `<span class="green">${fmtCompact(B.buy_vol)}</span>`],
+    ['Sell vol', `<span class="red">${fmtCompact(A.sell_vol)}</span>`, `<span class="red">${fmtCompact(B.sell_vol)}</span>`],
+    ['Buy pressure', `${A.buy_pct}%`, `${B.buy_pct}%`],
+  ];
+  el.innerHTML=`<table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12.5px">
+    <thead><tr style="color:var(--text-3);text-align:left">
+      <th style="padding:5px 8px"></th><th style="color:var(--accent,#5e8eff)">Candle A</th><th style="color:var(--yellow)">Candle B</th></tr></thead>
+    <tbody>${rows.map(([m,a,b])=>`<tr style="border-top:1px solid var(--border)">
+      <td style="padding:5px 8px;color:var(--text-3)">${m}</td><td>${a}</td><td>${b}</td></tr>`).join('')}</tbody></table>`;
+}
 
 // pick the analysis timeframe
 document.getElementById('anTfGroup').addEventListener('click',(e)=>{
