@@ -352,7 +352,7 @@
           </div>
         </div>
         <div style="flex:1;min-width:220px">
-          <div class="kpi-label" style="margin-bottom:4px">Candle (only candles with recorded ticks)</div>
+          <div class="kpi-label" style="margin-bottom:4px">Candle (full last trading session — pick any time)</div>
           <select id="anCandleSel" onchange="loadCandleTicks()" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-family:'JetBrains Mono',monospace;font-size:12px;outline:none"></select>
         </div>
         <button class="btn" onclick="populateCandles()">↻</button>
@@ -797,18 +797,20 @@ async function populateCandles(){
   const sel=document.getElementById('anCandleSel');
   sel.innerHTML='<option>loading…</option>';
   try{
-    const r=await fetch(`/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${anTfSel}&limit=200&auto=1&today=1`);
+    const r=await fetch(`/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${anTfSel}&limit=600&auto=1&today=1`);
     const j=await r.json();
     let cs=(j.candles||[]);
-    // keep only today's candles (that's where ticks were recorded), newest first
-    const todayStr=istDate(Date.now());
-    let today=cs.filter(c=>istDate(c.t)===todayStr);
-    if(!today.length) today=cs.slice(-30);   // fallback: last 30
-    today=today.slice().reverse();
-    sel.innerHTML=today.map(c=>{
+    if(!cs.length){ sel.innerHTML='<option value="">no candles</option>'; return; }
+    // Show the FULL most-recent trading session available (data may be from the
+    // last session, not literally "today" on weekends/holidays).
+    const lastDate=istDate(cs[cs.length-1].t);
+    let day=cs.filter(c=>istDate(c.t)===lastDate);
+    if(!day.length) day=cs;
+    day=day.slice().reverse();   // newest first
+    sel.innerHTML=day.map(c=>{
       const lbl=`${istDate(c.t)} ${istHMS(c.t,false).slice(0,5)}  ·  O${fmtNum(c.o)} H${fmtNum(c.h)} L${fmtNum(c.l)} C${fmtNum(c.c)}`;
       return `<option value="${c.t}">${lbl}</option>`;
-    }).join('') || '<option value="">no candles</option>';
+    }).join('');
     loadCandleTicks();
   }catch(e){ sel.innerHTML='<option value="">error</option>'; }
 }
