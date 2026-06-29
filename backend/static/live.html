@@ -1140,13 +1140,13 @@ function buildSMCOverlays(xs){
     return xs[lo];
   }
 
-  // Collect MTF layers, sorted weakest→strongest so heavy HTF zones paint on top.
+  // FVG/OB layers are driven ONLY by the MTF selection — pick 1h and you see
+  // just 1h zones, no matter which timeframe the chart itself is on. (Structure,
+  // swings, sweeps and range below still follow the active chart timeframe.)
   const layers=[];
-  const seenTf=new Set();
-  if(smc && smc.ok){ layers.push([interval, smc]); seenTf.add(interval); }
   Object.keys(smcMulti||{}).forEach(tf=>{
-    if(!MTF[tf] || seenTf.has(tf)) return;
-    const r=smcMulti[tf]; if(r && r.ok){ layers.push([tf,r]); seenTf.add(tf); }
+    if(!MTF[tf]) return;
+    const r=smcMulti[tf]; if(r && r.ok){ layers.push([tf,r]); }
   });
   layers.sort((a,b)=>(TF_STYLE[a[0]]?.weight||0)-(TF_STYLE[b[0]]?.weight||0));
 
