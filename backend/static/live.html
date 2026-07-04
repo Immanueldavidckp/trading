@@ -207,9 +207,10 @@
           <span id="ptCount" class="mono dim">0</span>
           <select id="backlogSel" onchange="loadChart()">
             <option value="500">500</option>
-            <option value="1000" selected>1,000</option>
-            <option value="2000">2,000</option>
+            <option value="1000">1,000</option>
+            <option value="2000" selected>2,000</option>
             <option value="4000">4,000</option>
+            <option value="6000">6,000</option>
           </select>
         </div>
       </div>
@@ -351,8 +352,12 @@
             <button class="tf-btn" data-iv="1d">1d</button>
           </div>
         </div>
+        <div>
+          <div class="kpi-label" style="margin-bottom:4px">Day <span id="anDayHint" class="dim" style="font-weight:400"></span></div>
+          <input type="date" id="anDayPick" onchange="populateCandles()" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-family:'JetBrains Mono',monospace;font-size:12px;outline:none">
+        </div>
         <div style="flex:1;min-width:220px">
-          <div class="kpi-label" style="margin-bottom:4px">Candle (full last trading session — pick any time)</div>
+          <div class="kpi-label" style="margin-bottom:4px">Candle (pick any time in the day)</div>
           <select id="anCandleSel" onchange="loadCandleTicks()" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-family:'JetBrains Mono',monospace;font-size:12px;outline:none"></select>
         </div>
         <button class="btn" onclick="populateCandles()">↻</button>
@@ -392,6 +397,7 @@
             <div class="kpi-label" style="margin-bottom:4px;color:var(--accent,#5e8eff)">Candle A</div>
             <div style="display:flex;gap:8px">
               <select id="cmpTfA" onchange="populateCmpCandles('A')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-family:monospace;font-size:12px"></select>
+              <input type="date" id="cmpDayA" onchange="populateCmpCandles('A')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-family:monospace;font-size:12px">
               <select id="cmpCandleA" onchange="loadCmpCandle('A')" style="flex:1;min-width:0;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-family:monospace;font-size:12px"></select>
             </div>
           </div>
@@ -399,6 +405,7 @@
             <div class="kpi-label" style="margin-bottom:4px;color:var(--yellow)">Candle B</div>
             <div style="display:flex;gap:8px">
               <select id="cmpTfB" onchange="populateCmpCandles('B')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-family:monospace;font-size:12px"></select>
+              <input type="date" id="cmpDayB" onchange="populateCmpCandles('B')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-family:monospace;font-size:12px">
               <select id="cmpCandleB" onchange="loadCmpCandle('B')" style="flex:1;min-width:0;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-family:monospace;font-size:12px"></select>
             </div>
           </div>
@@ -446,7 +453,7 @@
 /* =====================================================================
    trade.scratchforge — TradingView-style multi-pane analysis (IST)
    ===================================================================== */
-const MAX_TABLE = 300, MAX_CANDLES = 2000;
+const MAX_TABLE = 300, MAX_CANDLES = 6000;
 let active=null, symbols=[], rows=[], ws=null;
 let prevVolume=null, paused=false;
 let interval='1m';         // Upstox interval: 1m/5m/15m/1h/4h/1d
@@ -806,6 +813,31 @@ let anTfSel='1m';            // analysis-mode timeframe
 let anCandleData=null;       // last /api/analysis/candle response
 function loadAnalysisMode(){ populateCandles(); initCompare(); }
 
+/* ---------- recorded tick-day range (drives the Analysis + Compare day pickers) ----------
+   Tick-by-tick data only exists from the day recording began. getTickRange() tells the
+   day pickers how far back they may go so ANY recorded day is reachable, not just the
+   last session. Cached per symbol. */
+let _tickRange={sym:null,data:null};
+async function getTickRange(){
+  if(!active) return null;
+  if(_tickRange.sym===active) return _tickRange.data;
+  let data=null;
+  try{ const r=await fetch(`/api/analysis/tick_range?tsym=${encodeURIComponent(active)}`);
+       const j=await r.json(); if(j&&j.ok) data=j; }catch(e){}
+  _tickRange={sym:active,data};
+  return data;
+}
+// Constrain a <input type=date> to [first_day,last_day]; default to the last recorded
+// day when empty or out of range. Returns the effective day string (or '' if unknown).
+function applyDayBounds(inp,rng,hintEl){
+  if(!inp) return '';
+  if(!rng){ inp.removeAttribute('min'); inp.removeAttribute('max'); if(hintEl)hintEl.textContent=''; return inp.value||''; }
+  inp.min=rng.first_day; inp.max=rng.last_day;
+  if(!inp.value || inp.value<rng.first_day || inp.value>rng.last_day) inp.value=rng.last_day;
+  if(hintEl) hintEl.textContent=`(recorded ${rng.first_day} → ${rng.last_day})`;
+  return inp.value;
+}
+
 /* ---------- Compare two candles side-by-side ---------- */
 const CMP_TFS=['1m','5m','15m','1h','4h','1d'];
 const cmp={A:{tf:'1m',data:null},B:{tf:'15m',data:null}};
@@ -825,15 +857,19 @@ async function populateCmpCandles(slot){
   if(!active) return;
   const tf=document.getElementById('cmpTf'+slot).value; cmp[slot].tf=tf;
   const sel=document.getElementById('cmpCandle'+slot);
+  const dp=document.getElementById('cmpDay'+slot);
   sel.innerHTML='<option>loading…</option>';
+  const rng=await getTickRange();
+  const day=applyDayBounds(dp,rng,null);
   try{
-    const r=await fetch(`/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${tf}&limit=600&auto=1&today=1`);
+    const url=day
+      ? `/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${tf}&day=${day}`
+      : `/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${tf}&limit=600&auto=1&today=1`;
+    const r=await fetch(url);
     const j=await r.json(); let cs=j.candles||[];
     if(!cs.length){ sel.innerHTML='<option value="">no candles</option>'; return; }
-    const lastDate=istDate(cs[cs.length-1].t);
-    let day=cs.filter(c=>istDate(c.t)===lastDate); if(!day.length) day=cs;
-    day=day.slice().reverse();
-    sel.innerHTML=day.map(c=>`<option value="${c.t}">${istHMS(c.t,false).slice(0,5)} · O${fmtNum(c.o)} C${fmtNum(c.c)}</option>`).join('');
+    const list=cs.slice().reverse();   // newest first
+    sel.innerHTML=list.map(c=>`<option value="${c.t}">${istDate(c.t)} ${istHMS(c.t,false).slice(0,5)} · O${fmtNum(c.o)} C${fmtNum(c.c)}</option>`).join('');
     loadCmpCandle(slot);
   }catch(e){ sel.innerHTML='<option value="">error</option>'; }
 }
@@ -878,23 +914,29 @@ document.getElementById('anTfGroup').addEventListener('click',(e)=>{
   populateCandles();
 });
 
-// fill the candle dropdown for the active symbol + timeframe (today's candles)
+// fill the candle dropdown for the active symbol + timeframe, for the picked day
+// (defaults to the last recorded session; any recorded day back to the first is reachable)
 async function populateCandles(){
   if(!active) return;
   const sel=document.getElementById('anCandleSel');
+  const dp=document.getElementById('anDayPick');
   sel.innerHTML='<option>loading…</option>';
+  const rng=await getTickRange();
+  const day=applyDayBounds(dp,rng,document.getElementById('anDayHint'));
   try{
-    const r=await fetch(`/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${anTfSel}&limit=600&auto=1&today=1`);
+    const url=day
+      ? `/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${anTfSel}&day=${day}`
+      : `/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${anTfSel}&limit=600&auto=1&today=1`;
+    const r=await fetch(url);
     const j=await r.json();
     let cs=(j.candles||[]);
-    if(!cs.length){ sel.innerHTML='<option value="">no candles</option>'; return; }
-    // Show the FULL most-recent trading session available (data may be from the
-    // last session, not literally "today" on weekends/holidays).
-    const lastDate=istDate(cs[cs.length-1].t);
-    let day=cs.filter(c=>istDate(c.t)===lastDate);
-    if(!day.length) day=cs;
-    day=day.slice().reverse();   // newest first
-    sel.innerHTML=day.map(c=>{
+    if(!cs.length){
+      sel.innerHTML='<option value="">no candles for this day</option>';
+      document.getElementById('anTickBody').innerHTML='<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-3)">no candles stored for this day</td></tr>';
+      return;
+    }
+    const list=cs.slice().reverse();   // newest first
+    sel.innerHTML=list.map(c=>{
       const lbl=`${istDate(c.t)} ${istHMS(c.t,false).slice(0,5)}  ·  O${fmtNum(c.o)} H${fmtNum(c.h)} L${fmtNum(c.l)} C${fmtNum(c.c)}`;
       return `<option value="${c.t}">${lbl}</option>`;
     }).join('');

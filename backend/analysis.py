@@ -149,6 +149,39 @@ def analysis_ticks(tsym: str, limit: int = 400) -> dict:
 
 # ── single-candle drill-down: every tick + its 5-level book ─────────────────
 
+def tick_range(tsym: str) -> dict:
+    """First & last recorded tick (from market_depth) for a symbol, as ms epoch
+    plus the IST calendar days — so the Analysis day-picker can reach ANY recorded
+    day, not just the last session. received_at is a UTC ISO string."""
+    tsym = tsym.upper()
+    PH = _db.PLACE
+    conn = _db.connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT MIN(received_at), MAX(received_at) FROM market_depth WHERE tsym={PH}",
+            [tsym])
+        row = cur.fetchone()
+        cur.close()
+    finally:
+        conn.close()
+    if not row or not row[0]:
+        return {"ok": False, "error": "no tick data recorded yet for " + tsym}
+
+    def _ms(s):
+        dt = datetime.fromisoformat(str(s).replace("Z", ""))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+
+    def _ist_day(ms):
+        return datetime.fromtimestamp(ms / 1000, timezone.utc).astimezone(IST).strftime("%Y-%m-%d")
+
+    first_ms, last_ms = _ms(row[0]), _ms(row[1])
+    return {"ok": True, "tsym": tsym, "first_ms": first_ms, "last_ms": last_ms,
+            "first_day": _ist_day(first_ms), "last_day": _ist_day(last_ms)}
+
+
 def candle_ticks(tsym: str, interval: str, start_ms: int) -> dict:
     """All ticks that fell inside ONE candle (interval starting at start_ms),
     each with traded volume, aggressor, book imbalance and the full 5-level

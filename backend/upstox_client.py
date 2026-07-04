@@ -494,8 +494,10 @@ class UpstoxClient:
 
     @staticmethod
     def query(tsym: str, interval: str = "1d", limit: int = 500,
-              from_ts: Optional[int] = None) -> list:
-        """Return stored candles oldest-first as list of dicts with ms timestamps."""
+              from_ts: Optional[int] = None, to_ts: Optional[int] = None) -> list:
+        """Return stored candles oldest-first as list of dicts with ms timestamps.
+        from_ts / to_ts are inclusive-start / exclusive-end bounds in SECONDS
+        (the `ts` column is stored in seconds)."""
         ensure_candles_table()
         PH  = _db.PLACE
         iv_col = "`interval`" if _db.USE_MYSQL else "interval"
@@ -507,6 +509,9 @@ class UpstoxClient:
         if from_ts:
             sql += f" AND ts>={PH}"
             params.append(from_ts)
+        if to_ts:
+            sql += f" AND ts<{PH}"
+            params.append(to_ts)
         sql += f" ORDER BY ts DESC LIMIT {PH}"
         params.append(limit)
 

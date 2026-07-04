@@ -175,6 +175,14 @@ def analysis_candle(tsym: str, interval: str, start: int):
     return analysis.candle_ticks(tsym, interval, int(start))
 
 
+@app.get("/api/analysis/tick_range")
+def analysis_tick_range(tsym: str):
+    """First & last recorded tick day for a symbol — bounds for the Analysis
+    day-picker so the user can reach any recorded day, not just the last session."""
+    import analysis
+    return analysis.tick_range(tsym)
+
+
 @app.get("/api/suggestion")
 def api_suggestion(tsym: str):
     """Multi-timeframe directional call (1m/5m/15m/1h/4h/1d) with target + entry."""
@@ -588,7 +596,8 @@ def upstox_fetch(req: UpstoxFetchModel):
 
 @app.get("/api/upstox/candles")
 def upstox_candles(tsym: str, interval: str = "1d", limit: int = 500,
-                   auto: int = 1, refresh: int = 0, today: int = 0):
+                   auto: int = 1, refresh: int = 0, today: int = 0,
+                   day: Optional[str] = None):
     """
     Read stored candles for a symbol/interval. Oldest-first.
 
@@ -596,11 +605,30 @@ def upstox_candles(tsym: str, interval: str = "1d", limit: int = 500,
     refresh=1: re-fetch full history + today before returning.
     today=1  : cheap — fetch only today's intraday candles and upsert them
                (used for live polling so the forming candle updates).
+    day=YYYY-MM-DD : return ONLY that IST day's stored candles (any recorded day
+               is reachable, not just the last session) — no Upstox fetch, since
+               the last ~100 days of intraday are already stored.
 
     Each candle is {t, o, h, l, c, v, oi} where t is a millisecond epoch —
     matching the shape the chart already renders.
     """
     from upstox_client import UpstoxClient as _UC
+
+    if day:
+        try:
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            _IST = _tz(_td(hours=5, minutes=30))
+            d0 = _dt.fromisoformat(day + "T00:00:00").replace(tzinfo=_IST)
+            start_s = int(d0.timestamp()); end_s = start_s + 86400
+        except Exception:
+            return {"stat": "Error", "error": f"bad day '{day}'", "candles": []}
+        rows = _UC.query(tsym=tsym, interval=interval, limit=100000,
+                         from_ts=start_s, to_ts=end_s)
+        candles = [{"t": r["ts"], "o": r["o"], "h": r["h"], "l": r["l"],
+                    "c": r["c"], "v": r["v"], "oi": r["oi"]} for r in rows]
+        return {"stat": "Ok", "tsym": tsym.upper(), "interval": interval,
+                "day": day, "candles": candles}
+
     rows = _UC.query(tsym=tsym, interval=interval, limit=limit)
 
     fetched = None
