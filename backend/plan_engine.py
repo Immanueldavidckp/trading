@@ -18,8 +18,18 @@ measured after the fact, net of costs, by plan_score.py.
 from __future__ import annotations
 from typing import List, Dict, Optional
 import math
+import datetime as _dt
 
 import smc_engine
+
+_IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
+
+
+def _ist_date(ms) -> str:
+    try:
+        return _dt.datetime.fromtimestamp(ms / 1000, _IST).strftime("%Y-%m-%d")
+    except Exception:
+        return "—"
 
 # ---- cost model (compendium §3): round-trip all-in for a liquid <=Rs.300 name.
 # explicit ~8 bps + slippage tier (liquid midcap/F&O) ~ 12-40 bps. Use 25 bps.
@@ -171,7 +181,7 @@ def build_plan(tsym: str, daily: List[dict],
 
     levels = {
         "prev_day": {"PDH": _fmt(PDH), "PDL": _fmt(PDL), "PDC": _fmt(PDC),
-                     "range": _fmt(prev_range)},
+                     "range": _fmt(prev_range), "date": _ist_date(prev["t"])},
         "atr14": _fmt(atr), "rvol": _fmt(rvol),
         "cpr": _cpr, "camarilla": _cam, "pivots": _piv,
         "round_numbers": rounds,

@@ -195,7 +195,7 @@ function planCard(p,i){
       <div class="daytype">📊 ${p.day_type_hint}</div>
       <h4>Key levels (from today's candle)</h4>
       <div class="lvls">
-        <div class="lv"><div class="t">Prev day H/L/C</div><div class="v">${fmt(pd.PDH)} / ${fmt(pd.PDL)} / ${fmt(pd.PDC)}</div></div>
+        <div class="lv"><div class="t">Prev day H/L/C ${pd.date?`· ${pd.date}`:''}</div><div class="v">${fmt(pd.PDH)} / ${fmt(pd.PDL)} / ${fmt(pd.PDC)}</div></div>
         <div class="lv"><div class="t">ATR14 · RVOL</div><div class="v">${fmt(L.atr14)} · ${fmt(L.rvol)}x</div></div>
         <div class="lv"><div class="t">CPR (${cpr.class})</div><div class="v">TC ${fmt(cpr.TC)} · P ${fmt(cpr.P)} · BC ${fmt(cpr.BC)}</div></div>
         <div class="lv"><div class="t">Camarilla H3/H4</div><div class="v">${fmt(cam.H3)} / ${fmt(cam.H4)}</div></div>
