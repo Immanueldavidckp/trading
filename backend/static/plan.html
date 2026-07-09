@@ -56,6 +56,10 @@
   .lv .t{font-size:10.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;font-family:var(--mono)}
   .lv .v{font-family:var(--mono);font-size:12.5px;margin-top:3px}
   .daytype{background:var(--blue-bg);border:1px solid rgba(94,142,255,.3);border-radius:8px;padding:8px 12px;font-size:12.5px;color:var(--ink)}
+  .headline{background:linear-gradient(180deg,rgba(94,142,255,.10),rgba(94,142,255,.03));border:1px solid rgba(94,142,255,.3);border-radius:10px;padding:12px 14px;margin:14px 0 6px}
+  .hl-read{font-weight:800;font-size:14.5px;margin-bottom:8px}
+  .hl-play{font-size:13px;color:var(--ink);background:var(--green-bg);border-left:3px solid var(--green);padding:7px 11px;border-radius:6px;margin-bottom:9px}
+  .hl-if{margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--muted)} .hl-if li{margin-bottom:5px}
 
   table{width:100%;border-collapse:collapse;font-size:12.5px}
   .scroll{overflow-x:auto}
@@ -156,7 +160,7 @@ async function renderPlan(date){
 
 function biasChip(b){const c=b==='bullish'?'bull':b==='bearish'?'bear':'neut';return `<span class="chip ${c}">${b}</span>`;}
 function planCard(p,i){
-  const L=p.levels||{}, pd=L.prev_day||{}, cpr=L.cpr||{}, cam=L.camarilla||{}, piv=L.pivots||{}, z=L.smc_zones||{};
+  const L=p.levels||{}, pd=L.prev_day||{}, cpr=L.cpr||{}, cam=L.camarilla||{}, piv=L.pivots||{}, z=L.smc_zones||{}, h=p.headline||{};
   const setups=(p.setups||[]).map(s=>`
     <tr>
       <td><span class="side ${s.side}">${s.side}</span></td>
@@ -178,10 +182,16 @@ function planCard(p,i){
     <div class="chead" onclick="document.getElementById('card${i}').classList.toggle('open')">
       <div class="rankn">${p.universe_rank||i+1}</div>
       <div><div class="sym">${p.tsym} <span class="csub">₹${fmt(p.last_close)} · ${p.day_type_hint?'':''}</span></div>
+        <div class="csub">${h.read||''}</div>
         <div class="csub">${p.num_setups} setups · take max ${p.max_trades} · ${p.turnover_cr?('₹'+p.turnover_cr+'cr turnover'):''}</div></div>
       <div class="chips">${biasChip(p.bias)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
     </div>
     <div class="cbody">
+      <div class="headline">
+        <div class="hl-read">🎯 ${h.read||p.day_type_hint||''}</div>
+        ${h.primary_play?`<div class="hl-play"><b>▶ Primary play —</b> ${h.primary_play}</div>`:''}
+        <ul class="hl-if">${(h.if_then||[]).map(x=>`<li>${x}</li>`).join('')}</ul>
+      </div>
       <div class="daytype">📊 ${p.day_type_hint}</div>
       <h4>Key levels (from today's candle)</h4>
       <div class="lvls">

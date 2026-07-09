@@ -197,6 +197,7 @@ def build_plan(tsym: str, daily: List[dict],
         "score_parts": score["parts"],
         "levels": levels,
         "day_type_hint": _day_type_hint(_cpr, rvol),
+        "headline": _headline(bias, _cpr, rvol, setups, _fmt(PDH), _fmt(PDL), _fmt(PDC)),
         "open_scenarios": scenarios,
         "setups": setups,
         "num_setups": len(setups),
@@ -388,6 +389,39 @@ def _open_scenarios(PDH, PDL, PDC, _cpr, _cam, bias) -> List[Dict]:
          "do": "trade the ORB break in the bias direction",
          "avoid": "pre-positioning before the opening range is set"},
     ]
+
+
+def _headline(bias, _cpr, rvol, setups, PDH, PDL, PDC) -> Dict:
+    """A plain-English 'today's read' + primary play: the single clearest
+    IF→THEN for the day, so the plan is actionable at a glance."""
+    b = bias["bias"]; cls = _cpr["class"]
+    order = {"high": 0, "medium": 1, "low": 2}
+    prim = sorted(setups, key=lambda s: order.get(s["quality"], 3))[0] if setups else None
+    ifthen = []
+    if cls == "narrow":
+        ifthen.append("Narrow CPR → expect a TREND day. Trade the breakout; don't fade.")
+    elif cls == "wide":
+        ifthen.append("Wide CPR → expect CHOP. Fade the edges back to pivot, or stand down. Don't chase breakouts.")
+    else:
+        ifthen.append("Normal CPR → let the first 15–30 min set the range, then trade the break in the bias direction.")
+    if b == "bullish":
+        ifthen.append(f"Bias is UP → prefer LONGS. Cleanest entry: break & hold above PDH {PDH}, target the pivots above.")
+    elif b == "bearish":
+        ifthen.append(f"Bias is DOWN → prefer SHORTS. Cleanest entry: break & reject below PDL {PDL}, target the pivots below.")
+    else:
+        ifthen.append("No daily bias → take only the strongest signal; skip marginal setups.")
+    if rvol is not None and rvol < 0.8:
+        ifthen.append(f"Volume is light (RVOL {round(rvol,2)}×) → breakouts may fail; size down or wait for volume.")
+    elif rvol is not None and rvol >= 1.5:
+        ifthen.append(f"Volume is heavy (RVOL {round(rvol,2)}×) → moves have fuel; breakouts more reliable.")
+    play = None
+    if prim:
+        t1 = prim["targets"][0] if prim.get("targets") else None
+        play = (f"{prim['name']} ({prim['side']}): enter {prim['entry']}, stop {prim['stop']}, "
+                f"first target {t1} ({prim['rr_t1']}R). Skip if: {prim['skip_when']}")
+    read = (f"{b.upper()} bias · {cls} CPR · RVOL {round(rvol,2) if rvol is not None else '—'}× → "
+            + ("trend/breakout day" if cls == "narrow" else "range/fade day" if cls == "wide" else "wait-for-open day"))
+    return {"read": read, "primary_play": play, "if_then": ifthen}
 
 
 def _day_type_hint(_cpr, rvol) -> str:

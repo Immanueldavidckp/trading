@@ -21,6 +21,15 @@ MAX_PRICE = 300.0
 MIN_PRICE = 30.0
 TOP_N = 50
 
+# ETFs / mutual-fund units / debt instruments trade on the EQ series but are NOT
+# stocks — exclude them (compendium §27: the universe is cash equities only).
+_ETF_SET = {"LIQUIDCASE", "LIQUIDADD", "LIQUIDBEES", "CASH", "MONExT"}
+def _is_etf(sym: str) -> bool:
+    s = (sym or "").upper()
+    return (s.endswith("BEES") or s.endswith("ETF") or s.endswith("IETF")
+            or s.endswith("GSEC") or s.endswith("SDL") or s.endswith("LIQUID")
+            or s.endswith("MOM50") or s in _ETF_SET)
+
 # Liquid sub-Rs.300 NSE names — the fallback universe when bhavcopy is unreachable.
 # The price cap is still enforced on live data, so entries that drift above 300
 # simply drop out. Not exhaustive; the bhavcopy path covers the whole market.
@@ -146,6 +155,7 @@ def select_universe(d: Optional[_dt.date] = None, max_price: float = MAX_PRICE,
         rows = [r for r in rows if MIN_PRICE <= r["close"] <= max_price]
         rows.sort(key=lambda r: r["turnover"], reverse=True)
 
+    rows = [r for r in rows if not _is_etf(r["sym"])]   # drop ETFs/debt units
     top = rows[:top_n]
     for i, r in enumerate(top):
         r["rank"] = i + 1

@@ -88,11 +88,16 @@ def _truncate(candles: List[dict], as_of: _dt.date) -> List[dict]:
 
 # ── candle helpers ──────────────────────────────────────────────────────────
 
-def _ensure_candles(tsym: str, interval: str, min_rows: int) -> List[dict]:
-    """Return stored candles; fetch from Upstox first if too few are stored."""
+def _ensure_candles(tsym: str, interval: str, min_rows: int,
+                    fresh_until: Optional[_dt.date] = None) -> List[dict]:
+    """Return stored candles; fetch from Upstox when too few are stored OR the
+    latest stored candle is older than `fresh_until` (so stocks with plentiful but
+    STALE history get refreshed — this is what fixes weeks-old prev-day levels)."""
     from upstox_client import UpstoxClient as _UC
     rows = _UC.query(tsym, interval, limit=400)
-    if len(rows) < min_rows:
+    stale = bool(fresh_until and rows
+                 and _ist_date(rows[-1]["ts"]) < fresh_until.isoformat())
+    if len(rows) < min_rows or stale:
         try:
             from main import _upstox
             _upstox().fetch_candles(tsym=tsym, interval=interval)
@@ -151,10 +156,16 @@ def build_daily_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
         for row in uni["rows"]:
             sym = row["sym"]
             try:
-                daily = _truncate(_ensure_candles(sym, "1d", 20), as_of)
+                daily = _truncate(_ensure_candles(sym, "1d", 20, fresh_until=as_of), as_of)
                 if len(daily) < 20:
                     skipped.append({"sym": sym, "why": "insufficient daily candles"}); continue
-                intra = _truncate(_ensure_candles(sym, "15m", 20), as_of)
+                # Staleness guard: the prev-day levels must come from a candle at/near
+                # the as_of session. If the latest available candle is >4 days stale,
+                # the stock isn't trading normally — skip rather than show wrong levels.
+                last_d = _dt.date.fromisoformat(_ist_date(daily[-1]["t"]))
+                if (as_of - last_d).days > 4:
+                    skipped.append({"sym": sym, "why": f"stale data (last {last_d})"}); continue
+                intra = _truncate(_ensure_candles(sym, "15m", 20, fresh_until=as_of), as_of)
                 plan = plan_engine.build_plan(sym, daily, intra)
                 if not plan.get("ok"):
                     skipped.append({"sym": sym, "why": plan.get("error")}); continue
