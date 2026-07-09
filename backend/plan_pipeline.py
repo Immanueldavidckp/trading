@@ -204,7 +204,7 @@ def score_daily_plans(plan_date: str) -> Dict:
 
         scored = []
         for sym, plan in plans:
-            candles = _intraday_for_day(sym, day, "5m")
+            candles = _intraday_for_day(sym, day)
             if len(candles) < 3:
                 continue
             sc = plan_score.score_plan(plan, candles)
