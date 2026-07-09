@@ -153,6 +153,9 @@ def build_daily_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
     try:
         cur = conn.cursor()
         PH = _db.PLACE
+        # Clear this session's prior plans first, so the report reflects EXACTLY the
+        # fresh universe — no ETFs or stale names left over from an earlier build.
+        cur.execute(f"DELETE FROM daily_plans WHERE plan_date={PH}", [target.isoformat()])
         for row in uni["rows"]:
             sym = row["sym"]
             try:
