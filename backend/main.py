@@ -728,6 +728,55 @@ def upstox_intervals():
     return {"intervals": ALL_INTERVALS}
 
 
+# ---------- Daily plan system (top-50 <=Rs.300 plan + plan-vs-actual scorecard) ----------
+# Implements the compendium framework layer. Analysis only — no orders are placed.
+
+@app.get("/api/plan/build")
+def plan_build(for_date: Optional[str] = None, top_n: int = 50):
+    """Build tomorrow's plan for the top-N <=Rs.300 volume leaders. Heavy
+    (fetches candles for N symbols) — run nightly post-close via cron."""
+    import plan_pipeline
+    return plan_pipeline.build_daily_plans(for_date=for_date, top_n=top_n)
+
+
+@app.get("/api/plan/score")
+def plan_score_ep(plan_date: str):
+    """Replay a session's stored plans against that day's actual candles."""
+    import plan_pipeline
+    return plan_pipeline.score_daily_plans(plan_date)
+
+
+@app.get("/api/plan/report")
+def plan_report(date: Optional[str] = None):
+    """The evening plan report for a target session (default: latest built)."""
+    import plan_pipeline
+    if not date:
+        d = plan_pipeline.list_plan_dates().get("plan_dates") or []
+        if not d:
+            return {"ok": False, "error": "no plans built yet"}
+        date = d[0]
+    return plan_pipeline.get_plan_report(date)
+
+
+@app.get("/api/plan/scorecard")
+def plan_scorecard(date: Optional[str] = None):
+    """The plan-vs-actual scorecard for a session (default: latest scored)."""
+    import plan_pipeline
+    if not date:
+        d = plan_pipeline.list_plan_dates().get("scored_dates") or []
+        if not d:
+            return {"ok": False, "error": "no scored sessions yet"}
+        date = d[0]
+    return plan_pipeline.get_scorecard(date)
+
+
+@app.get("/api/plan/dates")
+def plan_dates():
+    """Available plan + scored session dates (for the report date-picker)."""
+    import plan_pipeline
+    return plan_pipeline.list_plan_dates()
+
+
 # ---------- Root handler: redirect to /live.html ----------
 @app.get("/")
 def root():

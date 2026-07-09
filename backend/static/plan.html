@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily Plan · trade.scratchforge</title>
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#111826; --panel2:#0d1420; --border:#20293b;
+    --ink:#e7edf6; --muted:#93a2ba; --faint:#5f6d84;
+    --green:#2fd08c; --red:#ff5d6c; --amber:#e8b24a; --blue:#5e8eff; --violet:#a880ff;
+    --green-bg:rgba(47,208,140,.12); --red-bg:rgba(255,93,108,.11); --amber-bg:rgba(232,178,74,.14); --blue-bg:rgba(94,142,255,.12);
+    --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+    --sans:'Segoe UI',system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5}
+  .mono{font-family:var(--mono)} .num{font-variant-numeric:tabular-nums}
+  a{color:var(--blue)}
+  header{position:sticky;top:0;z-index:20;background:rgba(11,15,23,.92);backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--border);padding:12px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .brand{font-weight:800;font-size:16px;letter-spacing:-.3px}
+  .brand span{color:var(--faint);font-weight:400}
+  .tabs{display:flex;gap:4px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:3px}
+  .tab{padding:6px 14px;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px;color:var(--muted);border:none;background:none}
+  .tab.on{background:var(--blue);color:#fff}
+  .spacer{flex:1}
+  select,button.act{background:var(--panel2);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-family:var(--mono);font-size:12px;cursor:pointer}
+  button.act:hover{border-color:var(--blue)}
+  .wrap{max-width:1280px;margin:0 auto;padding:18px}
+  .disc{background:var(--amber-bg);border:1px solid rgba(232,178,74,.35);color:var(--amber);border-radius:10px;padding:9px 14px;font-size:12.5px;margin-bottom:16px}
+  .disc b{color:var(--ink)}
+  .ubar{display:flex;gap:14px;flex-wrap:wrap;align-items:center;color:var(--muted);font-size:12.5px;margin-bottom:14px}
+  .ubar b{color:var(--ink)}
+
+  /* plan cards */
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;margin-bottom:12px;overflow:hidden}
+  .chead{display:grid;grid-template-columns:44px 1fr auto;gap:12px;align-items:center;padding:12px 16px;cursor:pointer}
+  .chead:hover{background:var(--panel2)}
+  .rankn{font-family:var(--mono);font-weight:800;color:var(--faint);text-align:center}
+  .sym{font-weight:800;font-size:16px}
+  .csub{color:var(--muted);font-size:12px}
+  .chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .chip{font-family:var(--mono);font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;border:1px solid var(--border);white-space:nowrap}
+  .chip.bull{color:var(--green);background:var(--green-bg);border-color:rgba(47,208,140,.4)}
+  .chip.bear{color:var(--red);background:var(--red-bg);border-color:rgba(255,93,108,.4)}
+  .chip.neut{color:var(--muted)}
+  .chip.high{color:var(--green);background:var(--green-bg)} .chip.medium{color:var(--amber);background:var(--amber-bg)} .chip.low{color:var(--faint)}
+  .chip.score{color:var(--blue);background:var(--blue-bg)}
+  .cbody{display:none;padding:0 16px 16px;border-top:1px solid var(--border)}
+  .card.open .cbody{display:block}
+  .card.open .chead{background:var(--panel2)}
+  h4{margin:16px 0 8px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);font-family:var(--mono)}
+  .lvls{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+  .lv{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+  .lv .t{font-size:10.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;font-family:var(--mono)}
+  .lv .v{font-family:var(--mono);font-size:12.5px;margin-top:3px}
+  .daytype{background:var(--blue-bg);border:1px solid rgba(94,142,255,.3);border-radius:8px;padding:8px 12px;font-size:12.5px;color:var(--ink)}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .scroll{overflow-x:auto}
+  th{text-align:left;color:var(--faint);font-weight:600;font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap}
+  td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .side{font-family:var(--mono);font-weight:800;font-size:11px;padding:2px 7px;border-radius:6px}
+  .side.LONG{color:var(--green);background:var(--green-bg)} .side.SHORT{color:var(--red);background:var(--red-bg)}
+  .q{font-size:10px;color:var(--faint)}
+  .tgt{font-family:var(--mono)} .tgt b{color:var(--green)}
+  .whenok{color:var(--muted);font-size:11.5px} .whenno{color:var(--red);font-size:11.5px}
+  .scenrow{display:grid;grid-template-columns:1.1fr .8fr 1.4fr;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:var(--panel2);font-size:12px}
+  .scenrow .w{font-family:var(--mono);color:var(--blue)}
+  ul.rules{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:12px} ul.rules li{margin-bottom:5px}
+  ul.rules.no li{color:var(--red)}
+
+  /* scorecard */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+  .tile{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+  .tile .t{font-size:10.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.07em;font-family:var(--mono)}
+  .tile .v{font-size:22px;font-weight:800;margin-top:3px;font-family:var(--mono)}
+  .tile .v.pos{color:var(--green)} .tile .v.neg{color:var(--red)}
+  .tile .d{font-size:11px;color:var(--muted);margin-top:2px}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+  .empty{padding:50px;text-align:center;color:var(--faint)}
+  .foot{color:var(--faint);font-size:11.5px;margin-top:24px;line-height:1.6}
+  @media(max-width:640px){.scenrow{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">trade.scratchforge <span>· daily plan</span></div>
+  <div class="tabs">
+    <button class="tab on" id="tabPlan" onclick="showTab('plan')">Plan</button>
+    <button class="tab" id="tabScore" onclick="showTab('score')">Scorecard</button>
+  </div>
+  <div class="spacer"></div>
+  <select id="dateSel" onchange="reload()"></select>
+  <button class="act" id="buildBtn" onclick="runBuild()" title="Build the plan for the next session (heavy)">⚙ Build next</button>
+  <button class="act" id="scoreBtn" onclick="runScore()" title="Score the selected date vs actual candles">✓ Score date</button>
+  <a class="act" href="/live.html" style="text-decoration:none">← Chart</a>
+</header>
+
+<div class="wrap">
+  <div class="disc">⚠ <b>Analysis only — no orders are placed and no profit is promised.</b> Every setup is a conditional
+    plan; every "profit %" is a <b>simulated, cost-adjusted</b> replay of the plan against real candles. Small samples prove nothing (§33).</div>
+
+  <div id="status" style="color:var(--muted);font-size:12.5px;margin-bottom:12px;display:none"></div>
+
+  <div id="planView">
+    <div class="ubar" id="ubar"></div>
+    <div id="cards"></div>
+  </div>
+
+  <div id="scoreView" style="display:none">
+    <div class="tiles" id="tiles"></div>
+    <div class="disc" id="honesty" style="display:none"></div>
+    <div class="scroll"><div id="results"></div></div>
+  </div>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let TAB='plan';
+const fmt=(v,d=2)=>(v==null||v===''||isNaN(v))?'—':Number(v).toFixed(d);
+const pct=v=>(v==null||isNaN(v))?'—':(v>=0?'+':'')+Number(v).toFixed(2)+'%';
+
+function showTab(t){TAB=t;$('tabPlan').classList.toggle('on',t==='plan');$('tabScore').classList.toggle('on',t==='score');
+  $('planView').style.display=t==='plan'?'':'none';$('scoreView').style.display=t==='score'?'':'none';reload();}
+
+async function loadDates(){
+  const j=await fetch('/api/plan/dates').then(r=>r.json());
+  const dates = TAB==='plan' ? (j.plan_dates||[]) : (j.scored_dates||[]);
+  const sel=$('dateSel');
+  sel.innerHTML = dates.length ? dates.map(d=>`<option value="${d}">${d}</option>`).join('')
+                               : '<option value="">— none yet —</option>';
+  return dates;
+}
+
+async function reload(){
+  const dates=await loadDates();
+  const date=$('dateSel').value;
+  if(TAB==='plan') renderPlan(date); else renderScore(date);
+}
+
+// ---------- PLAN ----------
+async function renderPlan(date){
+  const cards=$('cards'); const ubar=$('ubar');
+  if(!date){ ubar.innerHTML=''; cards.innerHTML='<div class="empty">No plan built yet. Click <b>⚙ Build next</b> to generate tomorrow\'s plan for the top-50 stocks under ₹300.</div>'; return; }
+  cards.innerHTML='<div class="empty">loading…</div>';
+  const j=await fetch('/api/plan/report?date='+date).then(r=>r.json());
+  if(!j.ok||!j.plans.length){ cards.innerHTML='<div class="empty">No plans for '+date+'.</div>'; ubar.innerHTML=''; return; }
+  ubar.innerHTML=`Plan for <b>${date}</b> · <b>${j.count}</b> stocks · sorted by confluence score`;
+  cards.innerHTML=j.plans.map((p,i)=>planCard(p,i)).join('');
+}
+
+function biasChip(b){const c=b==='bullish'?'bull':b==='bearish'?'bear':'neut';return `<span class="chip ${c}">${b}</span>`;}
+function planCard(p,i){
+  const L=p.levels||{}, pd=L.prev_day||{}, cpr=L.cpr||{}, cam=L.camarilla||{}, piv=L.pivots||{}, z=L.smc_zones||{};
+  const setups=(p.setups||[]).map(s=>`
+    <tr>
+      <td><span class="side ${s.side}">${s.side}</span></td>
+      <td><b>${s.name}</b><div class="q">${s.source}</div></td>
+      <td class="mono">${s.trigger_dir==='above'?'▲':'▼'} ${fmt(s.trigger_price)}<div class="q">${s.trigger}</div></td>
+      <td class="mono">${fmt(s.entry)}</td>
+      <td class="mono neg">${fmt(s.stop)}</td>
+      <td class="tgt mono"><b>${(s.targets||[]).map(fmt).join(' · ')}</b>${(s.context_targets||[]).length?`<div class="q">near ${s.context_targets.map(fmt).join(', ')}</div>`:''}</td>
+      <td class="mono">${s.rr_t1}R→${s.rr_final}R</td>
+      <td class="mono">${s.shares_for_risk??'—'}<div class="q">@₹${s.risk_rupees||1000} risk</div></td>
+      <td><div class="whenok">✓ ${s.valid_when}</div><div class="whenno">✗ ${s.skip_when}</div></td>
+    </tr>`).join('');
+  const scen=(p.open_scenarios||[]).map(s=>`
+    <div class="scenrow"><div><span class="w">IF</span> ${s.open_where}</div><div><b>${s.expect}</b></div>
+      <div>▸ ${s.do}<div class="whenno">✗ ${s.avoid}</div></div></div>`).join('');
+  const zline=arr=>(arr||[]).map(x=>`${x.kind} ${fmt(x.bottom)}–${fmt(x.top)}`).join(' · ')||'—';
+  const sw=p.swing_outlook||{};
+  return `<div class="card" id="card${i}">
+    <div class="chead" onclick="document.getElementById('card${i}').classList.toggle('open')">
+      <div class="rankn">${p.universe_rank||i+1}</div>
+      <div><div class="sym">${p.tsym} <span class="csub">₹${fmt(p.last_close)} · ${p.day_type_hint?'':''}</span></div>
+        <div class="csub">${p.num_setups} setups · take max ${p.max_trades} · ${p.turnover_cr?('₹'+p.turnover_cr+'cr turnover'):''}</div></div>
+      <div class="chips">${biasChip(p.bias)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
+    </div>
+    <div class="cbody">
+      <div class="daytype">📊 ${p.day_type_hint}</div>
+      <h4>Key levels (from today's candle)</h4>
+      <div class="lvls">
+        <div class="lv"><div class="t">Prev day H/L/C</div><div class="v">${fmt(pd.PDH)} / ${fmt(pd.PDL)} / ${fmt(pd.PDC)}</div></div>
+        <div class="lv"><div class="t">ATR14 · RVOL</div><div class="v">${fmt(L.atr14)} · ${fmt(L.rvol)}x</div></div>
+        <div class="lv"><div class="t">CPR (${cpr.class})</div><div class="v">TC ${fmt(cpr.TC)} · P ${fmt(cpr.P)} · BC ${fmt(cpr.BC)}</div></div>
+        <div class="lv"><div class="t">Camarilla H3/H4</div><div class="v">${fmt(cam.H3)} / ${fmt(cam.H4)}</div></div>
+        <div class="lv"><div class="t">Camarilla L3/L4</div><div class="v">${fmt(cam.L3)} / ${fmt(cam.L4)}</div></div>
+        <div class="lv"><div class="t">Pivots R1/S1</div><div class="v">${fmt(piv.R1)} / ${fmt(piv.S1)}</div></div>
+        <div class="lv"><div class="t">SMC supply (above)</div><div class="v">${zline(z.above)}</div></div>
+        <div class="lv"><div class="t">SMC demand (below)</div><div class="v">${zline(z.below)}</div></div>
+      </div>
+      <h4>Where it opens → what to do</h4>
+      ${scen}
+      <h4>Setups — entries, stops, targets, size, when to skip</h4>
+      <div class="scroll"><table><thead><tr>
+        <th>Side</th><th>Setup</th><th>Trigger</th><th>Entry</th><th>Stop</th><th>Targets (1R·2R·3R)</th><th>R:R</th><th>Size</th><th>Valid / Skip</th>
+      </tr></thead><tbody>${setups}</tbody></table></div>
+      <h4>2-day swing outlook</h4>
+      <div class="lv"><div class="v">${sw.bias?biasChip(sw.bias):''} ${sw.note||''} · invalidation ${fmt(sw.invalidation)} · 2-day range ${fmt(sw.downside_2d)}–${fmt(sw.upside_2d)}</div></div>
+      <h4>Do NOT trade when</h4>
+      <ul class="rules no">${(p.no_trade||[]).map(r=>`<li>${r}</li>`).join('')}</ul>
+      <h4>Risk rules</h4>
+      <ul class="rules">${(p.risk_rules||[]).map(r=>`<li>${r}</li>`).join('')}</ul>
+    </div></div>`;
+}
+
+// ---------- SCORECARD ----------
+async function renderScore(date){
+  const tiles=$('tiles'), results=$('results'), honesty=$('honesty');
+  if(!date){ tiles.innerHTML=''; results.innerHTML='<div class="empty">No scored session yet. Pick a past plan date and click <b>✓ Score date</b>.</div>'; honesty.style.display='none'; return; }
+  results.innerHTML='<div class="empty">loading…</div>';
+  const j=await fetch('/api/plan/scorecard?date='+date).then(r=>r.json());
+  const a=j.scorecard;
+  if(!a||a.n_trades===0){ tiles.innerHTML=''; results.innerHTML='<div class="empty">No trades filled for '+date+' (setups armed but limits never tagged, or no intraday data).</div>'; honesty.style.display='none'; return; }
+  const cls=v=>v>0?'pos':v<0?'neg':'';
+  tiles.innerHTML=`
+    <div class="tile"><div class="t">Plan accuracy</div><div class="v">${a.plan_accuracy!=null?(a.plan_accuracy*100).toFixed(0)+'%':'—'}</div><div class="d">${a.n_plans_correct}/${a.n_plans} plans' primary trade won</div></div>
+    <div class="tile"><div class="t">Hit rate</div><div class="v">${(a.hit_rate*100).toFixed(0)}%</div><div class="d">${a.n_win}W / ${a.n_loss}L · ${a.n_trades} trades</div></div>
+    <div class="tile"><div class="t">Expectancy / trade</div><div class="v ${cls(a.expectancy_pct)}">${pct(a.expectancy_pct)}</div><div class="d">${a.expectancy_bps} bps net of cost</div></div>
+    <div class="tile"><div class="t">Book net (1/stock)</div><div class="v ${cls(a.book_net_pct)}">${pct(a.book_net_pct)}</div><div class="d">sum of primary trades</div></div>
+    <div class="tile"><div class="t">Profit factor</div><div class="v">${a.profit_factor??'—'}</div><div class="d">gains ÷ losses</div></div>
+    <div class="tile"><div class="t">Avg win / loss</div><div class="v" style="font-size:15px"><span class="pos">${pct(a.avg_win_pct)}</span> / <span class="neg">${pct(a.avg_loss_pct)}</span></div><div class="d">cost ${a.cost_pct_per_trade}%/RT</div></div>
+    <div class="tile"><div class="t">Significant yet?</div><div class="v" style="font-size:15px">${a.significant_yet?'<span class=pos>yes</span>':'<span class=neg>no</span>'}</div><div class="d">need ~${a.trades_needed_for_significance??'?'} trades</div></div>`;
+  honesty.style.display='';honesty.innerHTML='📏 <b>Honest read:</b> '+(a.honesty_note||'');
+  const rows=(j.results||[]).map(r=>{
+    const s=r.summary||{}, p=s.primary||{};
+    return `<tr>
+      <td><b>${r.tsym}</b></td>
+      <td><span class="chip ${r.conviction||''}">${r.conviction||'—'}</span></td>
+      <td>${p.name?`<span class="side ${p.side}">${p.side}</span> ${p.name}`:'—'}</td>
+      <td class="mono">${p.entry!=null?fmt(p.entry)+' → '+fmt(p.exit):'—'}</td>
+      <td class="mono ${p.net_pct>0?'pos':p.net_pct<0?'neg':''}">${p.net_pct!=null?pct(p.net_pct):'—'}</td>
+      <td class="mono">${p.r_multiple!=null?p.r_multiple+'R':'—'}</td>
+      <td class="q">${p.reached||'—'}</td>
+      <td>${s.plan_correct?'<span class=pos>✓ correct</span>':'<span class=neg>✗</span>'}</td>
+    </tr>`;}).join('');
+  results.innerHTML=`<table><thead><tr><th>Stock</th><th>Conviction</th><th>Primary setup</th><th>Entry→Exit</th><th>Net %</th><th>R</th><th>Outcome</th><th>Plan?</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ---------- actions ----------
+async function runBuild(){
+  const b=$('buildBtn'); b.disabled=true; b.textContent='building…';
+  setStatus('Building the next-session plan for the top-50 (fetching candles — can take ~1–2 min)…');
+  try{ const j=await fetch('/api/plan/build').then(r=>r.json());
+    setStatus(`Built ${j.built} plans for ${j.plan_date} (source: ${j.universe_source}, ${j.skipped} skipped).`);
+    await reload();
+  }catch(e){ setStatus('Build failed: '+e); }
+  b.disabled=false; b.textContent='⚙ Build next';
+}
+async function runScore(){
+  const date=$('dateSel').value; if(!date){setStatus('Pick a date first.');return;}
+  const b=$('scoreBtn'); b.disabled=true; b.textContent='scoring…';
+  setStatus('Scoring '+date+' vs actual candles…');
+  try{ const j=await fetch('/api/plan/score?plan_date='+date).then(r=>r.json());
+    setStatus(j.ok?`Scored ${j.scored} plans for ${date}.`:'Score: '+(j.error||'failed'));
+    showTab('score');
+  }catch(e){ setStatus('Score failed: '+e); }
+  b.disabled=false; b.textContent='✓ Score date';
+}
+function setStatus(t){const s=$('status');s.style.display='';s.textContent=t;}
+
+$('foot').innerHTML='Techniques from your <b>short_term_trading_compendium_india.md</b> — prev-day levels, CPR, Camarilla, ORB, SMC/FVG confluence (§5–12), '
+  +'universe = today\'s volume leaders ≤₹300 (§27), scoring net of costs (§3) with §33 metrics. Educational engineering reference; not investment advice.';
+reload();
+</script>
+</body>
+</html>
