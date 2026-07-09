@@ -69,6 +69,23 @@ def next_trading_day(d: _dt.date) -> _dt.date:
     return nd
 
 
+def prev_trading_day(d: _dt.date) -> _dt.date:
+    pd = d - _dt.timedelta(days=1)
+    while pd.weekday() >= 5:
+        pd -= _dt.timedelta(days=1)
+    return pd
+
+
+def _ist_date(ms: int) -> str:
+    return _dt.datetime.fromtimestamp(ms / 1000, IST).strftime("%Y-%m-%d")
+
+
+def _truncate(candles: List[dict], as_of: _dt.date) -> List[dict]:
+    """Keep only candles on/before `as_of` (IST) — point-in-time, no look-ahead."""
+    cut = as_of.isoformat()
+    return [c for c in candles if _ist_date(c["t"]) <= cut]
+
+
 # ── candle helpers ──────────────────────────────────────────────────────────
 
 def _ensure_candles(tsym: str, interval: str, min_rows: int) -> List[dict]:
@@ -99,14 +116,20 @@ def _intraday_for_day(tsym: str, day: _dt.date, interval: str = "5m") -> List[di
 # ── build ───────────────────────────────────────────────────────────────────
 
 def build_daily_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
-    """Build plans for the NEXT trading session. `for_date` (YYYY-MM-DD) overrides
-    the target session; default = next trading day after today (IST)."""
+    """Build plans for a target session. `for_date` (YYYY-MM-DD) overrides the
+    target; default = next trading day after today (IST).
+
+    Point-in-time discipline (§27.2): the plan uses only candles up to `as_of` =
+    the session BEFORE the target. For the live case (target = tomorrow) that is
+    today's close; for a backtest (target in the past) history is truncated to the
+    prior session so there is NO look-ahead."""
     ensure_tables()
     today_ist = _dt.datetime.now(IST).date()
     target = (_dt.date.fromisoformat(for_date) if for_date
               else next_trading_day(today_ist))
+    as_of = prev_trading_day(target) if target <= today_ist else today_ist
 
-    uni = _universe.select_universe(today_ist, top_n=top_n)
+    uni = _universe.select_universe(as_of, top_n=top_n)
     built, skipped = [], []
     conn = _db.connect()
     try:
@@ -115,10 +138,10 @@ def build_daily_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
         for row in uni["rows"]:
             sym = row["sym"]
             try:
-                daily = _ensure_candles(sym, "1d", 20)
+                daily = _truncate(_ensure_candles(sym, "1d", 20), as_of)
                 if len(daily) < 20:
                     skipped.append({"sym": sym, "why": "insufficient daily candles"}); continue
-                intra = _ensure_candles(sym, "15m", 20)
+                intra = _truncate(_ensure_candles(sym, "15m", 20), as_of)
                 plan = plan_engine.build_plan(sym, daily, intra)
                 if not plan.get("ok"):
                     skipped.append({"sym": sym, "why": plan.get("error")}); continue
