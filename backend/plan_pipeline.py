@@ -103,14 +103,27 @@ def _ensure_candles(tsym: str, interval: str, min_rows: int) -> List[dict]:
              "c": r["c"], "v": r["v"]} for r in rows]
 
 
-def _intraday_for_day(tsym: str, day: _dt.date, interval: str = "5m") -> List[dict]:
-    """Actual intraday candles for one IST day (oldest-first)."""
+def _intraday_for_day(tsym: str, day: _dt.date,
+                      intervals=("15m", "5m")) -> List[dict]:
+    """Actual intraday candles for one IST day (oldest-first). Tries each interval
+    in order (15m is already stored by build → no extra fetch); fetches once if a
+    tried interval isn't stored for that day yet."""
     from upstox_client import UpstoxClient as _UC
     start = _dt.datetime.combine(day, _dt.time(0, 0), IST)
     s_s = int(start.timestamp()); e_s = s_s + 86400
-    rows = _UC.query(tsym, interval, limit=100000, from_ts=s_s, to_ts=e_s)
-    return [{"t": r["ts"], "o": r["o"], "h": r["h"], "l": r["l"],
-             "c": r["c"], "v": r["v"]} for r in rows]
+    for iv in intervals:
+        rows = _UC.query(tsym, iv, limit=100000, from_ts=s_s, to_ts=e_s)
+        if len(rows) < 3:
+            try:
+                from main import _upstox
+                _upstox().fetch_candles(tsym=tsym, interval=iv)
+            except Exception:
+                pass
+            rows = _UC.query(tsym, iv, limit=100000, from_ts=s_s, to_ts=e_s)
+        if len(rows) >= 3:
+            return [{"t": r["ts"], "o": r["o"], "h": r["h"], "l": r["l"],
+                     "c": r["c"], "v": r["v"]} for r in rows]
+    return []
 
 
 # ── build ───────────────────────────────────────────────────────────────────
