@@ -194,9 +194,33 @@ def build_daily_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
         conn.commit(); cur.close()
     finally:
         conn.close()
+
+    # Register the universe for tick-by-tick recording (live builds only — a
+    # backtest of a past date must not change what the feed records today).
+    recording = None
+    if target > today_ist and built:
+        recording = _register_tick_recording(built)
+
     return {"ok": True, "plan_date": target.isoformat(), "universe_source": uni["source"],
             "built": len(built), "skipped": len(skipped),
+            "tick_recording": recording,
             "symbols": built, "skipped_detail": skipped[:20]}
+
+
+def _register_tick_recording(symbols: List[str]):
+    """Ensure the plan universe is recorded tick-by-tick from the next poll:
+    hot-update the running feed AND persist to plan_universe.json (which the
+    feed loads on startup, so a restart keeps recording)."""
+    try:
+        from main import _feed
+        return _feed().set_extra_symbols(symbols)
+    except Exception:
+        try:
+            from upstox_feed import save_extra_symbols
+            save_extra_symbols(symbols)
+            return {"ok": True, "recording": len(symbols), "note": "saved; feed picks up on restart"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:120]}
 
 
 # ── score ───────────────────────────────────────────────────────────────────
