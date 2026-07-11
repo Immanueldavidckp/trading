@@ -47,6 +47,9 @@
   .chip.neut{color:var(--muted)}
   .chip.high{color:var(--green);background:var(--green-bg)} .chip.medium{color:var(--amber);background:var(--amber-bg)} .chip.low{color:var(--faint)}
   .chip.score{color:var(--blue);background:var(--blue-bg)}
+  .dlbtn{font-family:var(--mono);font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;
+    border:1px solid var(--border);background:var(--panel2);color:var(--muted);cursor:pointer;white-space:nowrap}
+  .dlbtn:hover{border-color:var(--blue);color:var(--blue)}
   .cbody{display:none;padding:0 16px 16px;border-top:1px solid var(--border)}
   .card.open .cbody{display:block}
   .card.open .chead{background:var(--panel2)}
@@ -97,6 +100,7 @@
     <button class="tab" id="tabScore" onclick="showTab('score')">Scorecard</button>
   </div>
   <div class="spacer"></div>
+  <button class="act" id="dlAllBtn" onclick="downloadAll()" title="Download the WHOLE day's plan as a text file">⬇ TXT</button>
   <select id="dateSel" onchange="reload()"></select>
   <button class="act" id="buildBtn" onclick="runBuild()" title="Build the plan for the next session (heavy)">⚙ Build next</button>
   <button class="act" id="scoreBtn" onclick="runScore()" title="Score the selected date vs actual candles">✓ Score date</button>
@@ -126,6 +130,7 @@
 <script>
 const $=id=>document.getElementById(id);
 let TAB='plan';
+let PLANS=[], PLAN_DATE='';   // last-rendered plan list (for the TXT downloads)
 const fmt=(v,d=2)=>(v==null||v===''||isNaN(v))?'—':Number(v).toFixed(d);
 const pct=v=>(v==null||isNaN(v))?'—':(v>=0?'+':'')+Number(v).toFixed(2)+'%';
 
@@ -153,7 +158,8 @@ async function renderPlan(date){
   if(!date){ ubar.innerHTML=''; cards.innerHTML='<div class="empty">No plan built yet. Click <b>⚙ Build next</b> to generate tomorrow\'s plan for the top-50 stocks under ₹300.</div>'; return; }
   cards.innerHTML='<div class="empty">loading…</div>';
   const j=await fetch('/api/plan/report?date='+date).then(r=>r.json());
-  if(!j.ok||!j.plans.length){ cards.innerHTML='<div class="empty">No plans for '+date+'.</div>'; ubar.innerHTML=''; return; }
+  if(!j.ok||!j.plans.length){ cards.innerHTML='<div class="empty">No plans for '+date+'.</div>'; ubar.innerHTML=''; PLANS=[]; return; }
+  PLANS=j.plans; PLAN_DATE=date;
   ubar.innerHTML=`Plan for <b>${date}</b> · <b>${j.count}</b> stocks · sorted by confluence score`;
   cards.innerHTML=j.plans.map((p,i)=>planCard(p,i)).join('');
 }
@@ -184,7 +190,7 @@ function planCard(p,i){
       <div><div class="sym">${p.tsym} <span class="csub">₹${fmt(p.last_close)} · ${p.day_type_hint?'':''}</span></div>
         <div class="csub">${h.read||''}</div>
         <div class="csub">${p.num_setups} setups · take max ${p.max_trades} · ${p.turnover_cr?('₹'+p.turnover_cr+'cr turnover'):''}</div></div>
-      <div class="chips">${biasChip(p.bias)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
+      <div class="chips"><button class="dlbtn" onclick="event.stopPropagation();downloadOne(${i})" title="Save ${p.tsym}'s plan as a text file">⬇ TXT</button>${biasChip(p.bias)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
     </div>
     <div class="cbody">
       <div class="headline">
@@ -250,6 +256,80 @@ async function renderScore(date){
       <td>${s.plan_correct?'<span class=pos>✓ correct</span>':'<span class=neg>✗</span>'}</td>
     </tr>`;}).join('');
   results.innerHTML=`<table><thead><tr><th>Stock</th><th>Conviction</th><th>Primary setup</th><th>Entry→Exit</th><th>Net %</th><th>R</th><th>Outcome</th><th>Plan?</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ---------- TXT downloads ----------
+const LINE='='.repeat(64), THIN='-'.repeat(64);
+function planToText(p){
+  const L=p.levels||{}, pd=L.prev_day||{}, cpr=L.cpr||{}, cam=L.camarilla||{}, piv=L.pivots||{}, z=L.smc_zones||{}, h=p.headline||{}, sw=p.swing_outlook||{};
+  const zl=a=>(a||[]).map(x=>`${x.kind} ${fmt(x.bottom)}-${fmt(x.top)}`).join(' · ')||'—';
+  const out=[];
+  out.push(LINE);
+  out.push(` ${p.tsym} — ₹${fmt(p.last_close)} · plan for ${p.plan_date||PLAN_DATE}`);
+  out.push(` ${String(p.bias||'').toUpperCase()} bias · ${p.conviction} conviction · score ${p.score} · rank ${p.universe_rank||'—'}${p.turnover_cr?` · ₹${p.turnover_cr}cr turnover`:''}`);
+  out.push(LINE);
+  if(h.read){ out.push('', "TODAY'S READ", `  ${h.read}`); }
+  if(h.primary_play){ out.push('', 'PRIMARY PLAY', `  ${h.primary_play}`); }
+  if((h.if_then||[]).length){ out.push('', 'IF -> THEN'); h.if_then.forEach(x=>out.push(`  - ${x}`)); }
+  out.push('', `DAY TYPE: ${p.day_type_hint||'—'}`);
+  out.push('', `KEY LEVELS (from ${pd.date||"today's"} candle)`, THIN);
+  out.push(`  Prev day H/L/C : ${fmt(pd.PDH)} / ${fmt(pd.PDL)} / ${fmt(pd.PDC)}   (range ${fmt(pd.range)})`);
+  out.push(`  ATR14 · RVOL   : ${fmt(L.atr14)} · ${fmt(L.rvol)}x`);
+  out.push(`  CPR (${cpr.class||'—'})   : TC ${fmt(cpr.TC)} · P ${fmt(cpr.P)} · BC ${fmt(cpr.BC)}`);
+  out.push(`  Camarilla      : H4 ${fmt(cam.H4)} · H3 ${fmt(cam.H3)} · L3 ${fmt(cam.L3)} · L4 ${fmt(cam.L4)}`);
+  out.push(`  Pivots         : R2 ${fmt(piv.R2)} · R1 ${fmt(piv.R1)} · P ${fmt(piv.P)} · S1 ${fmt(piv.S1)} · S2 ${fmt(piv.S2)}`);
+  out.push(`  SMC supply ↑   : ${zl(z.above)}`);
+  out.push(`  SMC demand ↓   : ${zl(z.below)}`);
+  out.push('', 'WHERE IT OPENS -> WHAT TO DO', THIN);
+  (p.open_scenarios||[]).forEach(s=>{
+    out.push(`  IF ${s.open_where}`);
+    out.push(`     EXPECT: ${s.expect}`);
+    out.push(`     DO    : ${s.do}`);
+    out.push(`     AVOID : ${s.avoid}`, '');
+  });
+  out.push(`SETUPS — take max ${p.max_trades} trade(s)`, THIN);
+  (p.setups||[]).forEach((s,i)=>{
+    out.push(`  ${i+1}. [${s.side} · ${s.quality}] ${s.name}   (${s.source})`);
+    out.push(`     Trigger : ${s.trigger_dir==='above'?'above':'below'} ${fmt(s.trigger_price)} — ${s.trigger}`);
+    out.push(`     Entry ${fmt(s.entry)} · Stop ${fmt(s.stop)} · Targets ${(s.targets||[]).map(fmt).join(' / ')} (${s.rr_t1}R->${s.rr_final}R)`);
+    if((s.context_targets||[]).length) out.push(`     Near levels: ${s.context_targets.map(fmt).join(', ')}`);
+    out.push(`     Size    : ${s.shares_for_risk??'—'} shares @ ₹${s.risk_rupees||1000} risk`);
+    out.push(`     Valid   : ${s.valid_when}`);
+    out.push(`     Skip if : ${s.skip_when}`, '');
+  });
+  out.push('2-DAY SWING OUTLOOK', THIN);
+  out.push(`  ${String(sw.bias||'').toUpperCase()} — ${sw.note||'—'}`);
+  out.push(`  Invalidation ${fmt(sw.invalidation)} · 2-day range ${fmt(sw.downside_2d)} - ${fmt(sw.upside_2d)}`);
+  out.push('', 'DO NOT TRADE WHEN', THIN);
+  (p.no_trade||[]).forEach(r=>out.push(`  - ${r}`));
+  out.push('', 'RISK RULES', THIN);
+  (p.risk_rules||[]).forEach(r=>out.push(`  - ${r}`));
+  out.push('', THIN, `  ${p.cost_note||'Analysis only — no orders are placed and no profit is promised.'}`, '');
+  return out.join('\n');
+}
+function downloadText(name, text){
+  const blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=name;
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},500);
+}
+function downloadOne(i){
+  const p=PLANS[i]; if(!p) return;
+  downloadText(`plan_${p.tsym}_${p.plan_date||PLAN_DATE}.txt`, planToText(p));
+}
+async function downloadAll(){
+  const date=$('dateSel').value; if(!date){ setStatus('Pick a date first.'); return; }
+  let plans=PLANS, d=PLAN_DATE;
+  if(!plans.length || d!==date){                    // e.g. invoked from the Scorecard tab
+    const j=await fetch('/api/plan/report?date='+date).then(r=>r.json());
+    if(!j.ok||!j.plans.length){ setStatus('No plans stored for '+date+'.'); return; }
+    plans=j.plans; d=date;
+  }
+  const head=[LINE,` DAILY PLAN — ${d} · ${plans.length} stocks (top volume leaders ≤ ₹300)`,
+    ' Sorted by confluence score · Generated by trade.scratchforge backend',
+    ' Analysis only — no orders are placed and no profit is promised.',LINE,'',''].join('\n');
+  downloadText(`plan_ALL_${d}.txt`, head + plans.map(planToText).join('\n\n'));
 }
 
 // ---------- actions ----------
