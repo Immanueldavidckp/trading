@@ -101,6 +101,87 @@ def score_setup(setup: Dict, candles: List[dict]) -> Dict:
     return res
 
 
+def _day_summary(candles: List[dict]) -> Dict:
+    o = candles[0]["o"]; c = candles[-1]["c"]
+    h = max(x["h"] for x in candles); l = min(x["l"] for x in candles)
+    rng = h - l
+    return {"open": o, "high": h, "low": l, "close": c,
+            "range": round(rng, 2),
+            "return_pct": round((c - o) / o * 100, 2) if o else None,
+            # trendiness = |close-open| / range: >=0.5 reads as a trend day,
+            # below as rotation/chop (simple, defensible day-character proxy)
+            "trendiness": round(abs(c - o) / rng, 2) if rng else None}
+
+
+def plan_checks(plan: Dict, candles: List[dict]) -> Dict:
+    """Grade the PLAN's predictions against the actual session — independent of
+    whether any simulated trade filled. Each check: predicted vs actual with a
+    RIGHT / WRONG verdict (NA/INFO rows don't count toward the rate)."""
+    ds = _day_summary(candles)
+    L = plan.get("levels") or {}
+    pd = L.get("prev_day") or {}; cpr = L.get("cpr") or {}
+    piv = L.get("pivots") or {}; cam = L.get("camarilla") or {}
+    checks = []
+
+    def add(aspect, predicted, actual, ok):
+        checks.append({"aspect": aspect, "predicted": predicted, "actual": actual,
+                       "verdict": "RIGHT" if ok else "WRONG"})
+
+    # 1) bias direction vs how the day actually closed
+    bias = plan.get("bias")
+    up = ds["close"] >= ds["open"]
+    if bias in ("bullish", "bearish"):
+        add("Bias direction", bias.upper(),
+            f"day closed {'UP' if up else 'DOWN'} ({ds['return_pct']:+}% open→close)",
+            (bias == "bullish") == up)
+    else:
+        checks.append({"aspect": "Bias direction", "predicted": "NEUTRAL (no call)",
+                       "actual": f"{ds['return_pct']:+}% open→close", "verdict": "NA"})
+
+    # 2) day type predicted from CPR width
+    cls = cpr.get("class")
+    trendy = ds["trendiness"] is not None and ds["trendiness"] >= 0.5
+    if cls == "narrow":
+        add("Day type (narrow CPR)", "TREND day",
+            f"trendiness {ds['trendiness']} → {'trend' if trendy else 'chop'}", trendy)
+    elif cls == "wide":
+        add("Day type (wide CPR)", "CHOP / range day",
+            f"trendiness {ds['trendiness']} → {'trend' if trendy else 'chop'}", not trendy)
+
+    # 3) which open scenario happened, and did the playbook direction work
+    TC, BC = cpr.get("TC"), cpr.get("BC")
+    if TC is not None and BC is not None:
+        o = ds["open"]
+        if o > TC:
+            sc, ok = f"gapped up above CPR-top {TC}", ds["close"] > o
+            expect = "trend-up day (longs)"
+        elif o < BC:
+            sc, ok = f"gapped down below CPR-bottom {BC}", ds["close"] < o
+            expect = "trend-down day (shorts)"
+        else:
+            sc, ok = f"opened inside CPR {BC}–{TC}", not trendy
+            expect = "balance / range day (fade edges)"
+        add("Open scenario", expect, f"{sc}; close {ds['close']} vs open {o}", ok)
+
+    # 4) which planned reaction levels actually traded (informational)
+    touched, untouched = [], []
+    for name, val in [("PDH", pd.get("PDH")), ("PDL", pd.get("PDL")),
+                      ("R1", piv.get("R1")), ("S1", piv.get("S1")),
+                      ("H3", cam.get("H3")), ("L3", cam.get("L3"))]:
+        if val is None:
+            continue
+        (touched if ds["low"] <= val <= ds["high"] else untouched).append(f"{name} {val}")
+    checks.append({"aspect": "Levels that traded", "predicted": "reaction expected at key levels",
+                   "actual": ("touched: " + ", ".join(touched) if touched else "no key level touched")
+                             + (f" · missed: {', '.join(untouched)}" if untouched else ""),
+                   "verdict": "INFO"})
+
+    right = sum(1 for c in checks if c["verdict"] == "RIGHT")
+    wrong = sum(1 for c in checks if c["verdict"] == "WRONG")
+    return {"day": ds, "checks": checks, "right": right, "wrong": wrong,
+            "success_rate": round(right / (right + wrong), 2) if (right + wrong) else None}
+
+
 def score_plan(plan: Dict, candles: List[dict]) -> Dict:
     """Score every setup in a plan against the actual day. `candles` = that day's
     intraday series (5m/15m, oldest-first)."""
@@ -132,7 +213,8 @@ def score_plan(plan: Dict, candles: List[dict]) -> Dict:
                          and primary["net_pct"] > 0),
     }
     return {"ok": True, "tsym": plan["tsym"], "conviction": plan.get("conviction"),
-            "score": plan.get("score"), "setups": setups, "summary": summary}
+            "score": plan.get("score"), "setups": setups, "summary": summary,
+            "analysis": plan_checks(plan, candles)}
 
 
 def _profit_factor(filled: List[Dict]) -> Optional[float]:
@@ -154,9 +236,26 @@ def aggregate_scorecard(scored: List[Dict]) -> Dict:
     # how many setups filled in total across the book (context, not P&L)
     total_filled = sum(1 for sc in scored if sc.get("ok")
                        for s in sc["setups"] if s["status"] == "filled")
+    # plan-quality (checks) aggregates — computed even when no trade filled,
+    # because grading the PLAN doesn't require a simulated fill
+    succ = [sc["analysis"]["success_rate"] for sc in scored
+            if sc.get("ok") and sc.get("analysis")
+            and sc["analysis"].get("success_rate") is not None]
+    checks_right = sum(sc["analysis"]["right"] for sc in scored
+                       if sc.get("ok") and sc.get("analysis"))
+    checks_wrong = sum(sc["analysis"]["wrong"] for sc in scored
+                       if sc.get("ok") and sc.get("analysis"))
+    plan_quality = {
+        "avg_plan_success": round(sum(succ) / len(succ), 3) if succ else None,
+        "checks_right": checks_right, "checks_wrong": checks_wrong,
+        "checks_success": round(checks_right / (checks_right + checks_wrong), 3)
+                          if (checks_right + checks_wrong) else None,
+    }
+
     if not all_filled:
         return {"n_plans": len(scored), "n_trades": 0,
-                "n_setups_filled_total": total_filled, "note": "no primary setups filled"}
+                "n_setups_filled_total": total_filled,
+                **plan_quality, "note": "no primary setups filled"}
     wins = [s for s in all_filled if s["net_pct"] > 0]
     losses = [s for s in all_filled if s["net_pct"] <= 0]
     nets = [s["net_pct"] for s in all_filled]
@@ -171,6 +270,7 @@ def aggregate_scorecard(scored: List[Dict]) -> Dict:
         "n_plans": len(scored),
         "n_plans_correct": len(correct),
         "plan_accuracy": round(len(correct) / len(scored), 3) if scored else None,
+        **plan_quality,
         "n_setups_filled_total": total_filled,
         "n_trades": n, "n_win": len(wins), "n_loss": len(losses),
         "hit_rate": round(len(wins) / n, 3),

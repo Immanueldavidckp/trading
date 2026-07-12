@@ -50,6 +50,17 @@
   .dlbtn{font-family:var(--mono);font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;
     border:1px solid var(--border);background:var(--panel2);color:var(--muted);cursor:pointer;white-space:nowrap}
   .dlbtn:hover{border-color:var(--blue);color:var(--blue)}
+  .chip.lowr{color:var(--red);background:var(--red-bg)}
+
+  /* scorecard: plan (left) vs actual (right) */
+  .sc-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  @media(max-width:900px){.sc-grid{grid-template-columns:1fr}}
+  .colbox{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;min-width:0}
+  .colhead{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+  .verd{font-family:var(--mono);font-size:10px;font-weight:800;padding:2px 7px;border-radius:6px;white-space:nowrap}
+  .verd.RIGHT{color:var(--green);background:var(--green-bg)}
+  .verd.WRONG{color:var(--red);background:var(--red-bg)}
+  .verd.NA,.verd.INFO{color:var(--faint);background:var(--panel)}
   .cbody{display:none;padding:0 16px 16px;border-top:1px solid var(--border)}
   .card.open .cbody{display:block}
   .card.open .chead{background:var(--panel2)}
@@ -136,7 +147,9 @@ function showTab(t){TAB=t;$('tabPlan').classList.toggle('on',t==='plan');$('tabS
 
 async function loadDates(){
   const j=await fetch('/api/plan/dates').then(r=>r.json());
-  const dates = TAB==='plan' ? (j.plan_dates||[]) : (j.scored_dates||[]);
+  // Both tabs list every plan date — picking an unscored past date on the
+  // Scorecard auto-scores it; a future date shows "not traded yet".
+  const dates=[...new Set([...(j.plan_dates||[]),...(j.scored_dates||[])])].sort().reverse();
   const sel=$('dateSel');
   sel.innerHTML = dates.length ? dates.map(d=>`<option value="${d}">${d}</option>`).join('')
                                : '<option value="">— none yet —</option>';
@@ -222,37 +235,106 @@ function planCard(p,i){
     </div></div>`;
 }
 
-// ---------- SCORECARD ----------
+// ---------- SCORECARD (plan-vs-actual review) ----------
+const _autoScored={};   // date -> true, so a missing scorecard is auto-scored ONCE
 async function renderScore(date){
   const tiles=$('tiles'), results=$('results'), honesty=$('honesty');
-  if(!date){ tiles.innerHTML=''; results.innerHTML='<div class="empty">No scored session yet. Pick a past plan date and click <b>✓ Score date</b>.</div>'; honesty.style.display='none'; return; }
+  if(!date){ tiles.innerHTML=''; results.innerHTML='<div class="empty">No plans built yet.</div>'; honesty.style.display='none'; return; }
   results.innerHTML='<div class="empty">loading…</div>';
-  const j=await fetch('/api/plan/scorecard?date='+date).then(r=>r.json());
-  const a=j.scorecard;
-  if(!a||a.n_trades===0){ tiles.innerHTML=''; results.innerHTML='<div class="empty">No trades filled for '+date+' (setups armed but limits never tagged, or no intraday data).</div>'; honesty.style.display='none'; return; }
+
+  let j=await fetch('/api/plan/scorecard?date='+date).then(r=>r.json());
+  if((!j.ok||!(j.results||[]).length) && !_autoScored[date]){
+    _autoScored[date]=true;
+    setStatus('Scoring the '+date+' plan against actual candles…');
+    try{ await fetch('/api/plan/score?plan_date='+date); }catch(e){}
+    j=await fetch('/api/plan/scorecard?date='+date).then(r=>r.json());
+    setStatus('Scored '+date+'.');
+  }
+  const rep=await fetch('/api/plan/report?date='+date).then(r=>r.json());
+  const planBy={}; (rep.plans||[]).forEach(p=>planBy[p.tsym]=p);
+
+  const res=(j.results||[]);
+  if(!res.length){
+    tiles.innerHTML=''; honesty.style.display='none';
+    results.innerHTML='<div class="empty">No traded candles for <b>'+date+'</b> yet — this session hasn\'t happened (or was a holiday).<br>Pick an earlier date; it will score automatically.</div>';
+    return;
+  }
+  const a=j.scorecard||{};
   const cls=v=>v>0?'pos':v<0?'neg':'';
   tiles.innerHTML=`
-    <div class="tile"><div class="t">Plan accuracy</div><div class="v">${a.plan_accuracy!=null?(a.plan_accuracy*100).toFixed(0)+'%':'—'}</div><div class="d">${a.n_plans_correct}/${a.n_plans} plans' primary trade won</div></div>
-    <div class="tile"><div class="t">Hit rate</div><div class="v">${(a.hit_rate*100).toFixed(0)}%</div><div class="d">${a.n_win}W / ${a.n_loss}L · ${a.n_trades} trades</div></div>
-    <div class="tile"><div class="t">Expectancy / trade</div><div class="v ${cls(a.expectancy_pct)}">${pct(a.expectancy_pct)}</div><div class="d">${a.expectancy_bps} bps net of cost</div></div>
-    <div class="tile"><div class="t">Book net (1/stock)</div><div class="v ${cls(a.book_net_pct)}">${pct(a.book_net_pct)}</div><div class="d">sum of primary trades</div></div>
-    <div class="tile"><div class="t">Profit factor</div><div class="v">${a.profit_factor??'—'}</div><div class="d">gains ÷ losses</div></div>
-    <div class="tile"><div class="t">Avg win / loss</div><div class="v" style="font-size:15px"><span class="pos">${pct(a.avg_win_pct)}</span> / <span class="neg">${pct(a.avg_loss_pct)}</span></div><div class="d">cost ${a.cost_pct_per_trade}%/RT</div></div>
-    <div class="tile"><div class="t">Significant yet?</div><div class="v" style="font-size:15px">${a.significant_yet?'<span class=pos>yes</span>':'<span class=neg>no</span>'}</div><div class="d">need ~${a.trades_needed_for_significance??'?'} trades</div></div>`;
-  honesty.style.display='';honesty.innerHTML='📏 <b>Honest read:</b> '+(a.honesty_note||'');
-  const rows=(j.results||[]).map(r=>{
-    const s=r.summary||{}, p=s.primary||{};
-    return `<tr>
-      <td><b>${r.tsym}</b></td>
-      <td><span class="chip ${r.conviction||''}">${r.conviction||'—'}</span></td>
-      <td>${p.name?`<span class="side ${p.side}">${p.side}</span> ${p.name}`:'—'}</td>
-      <td class="mono">${p.entry!=null?fmt(p.entry)+' → '+fmt(p.exit):'—'}</td>
-      <td class="mono ${p.net_pct>0?'pos':p.net_pct<0?'neg':''}">${p.net_pct!=null?pct(p.net_pct):'—'}</td>
-      <td class="mono">${p.r_multiple!=null?p.r_multiple+'R':'—'}</td>
-      <td class="q">${p.reached||'—'}</td>
-      <td>${s.plan_correct?'<span class=pos>✓ correct</span>':'<span class=neg>✗</span>'}</td>
-    </tr>`;}).join('');
-  results.innerHTML=`<table><thead><tr><th>Stock</th><th>Conviction</th><th>Primary setup</th><th>Entry→Exit</th><th>Net %</th><th>R</th><th>Outcome</th><th>Plan?</th></tr></thead><tbody>${rows}</tbody></table>`;
+    <div class="tile"><div class="t">Plan success (checks)</div><div class="v ${a.checks_success>=0.5?'pos':'neg'}">${a.checks_success!=null?(a.checks_success*100).toFixed(0)+'%':'—'}</div><div class="d">✓${a.checks_right??0} right · ✗${a.checks_wrong??0} wrong across ${a.n_plans??res.length} stocks</div></div>
+    <div class="tile"><div class="t">Plans whose primary won</div><div class="v">${a.plan_accuracy!=null?(a.plan_accuracy*100).toFixed(0)+'%':'—'}</div><div class="d">${a.n_plans_correct??0}/${a.n_plans??res.length}</div></div>
+    <div class="tile"><div class="t">Hit rate (sim trades)</div><div class="v">${a.hit_rate!=null?(a.hit_rate*100).toFixed(0)+'%':'—'}</div><div class="d">${a.n_win??0}W / ${a.n_loss??0}L · ${a.n_trades??0} trades</div></div>
+    <div class="tile"><div class="t">Expectancy / trade</div><div class="v ${cls(a.expectancy_pct)}">${a.expectancy_pct!=null?pct(a.expectancy_pct):'—'}</div><div class="d">${a.expectancy_bps??'—'} bps net of cost</div></div>
+    <div class="tile"><div class="t">Book net (1/stock)</div><div class="v ${cls(a.book_net_pct)}">${a.book_net_pct!=null?pct(a.book_net_pct):'—'}</div><div class="d">sum of primary trades</div></div>
+    <div class="tile"><div class="t">Profit factor</div><div class="v">${a.profit_factor??'—'}</div><div class="d">gains ÷ losses</div></div>`;
+  honesty.style.display='';honesty.innerHTML='📏 <b>Honest read:</b> '+(a.honesty_note||'Plan checks grade the prediction; trade stats are a simulated, cost-adjusted replay. Small samples prove nothing.');
+
+  // sort: best plan-success first, then net
+  res.sort((x,y)=>((y.analysis?.success_rate??-1)-(x.analysis?.success_rate??-1)) ||
+                  ((y.summary?.book_net_pct??0)-(x.summary?.book_net_pct??0)));
+  results.innerHTML=res.map((r,i)=>scoreCard(r,planBy[r.tsym],i)).join('');
+}
+
+function scoreCard(r,p,i){
+  const A=r.analysis||{}, d=A.day||{}, s=r.summary||{}, prim=s.primary, h=(p&&p.headline)||{};
+  const sr=A.success_rate;
+  const srChip = sr!=null?`<span class="chip ${sr>=0.5?'high':'lowr'}">✓${A.right} ✗${A.wrong} · ${(sr*100).toFixed(0)}%</span>`:'<span class="chip low">no checks</span>';
+  const netChip = (prim&&prim.net_pct!=null)?`<span class="chip ${prim.net_pct>0?'high':'lowr'}">${pct(prim.net_pct)}</span>`:'<span class="chip low">no fill</span>';
+  const checks=(A.checks||[]).map(c=>`
+    <tr><td style="white-space:nowrap"><b>${c.aspect}</b></td>
+        <td>${c.predicted}</td><td>${c.actual}</td>
+        <td align="center"><span class="verd ${c.verdict}">${c.verdict==='RIGHT'?'✓ RIGHT':c.verdict==='WRONG'?'✗ WRONG':c.verdict}</span></td></tr>`).join('');
+  const plan = p ? `
+      ${h.read?`<div style="font-weight:700;margin-bottom:8px">🎯 ${h.read}</div>`:''}
+      ${h.primary_play?`<div class="hl-play" style="margin-bottom:10px"><b>▶</b> ${h.primary_play}</div>`:''}
+      <div class="mono" style="font-size:12px;line-height:1.9">
+        Prev day: ${fmt(p.levels?.prev_day?.PDH)} / ${fmt(p.levels?.prev_day?.PDL)} / ${fmt(p.levels?.prev_day?.PDC)}<br>
+        CPR (${p.levels?.cpr?.class}): TC ${fmt(p.levels?.cpr?.TC)} · P ${fmt(p.levels?.cpr?.P)} · BC ${fmt(p.levels?.cpr?.BC)}<br>
+        Pivots: R1 ${fmt(p.levels?.pivots?.R1)} · S1 ${fmt(p.levels?.pivots?.S1)} · Camarilla H3 ${fmt(p.levels?.camarilla?.H3)} · L3 ${fmt(p.levels?.camarilla?.L3)}
+      </div>
+      <div style="margin-top:10px">${(p.setups||[]).map(st=>`
+        <div style="font-size:11.5px;padding:4px 0;border-top:1px solid var(--border)">
+          <span class="side ${st.side}">${st.side}</span> <b>${st.name}</b> —
+          <span class="mono">entry ${fmt(st.entry)} · stop ${fmt(st.stop)} · T ${(st.targets||[]).map(fmt).join('/')}</span>
+        </div>`).join('')}
+      </div>` : '<div class="q">plan JSON not found for this date</div>';
+  const outcomes=(r.setups||[]).map(st=>{
+    const badge = st.status==='filled'
+      ? `<span class="verd ${st.net_pct>0?'RIGHT':'WRONG'}">${st.net_pct>0?'WIN':'LOSS'} ${pct(st.net_pct)}</span>`
+      : `<span class="verd INFO">${st.status.replace(/_/g,' ')}</span>`;
+    return `<div style="font-size:11.5px;padding:4px 0;border-top:1px solid var(--border)">
+      <span class="side ${st.side}">${st.side}</span> ${st.name} ${badge}
+      ${st.status==='filled'?`<span class="mono q"> ${fmt(st.entry)} → ${fmt(st.exit)} · ${st.reached}</span>`:''}
+    </div>`;}).join('');
+  return `<div class="card" id="sc${i}">
+    <div class="chead" onclick="document.getElementById('sc${i}').classList.toggle('open')">
+      <div class="rankn">${i+1}</div>
+      <div><div class="sym">${r.tsym}</div>
+        <div class="csub">${h.read||('conviction '+(r.conviction||'—'))}</div></div>
+      <div class="chips">${srChip}${netChip}${s.plan_correct?'<span class="chip high">primary ✓</span>':''}</div>
+    </div>
+    <div class="cbody">
+      <div class="sc-grid">
+        <div class="colbox">
+          <div class="colhead">The plan (as built the evening before)</div>
+          ${plan}
+        </div>
+        <div class="colbox">
+          <div class="colhead">What actually happened</div>
+          <div class="mono" style="font-size:12.5px;margin-bottom:10px">
+            O ${fmt(d.open)} · H ${fmt(d.high)} · L ${fmt(d.low)} · C ${fmt(d.close)}
+            <span class="${(d.return_pct||0)>=0?'pos':'neg'}">(${d.return_pct!=null?(d.return_pct>=0?'+':'')+d.return_pct+'%':'—'} open→close)</span>
+            · trendiness ${fmt(d.trendiness)}
+          </div>
+          <div class="colhead" style="margin-top:4px">Right vs wrong</div>
+          <div class="scroll"><table style="font-size:11.5px"><thead><tr><th>Check</th><th>Plan said</th><th>Market did</th><th>Verdict</th></tr></thead>
+            <tbody>${checks}</tbody></table></div>
+          <div class="colhead" style="margin-top:12px">Setup outcomes (simulated, net of cost)</div>
+          ${outcomes||'<div class="q">no setups evaluated</div>'}
+        </div>
+      </div>
+    </div></div>`;
 }
 
 // ---------- TXT downloads ----------
