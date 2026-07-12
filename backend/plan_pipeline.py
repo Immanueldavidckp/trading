@@ -112,13 +112,21 @@ def _intraday_for_day(tsym: str, day: _dt.date,
                       intervals=("15m", "5m")) -> List[dict]:
     """Actual intraday candles for one IST day (oldest-first). Tries each interval
     in order (15m is already stored by build → no extra fetch); fetches once if a
-    tried interval isn't stored for that day yet."""
+    tried interval isn't stored for that day yet.
+
+    A day that hasn't happened (or is still in progress) can NEVER have candles on
+    Upstox, so the fetch-fallback is skipped for day >= today — without this guard,
+    scoring a future date hammers Upstox up to len(intervals) times per symbol
+    (e.g. 46 stocks x 2 intervals = 92 calls) purely to confirm "no data yet",
+    which is slow enough to 504-timeout the request."""
     from upstox_client import UpstoxClient as _UC
+    today_ist = _dt.datetime.now(IST).date()
+    can_fetch = day < today_ist
     start = _dt.datetime.combine(day, _dt.time(0, 0), IST)
     s_s = int(start.timestamp()); e_s = s_s + 86400
     for iv in intervals:
         rows = _UC.query(tsym, iv, limit=100000, from_ts=s_s, to_ts=e_s)
-        if len(rows) < 3:
+        if len(rows) < 3 and can_fetch:
             try:
                 from main import _upstox
                 _upstox().fetch_candles(tsym=tsym, interval=iv)
@@ -230,6 +238,12 @@ def score_daily_plans(plan_date: str) -> Dict:
     actual candles; store per-stock results and the book scorecard."""
     ensure_tables()
     day = _dt.date.fromisoformat(plan_date)
+    today_ist = _dt.datetime.now(IST).date()
+    if day >= today_ist:
+        # Fast, explicit answer instead of silently trying (and failing slowly)
+        # to fetch candles for a session that hasn't happened yet.
+        return {"ok": False, "error": "not_yet_traded",
+                "message": f"{plan_date} hasn't happened yet — nothing to score."}
     conn = _db.connect()
     try:
         cur = conn.cursor()

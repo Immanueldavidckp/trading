@@ -141,23 +141,42 @@ let TAB='plan';
 let PLANS=[], PLAN_DATE='';   // last-rendered plan list (for the TXT downloads)
 const fmt=(v,d=2)=>(v==null||v===''||isNaN(v))?'—':Number(v).toFixed(d);
 const pct=v=>(v==null||isNaN(v))?'—':(v>=0?'+':'')+Number(v).toFixed(2)+'%';
+const todayIST=()=>new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});   // YYYY-MM-DD
 
-function showTab(t){TAB=t;$('tabPlan').classList.toggle('on',t==='plan');$('tabScore').classList.toggle('on',t==='score');
-  $('planView').style.display=t==='plan'?'':'none';$('scoreView').style.display=t==='score'?'':'none';reload();}
+function showTab(t){
+  const prevTab=TAB; TAB=t;
+  $('tabPlan').classList.toggle('on',t==='plan');$('tabScore').classList.toggle('on',t==='score');
+  $('planView').style.display=t==='plan'?'':'none';$('scoreView').style.display=t==='score'?'':'none';
+  reload(prevTab!==t);   // switching tabs re-picks the sensible default date for that tab
+}
 
-async function loadDates(){
+async function loadDates(forceDefault){
   const j=await fetch('/api/plan/dates').then(r=>r.json());
   // Both tabs list every plan date — picking an unscored past date on the
-  // Scorecard auto-scores it; a future date shows "not traded yet".
+  // Scorecard auto-scores it; a future date (nothing traded yet) is shown
+  // plainly instead of being queried.
   const dates=[...new Set([...(j.plan_dates||[]),...(j.scored_dates||[])])].sort().reverse();
   const sel=$('dateSel');
+  const prevVal=sel.value;
   sel.innerHTML = dates.length ? dates.map(d=>`<option value="${d}">${d}</option>`).join('')
                                : '<option value="">— none yet —</option>';
+  if(!dates.length) return dates;
+  const today=todayIST();
+  if(!forceDefault && dates.includes(prevVal)){ sel.value=prevVal; return dates; }
+  if(TAB==='score'){
+    // Scorecard needs a session that has ALREADY happened — default to the
+    // newest date strictly before today, not just the newest plan (which is
+    // usually tomorrow's, and would otherwise silently try to score the future).
+    const past=dates.find(d=>d<today);
+    sel.value = past || dates[dates.length-1];
+  } else {
+    sel.value = dates[0];   // Plan tab: newest (tomorrow's) plan is the useful default
+  }
   return dates;
 }
 
-async function reload(){
-  const dates=await loadDates();
+async function reload(forceDefault){
+  const dates=await loadDates(forceDefault);
   const date=$('dateSel').value;
   if(TAB==='plan') renderPlan(date); else renderScore(date);
 }
@@ -240,6 +259,13 @@ const _autoScored={};   // date -> true, so a missing scorecard is auto-scored O
 async function renderScore(date){
   const tiles=$('tiles'), results=$('results'), honesty=$('honesty');
   if(!date){ tiles.innerHTML=''; results.innerHTML='<div class="empty">No plans built yet.</div>'; honesty.style.display='none'; return; }
+  // A future/today's-still-open session has no candles yet — say so instantly
+  // instead of asking the backend to score it (it would only find nothing).
+  if(date>=todayIST()){
+    tiles.innerHTML=''; honesty.style.display='none';
+    results.innerHTML='<div class="empty">'+date+' hasn\'t happened yet — nothing to score.<br>Pick an earlier date; it scores automatically.</div>';
+    return;
+  }
   results.innerHTML='<div class="empty">loading…</div>';
 
   let j=await fetch('/api/plan/scorecard?date='+date).then(r=>r.json());
