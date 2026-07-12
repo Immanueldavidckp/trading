@@ -42,7 +42,7 @@ def _gate_setup(setup: Dict, ctx: Dict) -> Optional[str]:
     cls = ctx.get("cpr_class"); bias = ctx.get("bias"); o = ctx.get("open")
     cam = ctx.get("cam") or {}; cpr = ctx.get("cpr") or {}
     if ctx.get("stand_down"):
-        return "no-trade profile: wide CPR + RVOL<0.5 (chop day) — stand down"
+        return "no-trade profile: RVOL<0.5 — no volume, breakouts fail and fades drift; stand down"
     dt = setup.get("day_type")
     if dt == "trend" and cls == "wide":
         return "wide CPR → breakout setups OFF (fade day)"
@@ -290,8 +290,10 @@ def score_plan(plan: Dict, candles: List[dict]) -> Dict:
            "bias": plan.get("bias"),
            "open": candles[0]["o"] if candles else None,
            "cam": L.get("camarilla"), "cpr": L.get("cpr"),
-           "stand_down": ((L.get("cpr") or {}).get("class") == "wide"
-                          and (L.get("rvol") or 1.0) < 0.5)}
+           # RVOL<0.5 is a stand-down on ANY CPR class: 07-10 proved a dead-volume
+           # day kills breakouts and fades alike (25/43 primaries, 28% win) —
+           # narrow-CPR "trend days" without volume are failed-breakout factories.
+           "stand_down": (L.get("rvol") or 1.0) < 0.5}
     setups = [score_setup(s, candles, ctx, plan.get("tsym")) for s in plan.get("setups", [])]
     filled = [s for s in setups if s["status"] == "filled"]
     triggered = [s for s in setups if s["status"] in ("filled", "triggered", "triggered_no_fill")]
