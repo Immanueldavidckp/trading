@@ -777,6 +777,14 @@ def plan_dates():
     return plan_pipeline.list_plan_dates()
 
 
+@app.get("/api/plan/live")
+def plan_live(date: Optional[str] = None):
+    """Live monitor of the active session's plan: each stock's live price vs its
+    planned setups, Order-Block touches prioritised. Powers the Suggestion page."""
+    import plan_pipeline
+    return plan_pipeline.live_plan_status(date=date)
+
+
 # ---------- Root handler: redirect to /live.html ----------
 @app.get("/")
 def root():

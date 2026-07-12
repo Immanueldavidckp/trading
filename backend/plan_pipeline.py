@@ -327,6 +327,111 @@ def get_scorecard(plan_date: str) -> Dict:
             "count": len(results), "results": results}
 
 
+def _nearest_ob(zones: Dict, ltp: float, near_pct: float) -> Dict:
+    """Nearest unmitigated ORDER BLOCK to the live price. OBs get priority in the
+    monitor because they historically react harder than FVGs."""
+    if ltp is None or not zones:
+        return {"near": False, "touching": False, "approaching": False}
+    obs = [z for k in ("above", "below") for z in (zones.get(k) or [])
+           if z.get("kind") == "OB" and z.get("top") is not None and z.get("bottom") is not None]
+    best = None
+    for z in obs:
+        top, bot = z["top"], z["bottom"]
+        if bot <= ltp <= top:
+            dist = 0.0
+        elif ltp < bot:
+            dist = (bot - ltp) / ltp * 100
+        else:
+            dist = (ltp - top) / ltp * 100
+        if best is None or dist < best[0]:
+            best = (dist, z)
+    if best is None:
+        return {"near": False, "touching": False, "approaching": False}
+    dist, z = best
+    return {"near": dist <= near_pct, "touching": dist == 0.0,
+            "approaching": 0.0 < dist <= near_pct, "dist_pct": round(dist, 2),
+            "zone": {"kind": z.get("kind"), "dir": z.get("dir"),
+                     "top": z.get("top"), "bottom": z.get("bottom")}}
+
+
+def _setup_live(s: Dict, ltp: float, near_pct: float) -> Dict:
+    tp, td = s.get("trigger_price"), s.get("trigger_dir")
+    out = {"name": s.get("name"), "side": s.get("side"), "quality": s.get("quality"),
+           "trigger_price": tp, "trigger_dir": td, "entry": s.get("entry"),
+           "stop": s.get("stop"), "targets": s.get("targets"),
+           "state": "waiting", "dist_pct": None}
+    if ltp is None or tp is None:
+        return out
+    triggered = (ltp >= tp) if td == "above" else (ltp <= tp)
+    dist = abs(ltp - tp) / ltp * 100
+    out["dist_pct"] = round(dist, 2)
+    out["state"] = "triggered" if triggered else ("approaching" if dist <= near_pct else "waiting")
+    return out
+
+
+def live_plan_status(date: Optional[str] = None, near_pct: float = 0.5) -> Dict:
+    """Live monitor of the active session's plan across all stocks: each stock's
+    live price vs its planned setups, with Order-Block proximity flagged and
+    sorted to the top (OB = higher-conviction reaction)."""
+    ensure_tables()
+    today = _dt.datetime.now(IST).date().isoformat()
+    conn = _db.connect()
+    try:
+        cur = conn.cursor(); PH = _db.PLACE
+        if not date:
+            cur.execute("SELECT DISTINCT plan_date FROM daily_plans ORDER BY plan_date")
+            all_dates = [r[0] for r in cur.fetchall()]
+            upcoming = [d for d in all_dates if d >= today]
+            date = upcoming[0] if upcoming else (all_dates[-1] if all_dates else None)
+        if not date:
+            cur.close()
+            return {"ok": False, "error": "no plans built yet"}
+        cur.execute(f"SELECT tsym, plan_json FROM daily_plans WHERE plan_date={PH}", [date])
+        plans = [(r[0], json.loads(r[1])) for r in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+
+    latest = {}
+    try:
+        from main import _feed
+        latest = dict(_feed().latest)
+    except Exception:
+        pass
+
+    rows = []
+    for tsym, plan in plans:
+        if not plan.get("ok"):
+            continue
+        snap = latest.get(tsym) or {}
+        ltp = snap.get("lp")
+        live = ltp is not None
+        if ltp is None:
+            ltp = plan.get("last_close")
+        L = plan.get("levels") or {}
+        ob = _nearest_ob(L.get("smc_zones") or {}, ltp, near_pct)
+        setups = [_setup_live(s, ltp, near_pct) for s in plan.get("setups", [])]
+        in_play = [s for s in setups if s["state"] in ("triggered", "approaching")]
+        dists = [s["dist_pct"] for s in setups if s["dist_pct"] is not None]
+        rows.append({
+            "tsym": tsym, "ltp": ltp, "live": live,
+            "change_pct": snap.get("change_pct"),
+            "bias": plan.get("bias"), "conviction": plan.get("conviction"),
+            "score": plan.get("score"), "headline": (plan.get("headline") or {}).get("read"),
+            "ob": ob, "setups": setups,
+            "in_play": len(in_play), "triggered": sum(1 for s in setups if s["state"] == "triggered"),
+            "nearest_dist": min(dists) if dists else 999,
+            "priority": bool(ob.get("touching") or ob.get("approaching")),
+        })
+
+    # OB priority first, then whatever is closest to triggering
+    rows.sort(key=lambda r: (0 if r["priority"] else 1,
+                             0 if r["triggered"] else 1, r["nearest_dist"]))
+    return {"ok": True, "plan_date": date, "is_today": date == today,
+            "count": len(rows), "live_prices": any(r["live"] for r in rows),
+            "rows": rows}
+
+
 def list_plan_dates() -> Dict:
     ensure_tables()
     conn = _db.connect()

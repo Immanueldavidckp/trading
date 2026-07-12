@@ -416,32 +416,28 @@
       </div>
     </div>
 
-    <!-- ===================== SUGGESTION VIEW ===================== -->
+    <!-- ===================== SUGGESTION VIEW = LIVE PLAN MONITOR ===================== -->
+    <style>
+      .lpm-row{background:var(--panel-2,#12161f);border:1px solid var(--border);border-radius:10px;padding:10px 13px}
+      .lpm-row.prio{border-color:var(--yellow);box-shadow:0 0 0 1px var(--yellow) inset;background:rgba(255,200,0,.05)}
+      .lpm-row.idle{opacity:.5}
+      .lpm-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+      .lpm-setup{display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 0;border-top:1px solid var(--border);flex-wrap:wrap}
+      .lpm-ob{font-family:monospace;font-size:10px;font-weight:800;padding:2px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+      .lpm-chip{font-family:monospace;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--text-3)}
+      .lpm-chip.high{color:var(--green)} .lpm-chip.medium{color:var(--yellow)} .lpm-chip.low{color:var(--text-3)}
+      .lpm-st{font-family:monospace;font-size:10px;font-weight:800;padding:2px 7px;border-radius:5px}
+    </style>
     <div id="suggestionView" class="view-pad" style="display:none">
-      <div class="ana-card" style="margin-bottom:12px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
-          <div>
-            <div class="panel-title">FVG trade plans — backtested per timeframe</div>
-            <div class="panel-sub">For the freshest unmitigated Fair Value Gap on each timeframe: entry zone, stop, and the <b>chance of reaching your target profit before the stop</b> — from a look-ahead-free backtest of this exact rule on your stored candles. Honest, not optimistic.</div>
-          </div>
-          <div style="text-align:right">
-            <div class="kpi-label">Min target profit ₹</div>
-            <input id="minProfitInp" type="number" step="0.25" min="0" placeholder="auto (0.5%)"
-                   onchange="loadSuggestionMode()"
-                   style="width:120px;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-family:monospace;font-size:13px;text-align:right;margin-top:4px">
-            <div class="dim" style="font-size:10px;margin-top:3px">e.g. 1 = find a ₹1 move</div>
-          </div>
+      <div class="ana-card" style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div>
+          <div class="panel-title">Live plan monitor — <span id="lpmDate">—</span></div>
+          <div class="panel-sub">Your day's plan (all stocks) tracked against the live price. <b>⛏ Order-Block touches are pinned to the top</b> — those zones react hardest. Auto-refreshes.</div>
         </div>
+        <div id="lpmStatus" class="dim mono" style="font-size:11px"></div>
       </div>
-      <div id="fvgPlanList" style="display:flex;flex-direction:column;gap:12px">
-        <div class="dim" style="padding:20px">backtesting all timeframes…</div>
-      </div>
-      <div class="ana-card" style="margin:18px 0 10px">
-        <div class="panel-title">Directional bias — multi-timeframe SMC call</div>
-        <div class="panel-sub">Trend + next move per timeframe — context for the plans above.</div>
-      </div>
-      <div id="suggestionGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-        <div class="dim" style="padding:20px">loading…</div>
+      <div id="lpmList" style="display:flex;flex-direction:column;gap:10px">
+        <div class="dim" style="padding:20px">loading plan…</div>
       </div>
     </div>
 
@@ -1072,43 +1068,68 @@ function renderFvgPlan(p){
   </div>`;
 }
 
-async function loadSuggestionMode(){
-  if(!active) return;
-  const grid=document.getElementById('suggestionGrid');
-  const plist=document.getElementById('fvgPlanList');
-  plist.innerHTML='<div class="dim" style="padding:20px">backtesting all timeframes… (a few seconds)</div>';
-  grid.innerHTML='<div class="dim" style="padding:20px">analysing…</div>';
-  // FVG trade plans (the main content) — with the user's min target profit
-  const mp=parseFloat(document.getElementById('minProfitInp').value);
-  const mpq=(mp>0)?`&min_profit=${mp}`:'';
-  fetch(`/api/fvg_plan?tsym=${encodeURIComponent(active)}${mpq}`).then(r=>r.json()).then(d=>{
-    if(d.min_profit && !(mp>0)) document.getElementById('minProfitInp').placeholder='auto ₹'+d.min_profit;
-    plist.innerHTML=(d.plans||[]).map(renderFvgPlan).join('')||'<div class="dim" style="padding:20px">no plans</div>';
-  }).catch(e=>{ plist.innerHTML='<div style="padding:20px;color:var(--red)">error loading FVG plans</div>'; });
-  try{
-    const r=await fetch(`/api/suggestion?tsym=${encodeURIComponent(active)}`);
-    const d=await r.json();
-    const cards=(d.suggestions||[]).map(s=>{
-      if(!s.ok) return `<div class="ana-card"><div style="font-size:16px;font-weight:800">${s.interval}</div><div class="dim">no data</div></div>`;
-      const dirCol=s.direction==='UP'?'var(--green)':s.direction==='DOWN'?'var(--red)':'var(--yellow)';
-      const arrow=s.direction==='UP'?'▲':s.direction==='DOWN'?'▼':'↔';
-      return `<div class="ana-card">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div style="font-size:17px;font-weight:800">${s.interval}</div>
-          <div style="color:${dirCol};font-weight:800;font-size:14px">${arrow} ${s.direction}</div></div>
-        <div class="dim" style="font-size:11px;margin:5px 0 9px">trend <b style="color:${dirCol}">${(s.trend||'').toUpperCase()}</b> · H/L ${s.hl} · ${s.zone||''}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-family:monospace;font-size:12px">
-          <div><span class="dim">Now</span><br><b>${fmtNum(s.last_price)}</b></div>
-          <div><span class="dim">Target</span><br><b style="color:${dirCol}">${s.target!=null?fmtNum(s.target):'—'}</b></div>
-          <div><span class="dim">Entry (pullback)</span><br><b>${s.entry!=null?fmtNum(s.entry):'—'}</b></div>
-          <div><span class="dim">Next move</span><br><b style="font-size:11px">${s.next_move||'—'}</b></div>
-        </div>
-        <div class="dim" style="font-size:10.5px;margin-top:9px;line-height:1.45">${s.rationale||''}</div>
-      </div>`;
-    }).join('');
-    grid.innerHTML=cards||'<div class="dim" style="padding:20px">no data</div>';
-  }catch(e){ grid.innerHTML='<div style="padding:20px;color:var(--red)">error loading suggestions</div>'; }
+/* ---------- Suggestion page = LIVE PLAN MONITOR (all stocks) ----------
+   Shows the active session's plan tracked against the live price. Setups that
+   have triggered / are near their trigger surface first; any stock whose price
+   is touching or approaching an Order Block is pinned to the very top. */
+function lpmStateBadge(st){
+  const m={triggered:['TRIGGERED','var(--green)','var(--green-bg)'],
+           approaching:['NEAR','var(--yellow)','rgba(255,200,0,.14)'],
+           waiting:['waiting','var(--text-3)','transparent']};
+  const [t,c,bg]=m[st]||m.waiting;
+  return `<span class="lpm-st" style="color:${c};background:${bg}">${t}</span>`;
 }
+function renderLpmRow(r){
+  const chg=r.change_pct, ob=r.ob||{};
+  const chgCol=chg==null?'var(--text-3)':chg>=0?'var(--green)':'var(--red)';
+  const biasCol=r.bias==='bullish'?'var(--green)':r.bias==='bearish'?'var(--red)':'var(--text-3)';
+  let obBadge='';
+  if(ob.touching) obBadge=`<span class="lpm-ob" style="background:var(--red-bg);color:var(--red);border-color:var(--red)">⛏ AT ORDER BLOCK ${fmtNum(ob.zone.bottom)}–${fmtNum(ob.zone.top)}</span>`;
+  else if(ob.approaching) obBadge=`<span class="lpm-ob" style="background:rgba(255,200,0,.14);color:var(--yellow);border-color:var(--yellow)">⛏ approaching OB · ${ob.dist_pct}% · ${fmtNum(ob.zone.bottom)}–${fmtNum(ob.zone.top)}</span>`;
+  const inplay=(r.setups||[]).filter(s=>s.state!=='waiting');
+  const setupsHtml=inplay.map(s=>{
+    const sideCol=s.side==='LONG'?'var(--green)':'var(--red)';
+    return `<div class="lpm-setup">
+      <span style="color:${sideCol};font-weight:800;font-size:11px;min-width:42px">${s.side}</span>
+      <span style="flex:1;min-width:120px">${s.name}</span>
+      ${lpmStateBadge(s.state)}
+      <span class="mono dim" style="font-size:11px">trig ${fmtNum(s.trigger_price)} · entry ${fmtNum(s.entry)} · stop ${fmtNum(s.stop)}${s.dist_pct!=null?` · ${s.dist_pct}% away`:''}</span>
+    </div>`;}).join('');
+  const idle = inplay.length===0 && !obBadge;
+  return `<div class="lpm-row ${r.priority?'prio':''} ${idle?'idle':''}">
+    <div class="lpm-head">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b style="font-size:15px">${r.tsym}</b>
+        <span class="mono" style="font-size:14px">₹${fmtNum(r.ltp)}</span>
+        ${chg!=null?`<span class="mono" style="color:${chgCol};font-size:12px">${chg>=0?'+':''}${fmtNum(chg)}%</span>`:''}
+        ${obBadge}
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span style="color:${biasCol};font-weight:700;font-size:11px;text-transform:uppercase">${r.bias}</span>
+        <span class="lpm-chip ${r.conviction}">${r.conviction}</span>
+        ${r.triggered?`<span class="lpm-chip" style="color:var(--green)">${r.triggered} triggered</span>`:r.in_play?`<span class="lpm-chip" style="color:var(--yellow)">${r.in_play} near</span>`:''}
+      </div>
+    </div>
+    ${r.headline?`<div class="dim" style="font-size:11px;margin:3px 0 ${inplay.length?'2px':'0'}">${r.headline}</div>`:''}
+    ${setupsHtml||'<div class="dim" style="font-size:11px;padding-top:3px">no setup in play yet — waiting for the open type / a trigger</div>'}
+  </div>`;
+}
+async function loadSuggestionMode(){
+  const list=document.getElementById('lpmList');
+  try{
+    const j=await fetch('/api/plan/live').then(r=>r.json());
+    if(!j.ok){ list.innerHTML='<div class="dim" style="padding:20px">'+(j.error||'no plan built yet — build it from the 📋 Plan page')+'</div>'; return; }
+    document.getElementById('lpmDate').textContent=j.plan_date+(j.is_today?' · TODAY':'');
+    document.getElementById('lpmStatus').textContent=(j.live_prices?'● live prices':'○ last close (market closed)')+' · '+j.count+' stocks · '+istHMS(Date.now(),false).slice(0,8);
+    const activeRows=j.rows.filter(r=>r.priority||r.in_play>0);
+    const idle=j.rows.length-activeRows.length;
+    let html=(activeRows.length?activeRows:j.rows.slice(0,12)).map(renderLpmRow).join('');
+    if(activeRows.length && idle>0) html+=`<div class="dim" style="padding:8px 4px;font-size:11px">+ ${idle} more stocks in the plan — waiting, no trigger near yet</div>`;
+    list.innerHTML=html||'<div class="dim" style="padding:20px">no stocks in the plan for '+j.plan_date+'</div>';
+  }catch(e){ list.innerHTML='<div style="padding:20px;color:var(--red)">error loading the plan monitor</div>'; }
+}
+// auto-refresh while the Suggestion page is open
+setInterval(()=>{ if(currentMode==='suggestion' && document.getElementById('suggestionView').style.display!=='none') loadSuggestionMode(); }, 6000);
 function toggleLogScale(){ logScale=!logScale; document.getElementById('logBtn').textContent='Log scale: '+(logScale?'on':'off'); rebuildChart(); }
 
 /* indicator chip handlers */
