@@ -179,7 +179,7 @@
     </div>
 
     <!-- KPI strip -->
-    <div class="kpis">
+    <div class="kpis" id="kpiStrip">
       <div class="kpi"><span class="k">LTP</span><span class="v xl mono" id="kpiPriceVal">—</span><span class="pill" id="kpiChgPill">—</span></div>
       <div class="kpi"><span class="k">Bid</span><span class="v mono green" id="kpiBidVal">—</span></div>
       <div class="kpi"><span class="k">Ask</span><span class="v mono red" id="kpiAskVal">—</span></div>
@@ -418,7 +418,8 @@
 
     <!-- ===================== SUGGESTION VIEW = LIVE PLAN MONITOR ===================== -->
     <style>
-      .lpm-row{background:var(--panel-2,#12161f);border:1px solid var(--border);border-radius:10px;padding:10px 13px}
+      .lpm-row{background:var(--panel-2,#12161f);border:1px solid var(--border);border-radius:10px;padding:10px 13px;cursor:pointer;transition:border-color .12s,transform .12s}
+      .lpm-row:hover{border-color:var(--accent,#5e8eff);transform:translateY(-1px)}
       .lpm-row.prio{border-color:var(--yellow);box-shadow:0 0 0 1px var(--yellow) inset;background:rgba(255,200,0,.05)}
       .lpm-row.idle{opacity:.5}
       .lpm-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
@@ -802,9 +803,21 @@ function setMode(m){
   document.getElementById('normalView').style.display    = m==='normal'?'':'none';
   document.getElementById('analysisView').style.display  = m==='analysis'?'':'none';
   document.getElementById('suggestionView').style.display= m==='suggestion'?'':'none';
+  // The LTP/Bid/Ask KPI strip is about the ACTIVE chart symbol — irrelevant on the
+  // cross-stock Suggestion monitor, so hide it there.
+  document.getElementById('kpiStrip').style.display = m==='suggestion'?'none':'';
   if(m==='normal') setTimeout(()=>chart.resize(),30);
   else if(m==='analysis') loadAnalysisMode();
   else if(m==='suggestion') loadSuggestionMode();
+}
+
+/* Click a monitor row → open that stock on the chart with the Order-Block
+   overlay turned on, so you see the OB zones the plan is watching. */
+function lpmOpen(tsym){
+  SMC.ob=true;
+  const chip=document.querySelector('.ind-chip[data-smc="ob"]'); if(chip) chip.classList.add('on');
+  setMode('normal');
+  selectSymbol(tsym, true);
 }
 
 let anTfSel='1m';            // analysis-mode timeframe
@@ -1096,7 +1109,7 @@ function renderLpmRow(r){
       <span class="mono dim" style="font-size:11px">trig ${fmtNum(s.trigger_price)} · entry ${fmtNum(s.entry)} · stop ${fmtNum(s.stop)}${s.dist_pct!=null?` · ${s.dist_pct}% away`:''}</span>
     </div>`;}).join('');
   const idle = inplay.length===0 && !obBadge;
-  return `<div class="lpm-row ${r.priority?'prio':''} ${idle?'idle':''}">
+  return `<div class="lpm-row ${r.priority?'prio':''} ${idle?'idle':''}" onclick="lpmOpen('${r.tsym}')" title="Open ${r.tsym} on the chart with Order-Block zones">
     <div class="lpm-head">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <b style="font-size:15px">${r.tsym}</b>
