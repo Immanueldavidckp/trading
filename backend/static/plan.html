@@ -330,10 +330,15 @@ function scoreCard(r,p,i){
   const outcomes=(r.setups||[]).map(st=>{
     const badge = st.status==='filled'
       ? `<span class="verd ${st.net_pct>0?'RIGHT':'WRONG'}">${st.net_pct>0?'WIN':'LOSS'} ${pct(st.net_pct)}</span>`
+      : st.status==='tick_gate_failed'
+      ? `<span class="verd WRONG">✋ order-flow gate</span>`
       : `<span class="verd INFO">${st.status.replace(/_/g,' ')}</span>`;
+    const extra = st.status==='filled' ? `<span class="mono q"> ${fmt(st.entry)} → ${fmt(st.exit)} · ${st.reached}</span>`
+      : st.status==='skipped_by_filter' && st.filter_reason ? `<span class="q"> ${st.filter_reason}</span>`
+      : st.status==='tick_gate_failed' && st.tick_gate ? `<span class="q"> book imb ${(st.tick_gate.imbalance*100).toFixed(0)}% · ↑${st.tick_gate.up_ticks}/↓${st.tick_gate.down_ticks} against the trade</span>`
+      : '';
     return `<div style="font-size:11.5px;padding:4px 0;border-top:1px solid var(--border)">
-      <span class="side ${st.side}">${st.side}</span> ${st.name} ${badge}
-      ${st.status==='filled'?`<span class="mono q"> ${fmt(st.entry)} → ${fmt(st.exit)} · ${st.reached}</span>`:''}
+      <span class="side ${st.side}">${st.side}</span> ${st.name} ${badge}${extra}
     </div>`;}).join('');
   return `<div class="card" id="sc${i}">
     <div class="chead" onclick="document.getElementById('sc${i}').classList.toggle('open')">
@@ -462,6 +467,11 @@ function scoreToText(r, p){
   (r.setups||[]).forEach(st=>{
     if(st.status==='filled'){
       out.push(`   [${st.net_pct>0?'WIN ':'LOSS'} ${pct(st.net_pct)}] ${st.side} ${st.name} — ${fmt(st.entry)} → ${fmt(st.exit)} (${st.reached}, ${st.r_multiple}R)`);
+    }else if(st.status==='skipped_by_filter'){
+      out.push(`   [gated OFF] ${st.side} ${st.name} — ${st.filter_reason||''}`);
+    }else if(st.status==='tick_gate_failed'){
+      const g=st.tick_gate||{};
+      out.push(`   [order-flow gate] ${st.side} ${st.name} — book imb ${g.imbalance!=null?(g.imbalance*100).toFixed(0)+'%':'?'} · ↑${g.up_ticks??'?'}/↓${g.down_ticks??'?'} against the trade`);
     }else{
       out.push(`   [${st.status.replace(/_/g,' ')}] ${st.side} ${st.name}`);
     }

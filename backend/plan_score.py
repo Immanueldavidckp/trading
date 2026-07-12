@@ -18,8 +18,89 @@ placed anywhere in this system.
 """
 from __future__ import annotations
 from typing import List, Dict, Optional
+import datetime as _dt
 
+import db as _db
 from plan_engine import ROUND_TRIP_COST_PCT
+
+_UTC = _dt.timezone.utc
+
+
+# ── the improved-strategy gates (evidence from 07-08 / 07-10 scorecards) ────
+#
+# Measured on this system's own replays:
+#   • trend setups on a WIDE-CPR day:   18% win, −1.25%/trade   → OFF
+#   • fade setups on a NARROW-CPR day:  42% win, −0.11%/trade   → OFF
+#   • trend setups WITH the daily bias: 60% win  vs 47% against → against-bias OFF
+#   • wide CPR + RVOL<0.5 stocks:       28% win (25/43 of the 07-10 book!) → stand down
+# These are exactly the compendium's §7.2/§7.4 playbook-selection rules — the
+# plan engine already *said* them in valid_when/no_trade; the scorer now
+# ENFORCES them instead of taking every armed setup.
+
+def _gate_setup(setup: Dict, ctx: Dict) -> Optional[str]:
+    """Return a skip-reason when this setup must NOT be traded today, else None."""
+    cls = ctx.get("cpr_class"); bias = ctx.get("bias"); o = ctx.get("open")
+    cam = ctx.get("cam") or {}; cpr = ctx.get("cpr") or {}
+    if ctx.get("stand_down"):
+        return "no-trade profile: wide CPR + RVOL<0.5 (chop day) — stand down"
+    dt = setup.get("day_type")
+    if dt == "trend" and cls == "wide":
+        return "wide CPR → breakout setups OFF (fade day)"
+    if dt == "range" and cls == "narrow":
+        return "narrow CPR → fade setups OFF (trend day)"
+    if dt == "trend":
+        if bias == "bullish" and setup.get("side") == "SHORT":
+            return "against daily bias (bullish) — trend shorts OFF"
+        if bias == "bearish" and setup.get("side") == "LONG":
+            return "against daily bias (bearish) — trend longs OFF"
+        TC, BC = cpr.get("TC"), cpr.get("BC")
+        if o is not None and BC is not None and setup.get("side") == "LONG" and o < BC:
+            return "gapped down below CPR — long breakout OFF"
+        if o is not None and TC is not None and setup.get("side") == "SHORT" and o > TC:
+            return "gapped up above CPR — short breakout OFF"
+    if "Camarilla fade" in (setup.get("name") or ""):
+        H3, L3 = cam.get("H3"), cam.get("L3")
+        if o is not None and H3 is not None and L3 is not None and not (L3 <= o <= H3):
+            return f"opened at {o}, outside H3–L3 — fade plan invalid"
+    return None
+
+
+def _tick_gate(tsym: str, bar_ms: int, side: str) -> Dict:
+    """Order-flow confirmation from the stored tick-by-tick market_depth:
+    around the entry bar, the book imbalance and tick direction must support
+    the trade (LONG: imbalance ≥55% & up-ticks ≥ down-ticks; SHORT mirrored).
+    Where no depth was recorded (before the universe recorder started, or feed
+    down) → 'no_data' and the trade is allowed — the gate only ever removes
+    trades the order flow actively contradicts."""
+    try:
+        t0 = _dt.datetime.fromtimestamp(bar_ms / 1000 - 60, _UTC).replace(tzinfo=None).isoformat(timespec="milliseconds")
+        t1 = _dt.datetime.fromtimestamp(bar_ms / 1000 + 240, _UTC).replace(tzinfo=None).isoformat(timespec="milliseconds")
+        PH = _db.PLACE
+        conn = _db.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(f"SELECT total_buy_qty,total_sell_qty,ltp FROM market_depth "
+                        f"WHERE tsym={PH} AND received_at>={PH} AND received_at<={PH} ORDER BY id",
+                        [tsym, t0, t1])
+            rows = cur.fetchall(); cur.close()
+        finally:
+            conn.close()
+    except Exception:
+        return {"status": "no_data"}
+    if len(rows) < 5:
+        return {"status": "no_data"}
+    buy = sum(r[0] or 0 for r in rows); sell = sum(r[1] or 0 for r in rows)
+    tot = buy + sell
+    imb = (buy / tot) if tot else 0.5
+    ups = downs = 0; prev = None
+    for _, _, lp in rows:
+        if lp is not None and prev is not None:
+            if lp > prev: ups += 1
+            elif lp < prev: downs += 1
+        if lp is not None: prev = lp
+    ok = (imb >= 0.55 and ups >= downs) if side == "LONG" else (imb <= 0.45 and downs >= ups)
+    return {"status": "passed" if ok else "failed",
+            "imbalance": round(imb, 3), "up_ticks": ups, "down_ticks": downs}
 
 
 def _first_trigger_idx(candles: List[dict], price: float, direction: str) -> Optional[int]:
@@ -39,12 +120,22 @@ def _entry_fill_idx(candles: List[dict], start: int, entry: float) -> Optional[i
     return None
 
 
-def score_setup(setup: Dict, candles: List[dict]) -> Dict:
-    """Replay ONE setup over the day's intraday candles (oldest-first)."""
+def score_setup(setup: Dict, candles: List[dict],
+                ctx: Optional[Dict] = None, tsym: Optional[str] = None) -> Dict:
+    """Replay ONE setup over the day's intraday candles (oldest-first).
+    With `ctx`, the playbook gates run first (a gated setup is never a trade);
+    with `tsym`, the tick-by-tick order-flow gate runs at the entry bar."""
     res = {"name": setup["name"], "side": setup["side"], "quality": setup["quality"],
            "status": "not_triggered", "entry": None, "exit": None,
            "gross_pct": None, "net_pct": None, "r_multiple": None,
-           "max_favorable_pct": None, "reached": None}
+           "max_favorable_pct": None, "reached": None,
+           "filter_reason": None, "tick_gate": None}
+    if ctx is not None:
+        reason = _gate_setup(setup, ctx)
+        if reason:
+            res["status"] = "skipped_by_filter"
+            res["filter_reason"] = reason
+            return res
     tp, td = setup.get("trigger_price"), setup.get("trigger_dir")
     entry, stop = setup.get("entry"), setup.get("stop")
     targets = setup.get("targets") or []
@@ -59,6 +150,13 @@ def score_setup(setup: Dict, candles: List[dict]) -> Dict:
     if fi is None:
         res["status"] = "triggered_no_fill"     # setup armed but limit never tagged
         return res
+
+    if tsym:
+        tg = _tick_gate(tsym, candles[fi]["t"], setup["side"])
+        res["tick_gate"] = tg
+        if tg.get("status") == "failed":
+            res["status"] = "tick_gate_failed"   # order flow contradicted the entry
+            return res
 
     long = setup["side"] == "LONG"
     res["status"] = "filled"
@@ -187,9 +285,18 @@ def score_plan(plan: Dict, candles: List[dict]) -> Dict:
     intraday series (5m/15m, oldest-first)."""
     if not plan.get("ok"):
         return {"ok": False, "tsym": plan.get("tsym"), "error": "bad plan"}
-    setups = [score_setup(s, candles) for s in plan.get("setups", [])]
+    L = plan.get("levels") or {}
+    ctx = {"cpr_class": (L.get("cpr") or {}).get("class"),
+           "bias": plan.get("bias"),
+           "open": candles[0]["o"] if candles else None,
+           "cam": L.get("camarilla"), "cpr": L.get("cpr"),
+           "stand_down": ((L.get("cpr") or {}).get("class") == "wide"
+                          and (L.get("rvol") or 1.0) < 0.5)}
+    setups = [score_setup(s, candles, ctx, plan.get("tsym")) for s in plan.get("setups", [])]
     filled = [s for s in setups if s["status"] == "filled"]
     triggered = [s for s in setups if s["status"] in ("filled", "triggered", "triggered_no_fill")]
+    n_gated = sum(1 for s in setups if s["status"] == "skipped_by_filter")
+    n_tickfail = sum(1 for s in setups if s["status"] == "tick_gate_failed")
 
     wins = [s for s in filled if s["net_pct"] is not None and s["net_pct"] > 0]
     losses = [s for s in filled if s["net_pct"] is not None and s["net_pct"] <= 0]
@@ -201,6 +308,7 @@ def score_plan(plan: Dict, candles: List[dict]) -> Dict:
 
     summary = {
         "n_setups": len(setups), "n_triggered": len(triggered),
+        "n_skipped_filter": n_gated, "n_tick_gate_failed": n_tickfail,
         "n_filled": len(filled), "n_win": len(wins), "n_loss": len(losses),
         "hit_rate": round(len(wins) / len(filled), 3) if filled else None,
         "avg_win_pct": round(sum(s["net_pct"] for s in wins) / len(wins), 3) if wins else None,
@@ -250,6 +358,10 @@ def aggregate_scorecard(scored: List[Dict]) -> Dict:
         "checks_right": checks_right, "checks_wrong": checks_wrong,
         "checks_success": round(checks_right / (checks_right + checks_wrong), 3)
                           if (checks_right + checks_wrong) else None,
+        "n_skipped_filter": sum(sc["summary"].get("n_skipped_filter", 0)
+                                for sc in scored if sc.get("ok")),
+        "n_tick_gate_failed": sum(sc["summary"].get("n_tick_gate_failed", 0)
+                                  for sc in scored if sc.get("ok")),
     }
 
     if not all_filled:
