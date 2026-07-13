@@ -554,6 +554,10 @@ def live_setup_status(tsym: str) -> Dict:
             open_eval = {"verdict": "pending",
                          "text": f"flat open ({gap:+.2f}%) — let the first range set, then follow the break"}
 
+    decision = plan_score.decision_flow(plan, candles, ctx, setups)
+    for s in setups:
+        s["selected"] = (s["name"] == decision.get("selected"))
+
     return {"ok": True, "tsym": tsym, "plan_date": date, "is_today": is_today,
             "ltp": ltp, "day_open": day_open, "change_pct": snap.get("change_pct"),
             "bias": plan.get("bias"), "conviction": plan.get("conviction"),
@@ -561,7 +565,8 @@ def live_setup_status(tsym: str) -> Dict:
             "headline": (plan.get("headline") or {}),
             "day_type_hint": plan.get("day_type_hint"),
             "open_scenarios": plan.get("open_scenarios"),
-            "open_eval": open_eval, "setups": setups, "obs": obs}
+            "open_eval": open_eval, "setups": setups, "obs": obs,
+            "decision": decision, "outcome": decision.get("outcome")}
 
 
 def list_plan_dates() -> Dict:

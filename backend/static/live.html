@@ -196,10 +196,12 @@
         <span id="pbLtp" class="mono" style="font-size:15px"></span>
         <span id="pbOpen" style="font-size:12px"></span>
         <span style="flex:1"></span>
+        <span id="pbOutcome"></span>
         <span id="pbMeta" class="dim mono" style="font-size:11px"></span>
         <button class="btn" onclick="exitPlanMode()" style="padding:4px 12px">✕ Exit plan view</button>
       </div>
-      <div id="pbSetups" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:9px"></div>
+      <div id="pbSteps" style="display:flex;gap:2px;flex-wrap:wrap;margin-top:9px"></div>
+      <div id="pbSetups" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
     </div>
 
     <!-- ===================== NORMAL VIEW ===================== -->
@@ -860,21 +862,33 @@ async function refreshPlanBar(tsym){
   }catch(e){ document.getElementById('pbSetups').innerHTML='<span style="color:var(--red)">error</span>'; }
 }
 function _vcol(v){ return v==='ok'?'var(--green)':v==='fail'?'var(--red)':'var(--text-3)'; }
+const OUTCOME_MAP={win:['✓ WIN','var(--green)'],loss:['✗ LOSS','var(--red)'],
+  'no-trade':['— NO TRADE','var(--text-3)'],pending:['◐ IN PROGRESS','var(--yellow)'],
+  waiting:['○ WAITING','var(--text-3)']};
 function renderPlanBar(){
   const P=planData; if(!P) return;
-  const chg=P.change_pct;
+  const chg=P.change_pct, df=P.decision||{};
   document.getElementById('pbSym').textContent=P.tsym;
   document.getElementById('pbLtp').innerHTML=`₹${fmtNum(P.ltp)}${chg!=null?` <span style="color:${chg>=0?'var(--green)':'var(--red)'};font-size:12px">${chg>=0?'+':''}${fmtNum(chg)}%</span>`:''}`;
-  const oe=P.open_eval||{};
-  document.getElementById('pbOpen').innerHTML=`<span style="color:${_vcol(oe.verdict)};font-weight:700">${oe.verdict==='ok'?'✓':oe.verdict==='fail'?'✗':'○'}</span> <span class="dim">${oe.text||''}</span>`;
-  document.getElementById('pbMeta').textContent=`${P.plan_date}${P.is_today?' · TODAY':''} · ${String(P.bias||'').toUpperCase()} · ${P.cpr_class||''} CPR · ${P.conviction||''}`;
-  // valid (not filtered-out) setups first, then filtered ones dimmed
-  const setups=(P.setups||[]).slice().sort((a,b)=>(a.status==='skipped_by_filter'?1:0)-(b.status==='skipped_by_filter'?1:0));
+  document.getElementById('pbOpen').innerHTML='';
+  const [ot,oc]=OUTCOME_MAP[df.outcome]||['',''];
+  document.getElementById('pbOutcome').innerHTML=ot?`<span style="font-weight:800;font-size:12px;color:${oc};border:1px solid ${oc};border-radius:999px;padding:2px 10px">${ot}${df.daytype?` · ${df.daytype}`:''}</span>`:'';
+  document.getElementById('pbMeta').textContent=`${P.plan_date}${P.is_today?' · TODAY':''} · ${String(P.bias||'').toUpperCase()} · ${P.cpr_class||''} CPR`;
+  // The 4 decision checkpoints as a left→right flow
+  document.getElementById('pbSteps').innerHTML=(df.checkpoints||[]).map(c=>{
+    const col=c.verdict==='ok'?'var(--green)':c.verdict==='fail'?'var(--red)':c.done?'var(--accent,#5e8eff)':'var(--text-3)';
+    const ic=c.verdict==='ok'?'✓':c.verdict==='fail'?'✗':c.done?'●':'○';
+    return `<div style="flex:1;min-width:170px;border-left:3px solid ${col};padding:3px 9px;background:var(--panel,#12161f)">
+      <div style="font-size:9.5px;letter-spacing:.05em;color:var(--text-3);text-transform:uppercase">${c.n}. ${c.name}</div>
+      <div style="font-size:11.5px;color:${col}">${ic} ${c.result}</div></div>`;}).join('');
+  // selected setup first + highlighted; valid next; filtered dimmed last
+  const setups=(P.setups||[]).slice().sort((a,b)=>
+    (b.selected?2:0)-(a.selected?2:0) || (a.status==='skipped_by_filter'?1:0)-(b.status==='skipped_by_filter'?1:0));
   document.getElementById('pbSetups').innerHTML=setups.map(s=>{
     const c=_vcol(s.verdict), filtered=s.status==='skipped_by_filter';
     const sideCol=s.side==='LONG'?'var(--green)':'var(--red)';
-    return `<div title="${filtered?(s.filter_reason||''):(s.valid_when||'')}" style="border:1px solid var(--border);border-left:3px solid ${c};border-radius:8px;padding:5px 9px;font-size:11px;${filtered?'opacity:.5':''}">
-      <span style="color:${c};font-weight:800">${s.icon}</span>
+    return `<div title="${filtered?(s.filter_reason||''):(s.valid_when||'')}" style="border:1px solid ${s.selected?'var(--yellow)':'var(--border)'};border-left:3px solid ${c};border-radius:8px;padding:5px 9px;font-size:11px;${filtered?'opacity:.45':''}${s.selected?';box-shadow:0 0 0 1px var(--yellow) inset':''}">
+      ${s.selected?'<span style="color:var(--yellow);font-weight:800">★ TAKE </span>':''}<span style="color:${c};font-weight:800">${s.icon}</span>
       <span style="color:${sideCol};font-weight:700"> ${s.side}</span> ${s.name.replace(/ —.*/,'')}
       <span class="dim mono"> · e ${fmtNum(s.entry)} · sl ${fmtNum(s.stop)} · t ${(s.targets||[]).slice(0,1).map(fmtNum).join('')}</span>
       <span style="color:${c}"> · ${s.label||''}</span>
@@ -891,11 +905,18 @@ function buildPlanOverlay(xs){
     areas.push([{yAxis:z.bottom,itemStyle:{color:fill}},{yAxis:z.top}]);
     lines.push({yAxis:z.top,lineStyle:{color:bc,type:'solid',width:1,opacity:.7},label:{formatter:'OB',position:'insideEndTop',color:bc,fontSize:9}});
   });
-  (P.setups||[]).filter(s=>s.status!=='skipped_by_filter').forEach(s=>{
+  // Draw ONLY the selected (decision-flow) setup, bold. Before the flow decides,
+  // show the valid candidates thin so you can see the options.
+  const valid=(P.setups||[]).filter(s=>s.status!=='skipped_by_filter');
+  const chosen=valid.filter(s=>s.selected);
+  const draw=chosen.length?chosen:valid;
+  const bold=chosen.length>0;
+  draw.forEach(s=>{
     const vc=_vcol(s.verdict)==='var(--text-3)'?'#5e8eff':_vcol(s.verdict);
-    if(s.entry!=null) lines.push({yAxis:s.entry,lineStyle:{color:vc,type:'solid',width:1.5},label:{formatter:`${s.icon} ${s.side} ${fmtNum(s.entry)}`,position:'insideStartTop',color:vc,fontSize:10,fontWeight:'bold'}});
-    if(s.stop!=null) lines.push({yAxis:s.stop,lineStyle:{color:'#ff5677',type:'dashed',width:.9,opacity:.85},label:{formatter:`SL ${fmtNum(s.stop)}`,position:'insideStartBottom',color:'#ff5677',fontSize:9}});
-    (s.targets||[]).slice(0,2).forEach((t,i)=>lines.push({yAxis:t,lineStyle:{color:'#00d68f',type:'dotted',width:.9,opacity:.7},label:{formatter:`T${i+1}`,position:'insideEndBottom',color:'#00d68f',fontSize:9}}));
+    const w=bold?1.8:0.9, op=bold?1:0.55;
+    if(s.entry!=null) lines.push({yAxis:s.entry,lineStyle:{color:vc,type:'solid',width:w,opacity:op},label:{formatter:`${s.selected?'★ ':''}${s.icon} ${s.side} ${fmtNum(s.entry)}`,position:'insideStartTop',color:vc,fontSize:bold?11:9,fontWeight:'bold'}});
+    if(s.stop!=null) lines.push({yAxis:s.stop,lineStyle:{color:'#ff5677',type:'dashed',width:bold?1:.8,opacity:op*0.9},label:{formatter:`SL ${fmtNum(s.stop)}`,position:'insideStartBottom',color:'#ff5677',fontSize:9}});
+    (s.targets||[]).slice(0,bold?3:1).forEach((t,i)=>lines.push({yAxis:t,lineStyle:{color:'#00d68f',type:'dotted',width:bold?1:.8,opacity:op*0.8},label:{formatter:`T${i+1} ${fmtNum(t)}`,position:'insideEndBottom',color:'#00d68f',fontSize:9}}));
   });
   return {areas,lines,points,swings:[]};
 }

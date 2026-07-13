@@ -322,9 +322,12 @@ def score_plan(plan: Dict, candles: List[dict]) -> Dict:
         "plan_correct": (primary is not None and primary["net_pct"] is not None
                          and primary["net_pct"] > 0),
     }
+    decision = decision_flow(plan, candles, ctx, setups)
+    for s in setups:
+        s["selected"] = (s["name"] == decision["selected"])
     return {"ok": True, "tsym": plan["tsym"], "conviction": plan.get("conviction"),
             "score": plan.get("score"), "setups": setups, "summary": summary,
-            "analysis": plan_checks(plan, candles)}
+            "decision": decision, "analysis": plan_checks(plan, candles)}
 
 
 def _profit_factor(filled: List[Dict]) -> Optional[float]:
@@ -335,69 +338,155 @@ def _profit_factor(filled: List[Dict]) -> Optional[float]:
     return round(gains / loss, 2)
 
 
+def decision_flow(plan: Dict, candles: List[dict], ctx: Dict, scored: List[Dict]) -> Dict:
+    """The day as a SEQUENTIAL decision (compendium §7.4), not 5 parallel bets:
+      1. Opening — gap up / down / inside prev-day range.
+      2. First 15 min — did it drive or rotate; where is price vs CPR.
+      3. Playbook — pick the ONE setup the open+structure selects (or stand down).
+      4. Execution — only that selected setup can be a LOSS. No selection, or a
+         selected setup that never triggers, is NO-TRADE (not a loss).
+    This is why 5 setups all 'failing' in the flat replay does NOT mean the day was
+    a 100% loss — you only take the one the flow chooses."""
+    L = plan.get("levels") or {}
+    cpr = L.get("cpr") or {}
+    TC, BC = cpr.get("TC"), cpr.get("BC")
+    pd = L.get("prev_day") or {}
+    pdc, pdh, pdl = pd.get("PDC"), pd.get("PDH"), pd.get("PDL")
+    obs = [z for k in ("above", "below") for z in ((L.get("smc_zones") or {}).get(k) or [])
+           if z.get("kind") == "OB" and z.get("top") is not None and z.get("bottom") is not None]
+    cps = []
+    def add(n, name, done, verdict, result):
+        cps.append({"n": n, "name": name, "done": done, "verdict": verdict, "result": result})
+
+    if not candles:
+        for n, nm in [(1, "Opening"), (2, "First 15 min"), (3, "Playbook"), (4, "Execution")]:
+            add(n, nm, False, "pending", "waiting for the session to open")
+        return {"checkpoints": cps, "selected": None, "selected_setup": None,
+                "daytype": None, "outcome": "waiting"}
+
+    op, cur = candles[0]["o"], candles[-1]["c"]
+    gap = ((op - pdc) / pdc * 100) if pdc else 0.0
+    gtype = "gap-up" if gap > 0.3 else "gap-down" if gap < -0.3 else "flat"
+    within = (pdl is not None and pdh is not None and pdl <= op <= pdh)
+    add(1, "Opening", True, "info",
+        f"{gtype} {gap:+.2f}% — opened {'inside' if within else 'outside'} prev-day range")
+
+    b0 = candles[0]; or_dir = "up" if b0["c"] >= b0["o"] else "down"
+    rng = b0["h"] - b0["l"]; drove = rng > 0 and abs(b0["c"] - b0["o"]) / rng > 0.55
+    loc = "above CPR" if (TC and cur > TC) else "below CPR" if (BC and cur < BC) else "inside CPR"
+    add(2, "First 15 min", True, "info",
+        f"{'drove ' + or_dir if drove else 'rotated'} in the opening bar; price now {loc}")
+
+    stand = ctx.get("stand_down")
+    ob_hit = next((z for z in obs if z["bottom"] <= cur <= z["top"]), None)
+    daytype = None; want_side = None; want_kind = None
+    if stand:
+        daytype = "stand-down"
+    elif ob_hit:
+        bull = str(ob_hit.get("dir", "")).lower().startswith("bull")
+        daytype = "OB reaction"; want_kind = "SMC"; want_side = "LONG" if bull else "SHORT"
+    elif (TC and cur > TC) and (gtype == "gap-up" or or_dir == "up"):
+        daytype = "trend-up"; want_side = "LONG"; want_kind = "trend"
+    elif (BC and cur < BC) and (gtype == "gap-down" or or_dir == "down"):
+        daytype = "trend-down"; want_side = "SHORT"; want_kind = "trend"
+    elif loc == "inside CPR" or ctx.get("cpr_class") == "wide":
+        daytype = "range"; want_kind = "fade"
+    else:
+        daytype = "undecided"
+
+    valid = [s for s in scored if s.get("status") != "skipped_by_filter"]
+    selected = None
+    if want_kind == "SMC":
+        selected = next((s for s in valid if "SMC" in s["name"] and s["side"] == want_side), None)
+    elif want_kind == "trend":
+        selected = next((s for s in valid if s["side"] == want_side and
+                         ("Breakout" in s["name"] or "break-&-retest" in s["name"])), None)
+    elif want_kind == "fade":
+        fades = sorted([s for s in valid if "Camarilla" in s["name"]],
+                       key=lambda s: abs((s.get("entry") or cur) - cur))
+        selected = fades[0] if fades else None
+    sel_name = selected["name"] if selected else None
+    add(3, "Playbook", True, "info",
+        (f"{daytype} → take: {sel_name}" if selected else
+         ("stand down — no trade today (not a loss)" if daytype in ("stand-down", "undecided")
+          else f"{daytype} — no valid setup matches")))
+
+    if not selected:
+        outcome = "no-trade"
+        add(4, "Execution", True, "ok", "no trade taken → cannot be a loss")
+    else:
+        stt = selected["status"]; reached = (selected.get("reached") or "").lower()
+        net = selected.get("net_pct")
+        if stt == "filled" and "stop" in reached:
+            outcome = "loss"; add(4, "Execution", True, "fail", f"{selected['side']} taken → hit stop = LOSS")
+        elif stt == "filled" and ("target" in reached or (net is not None and net > 0)):
+            outcome = "win"; add(4, "Execution", True, "ok",
+                                 f"{selected['side']} taken → WIN {net:+.2f}%" if net is not None else f"{selected['side']} → target")
+        elif stt in ("filled", "triggered", "triggered_no_fill"):
+            outcome = "pending"; add(4, "Execution", False, "pending", f"{selected['side']} in progress — not resolved")
+        else:
+            outcome = "waiting"; add(4, "Execution", False, "pending",
+                                     f"waiting for {selected['side']} trigger at {selected.get('trigger_price')}")
+    return {"checkpoints": cps, "selected": sel_name, "selected_setup": selected,
+            "daytype": daytype, "outcome": outcome}
+
+
 def aggregate_scorecard(scored: List[Dict]) -> Dict:
-    """Book-level §33 metrics for the day. ONE trade per stock — the highest-quality
-    setup that actually triggered+filled (the 'primary'). Conditional long/short
-    variants of the same stock are alternatives, never additive, so summing them
-    all would fabricate a book; the primary is the honest one-trade-per-name view."""
-    primaries = [sc["summary"].get("primary") for sc in scored
-                 if sc.get("ok") and sc["summary"].get("primary")]
-    all_filled = [p for p in primaries if p and p.get("net_pct") is not None]
-    # how many setups filled in total across the book (context, not P&L)
-    total_filled = sum(1 for sc in scored if sc.get("ok")
-                       for s in sc["setups"] if s["status"] == "filled")
-    # plan-quality (checks) aggregates — computed even when no trade filled,
-    # because grading the PLAN doesn't require a simulated fill
+    """Book-level §33 metrics. ONE decision-flow trade per stock (open → 15m →
+    playbook → execute). Only the SELECTED setup can win or lose; stocks the flow
+    stood down on (no-trade) are NOT losses — that is the whole point: 5 setups
+    all failing in the parallel replay is not a lost day when you'd only take one."""
+    decs = [sc.get("decision") for sc in scored if sc.get("ok") and sc.get("decision")]
+    def _net(d):
+        ss = d.get("selected_setup") or {}
+        return ss.get("net_pct")
+    won = [d for d in decs if d.get("outcome") == "win"]
+    lost = [d for d in decs if d.get("outcome") == "loss"]
+    no_trade = [d for d in decs if d.get("outcome") == "no-trade"]
+    pending = [d for d in decs if d.get("outcome") in ("pending", "waiting")]
+    taken = [d for d in (won + lost) if _net(d) is not None]
+
     succ = [sc["analysis"]["success_rate"] for sc in scored
-            if sc.get("ok") and sc.get("analysis")
-            and sc["analysis"].get("success_rate") is not None]
-    checks_right = sum(sc["analysis"]["right"] for sc in scored
-                       if sc.get("ok") and sc.get("analysis"))
-    checks_wrong = sum(sc["analysis"]["wrong"] for sc in scored
-                       if sc.get("ok") and sc.get("analysis"))
+            if sc.get("ok") and sc.get("analysis") and sc["analysis"].get("success_rate") is not None]
+    checks_right = sum(sc["analysis"]["right"] for sc in scored if sc.get("ok") and sc.get("analysis"))
+    checks_wrong = sum(sc["analysis"]["wrong"] for sc in scored if sc.get("ok") and sc.get("analysis"))
     plan_quality = {
         "avg_plan_success": round(sum(succ) / len(succ), 3) if succ else None,
         "checks_right": checks_right, "checks_wrong": checks_wrong,
         "checks_success": round(checks_right / (checks_right + checks_wrong), 3)
                           if (checks_right + checks_wrong) else None,
-        "n_skipped_filter": sum(sc["summary"].get("n_skipped_filter", 0)
-                                for sc in scored if sc.get("ok")),
-        "n_tick_gate_failed": sum(sc["summary"].get("n_tick_gate_failed", 0)
-                                  for sc in scored if sc.get("ok")),
+        "n_no_trade": len(no_trade), "n_pending": len(pending),
+        "n_skipped_filter": sum(sc["summary"].get("n_skipped_filter", 0) for sc in scored if sc.get("ok")),
     }
 
-    if not all_filled:
-        return {"n_plans": len(scored), "n_trades": 0,
-                "n_setups_filled_total": total_filled,
-                **plan_quality, "note": "no primary setups filled"}
-    wins = [s for s in all_filled if s["net_pct"] > 0]
-    losses = [s for s in all_filled if s["net_pct"] <= 0]
-    nets = [s["net_pct"] for s in all_filled]
-    correct = [sc for sc in scored if sc.get("ok") and sc["summary"].get("plan_correct")]
-    n = len(all_filled)
+    if not taken:
+        return {"n_plans": len(scored), "n_trades": 0, **plan_quality,
+                "note": f"{len(no_trade)} stocks stood down (no-trade), {len(pending)} still pending — no completed trades"}
+
+    nets = [_net(d) for d in taken]
+    n = len(taken)
     mean = sum(nets) / n
     var = sum((x - mean) ** 2 for x in nets) / n if n > 1 else 0.0
     sd = var ** 0.5
-    # §33.2 sample-size gate: trades needed to detect this edge
     need = int((2.8 * sd / mean) ** 2) if mean else None
     return {
         "n_plans": len(scored),
-        "n_plans_correct": len(correct),
-        "plan_accuracy": round(len(correct) / len(scored), 3) if scored else None,
+        "n_trades": n, "n_win": len(won), "n_loss": len(lost),
+        "hit_rate": round(len(won) / n, 3) if n else None,
+        # plan_accuracy now = win rate of the ONE selected trade per stock that resolved
+        "n_plans_correct": len(won),
+        "plan_accuracy": round(len(won) / n, 3) if n else None,
         **plan_quality,
-        "n_setups_filled_total": total_filled,
-        "n_trades": n, "n_win": len(wins), "n_loss": len(losses),
-        "hit_rate": round(len(wins) / n, 3),
-        "avg_win_pct": round(sum(s["net_pct"] for s in wins) / len(wins), 3) if wins else None,
-        "avg_loss_pct": round(sum(s["net_pct"] for s in losses) / len(losses), 3) if losses else None,
+        "avg_win_pct": round(sum(_net(d) for d in won if _net(d) is not None) / max(1, len(won)), 3) if won else None,
+        "avg_loss_pct": round(sum(_net(d) for d in lost if _net(d) is not None) / max(1, len(lost)), 3) if lost else None,
         "expectancy_pct": round(mean, 3),
         "expectancy_bps": round(mean * 100, 1),
         "book_net_pct": round(sum(nets), 3),
-        "profit_factor": _profit_factor(all_filled),
+        "profit_factor": _profit_factor([{"net_pct": x} for x in nets]),
         "cost_pct_per_trade": ROUND_TRIP_COST_PCT,
         "trades_needed_for_significance": need,
         "significant_yet": (need is not None and n >= need and mean > 0),
-        "honesty_note": ("Per-trade net expectancy, simulated from actual candles, "
-                         "net of costs. Small samples prove nothing (§33.2) — the "
-                         "'trades needed' figure is when this edge would be real."),
+        "honesty_note": ("One decision-flow trade per stock (open → 15m → playbook → execute); "
+                         "stood-down stocks are no-trade, not losses. Net of costs; small samples "
+                         "prove nothing (§33.2)."),
     }

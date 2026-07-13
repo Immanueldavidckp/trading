@@ -290,9 +290,9 @@ async function renderScore(date){
   const a=j.scorecard||{};
   const cls=v=>v>0?'pos':v<0?'neg':'';
   tiles.innerHTML=`
-    <div class="tile"><div class="t">Plan success (checks)</div><div class="v ${a.checks_success>=0.5?'pos':'neg'}">${a.checks_success!=null?(a.checks_success*100).toFixed(0)+'%':'—'}</div><div class="d">✓${a.checks_right??0} right · ✗${a.checks_wrong??0} wrong across ${a.n_plans??res.length} stocks</div></div>
-    <div class="tile"><div class="t">Plans whose primary won</div><div class="v">${a.plan_accuracy!=null?(a.plan_accuracy*100).toFixed(0)+'%':'—'}</div><div class="d">${a.n_plans_correct??0}/${a.n_plans??res.length}</div></div>
-    <div class="tile"><div class="t">Hit rate (sim trades)</div><div class="v">${a.hit_rate!=null?(a.hit_rate*100).toFixed(0)+'%':'—'}</div><div class="d">${a.n_win??0}W / ${a.n_loss??0}L · ${a.n_trades??0} trades</div></div>
+    <div class="tile"><div class="t">Win rate (taken trades)</div><div class="v ${a.hit_rate>=0.5?'pos':'neg'}">${a.hit_rate!=null?(a.hit_rate*100).toFixed(0)+'%':'—'}</div><div class="d">${a.n_win??0}W / ${a.n_loss??0}L of ${a.n_trades??0} taken · one per stock</div></div>
+    <div class="tile"><div class="t">Stood down (no-trade)</div><div class="v">${a.n_no_trade??0}</div><div class="d">flow said don't trade — not losses · ${a.n_pending??0} pending</div></div>
+    <div class="tile"><div class="t">Plan success (checks)</div><div class="v ${a.checks_success>=0.5?'pos':'neg'}">${a.checks_success!=null?(a.checks_success*100).toFixed(0)+'%':'—'}</div><div class="d">✓${a.checks_right??0} · ✗${a.checks_wrong??0} predictions</div></div>
     <div class="tile"><div class="t">Expectancy / trade</div><div class="v ${cls(a.expectancy_pct)}">${a.expectancy_pct!=null?pct(a.expectancy_pct):'—'}</div><div class="d">${a.expectancy_bps??'—'} bps net of cost</div></div>
     <div class="tile"><div class="t">Book net (1/stock)</div><div class="v ${cls(a.book_net_pct)}">${a.book_net_pct!=null?pct(a.book_net_pct):'—'}</div><div class="d">sum of primary trades</div></div>
     <div class="tile"><div class="t">Profit factor</div><div class="v">${a.profit_factor??'—'}</div><div class="d">gains ÷ losses</div></div>`;
