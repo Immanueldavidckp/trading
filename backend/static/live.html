@@ -216,7 +216,8 @@
           <button class="tf-btn" data-iv="1h"  data-tf="3600">1h</button>
           <button class="tf-btn" data-iv="4h"  data-tf="3600">4h</button>
           <button class="tf-btn" data-iv="1d"  data-tf="3600">1d</button>
-          <button class="tf-btn" data-iv="1w"  data-tf="3600" title="6 months of weekly candles">6M·1W</button>
+          <button class="tf-btn" data-iv="1w"  data-tf="3600" title="Weekly candles (each candle = 1 week)">1W</button>
+          <button class="tf-btn" data-iv="1d"  data-tf="3600" data-limit="132" title="6 months of daily candles">6M</button>
         </div>
         <div class="chart-tools">
           <button class="btn" id="liveModeBtn" onclick="refreshUpstox()"
@@ -472,8 +473,9 @@
 const MAX_TABLE = 300, MAX_CANDLES = 6000;
 let active=null, symbols=[], rows=[], ws=null;
 let prevVolume=null, paused=false;
-let interval='1m';         // Upstox interval: 1m/5m/15m/1h/4h/1d
+let interval='1m';         // Upstox interval: 1m/5m/15m/1h/4h/1d/1w
 let tf=60;                 // seconds equiv (used by analysis panel + WS bucketing)
+let tfLimit=null;          // per-timeframe candle cap (e.g. 6M=132 daily); null = use backlog selector
 let historyDay=null;       // kept for analysis panel; chart uses Upstox history
 const DAILY_IVS=new Set(['1d','1w','1mo']);
 let candles=[];            // [{t,o,h,l,c,v}]
@@ -1606,12 +1608,11 @@ chart.on('updateAxisPointer',e=>{
 });
 
 /* ---------- Load candles (100% from Upstox via MySQL) ---------- */
-// How many candles to pull for the active timeframe. Weekly is a fixed
-// ~6-month preset (≈27 weekly candles) regardless of the backlog selector;
-// every other timeframe honours the backlog selector.
+// How many candles to pull for the active timeframe. A button may pin a fixed
+// cap via data-limit (e.g. 6M = last 132 daily candles ≈ 6 months); otherwise
+// the backlog selector governs.
 function chartLimit(){
-  if(interval==='1w') return 27;
-  return document.getElementById('backlogSel').value;
+  return tfLimit || document.getElementById('backlogSel').value;
 }
 
 async function loadChart(refresh){
@@ -1824,10 +1825,11 @@ function reconnectWS(backlog){
 /* ---------- Timeframe buttons ---------- */
 document.getElementById('tfGroup').addEventListener('click',(e)=>{
   const b=e.target.closest('.tf-btn'); if(!b)return;
-  document.querySelectorAll('.tf-btn').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('#tfGroup .tf-btn').forEach(x=>x.classList.remove('active'));
   b.classList.add('active');
   interval=b.dataset.iv;
   tf=parseInt(b.dataset.tf);   // seconds equiv for the analysis panel
+  tfLimit=b.dataset.limit?parseInt(b.dataset.limit):null;   // 6M pins 132 daily; others use backlog
   loadChart();
 });
 
