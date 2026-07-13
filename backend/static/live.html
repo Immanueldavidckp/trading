@@ -216,6 +216,7 @@
           <button class="tf-btn" data-iv="1h"  data-tf="3600">1h</button>
           <button class="tf-btn" data-iv="4h"  data-tf="3600">4h</button>
           <button class="tf-btn" data-iv="1d"  data-tf="3600">1d</button>
+          <button class="tf-btn" data-iv="1w"  data-tf="3600" title="6 months of weekly candles">6M·1W</button>
         </div>
         <div class="chart-tools">
           <button class="btn" id="liveModeBtn" onclick="refreshUpstox()"
@@ -1605,9 +1606,17 @@ chart.on('updateAxisPointer',e=>{
 });
 
 /* ---------- Load candles (100% from Upstox via MySQL) ---------- */
+// How many candles to pull for the active timeframe. Weekly is a fixed
+// ~6-month preset (≈27 weekly candles) regardless of the backlog selector;
+// every other timeframe honours the backlog selector.
+function chartLimit(){
+  if(interval==='1w') return 27;
+  return document.getElementById('backlogSel').value;
+}
+
 async function loadChart(refresh){
   if(!active)return;
-  const limit=document.getElementById('backlogSel').value;
+  const limit=chartLimit();
   candles=[];
   const ro=document.getElementById('ohlcReadout');
   ro.innerHTML=`<span class="dim">Loading ${active} ${interval} from Upstox…</span>`;
@@ -1648,7 +1657,7 @@ async function pollLive(){
   if(!active||paused||polling)return;
   polling=true;
   try{
-    const limit=document.getElementById('backlogSel').value;
+    const limit=chartLimit();
     const r=await fetch(`/api/upstox/candles?tsym=${encodeURIComponent(active)}&interval=${interval}&limit=${limit}&auto=0&today=1`);
     const j=await r.json();
     if(j.candles&&j.candles.length){
