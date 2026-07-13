@@ -188,6 +188,20 @@
       <div class="kpi"><span class="k">IST</span><span class="v mono dim" id="kpiTs" style="font-size:13px">—</span></div>
     </div>
 
+    <!-- Plan overlay status bar (shown instead of the KPI strip when a stock is
+         opened from the Suggestion monitor) -->
+    <div id="planBar" style="display:none;padding:9px 14px;border-bottom:1px solid var(--border);background:var(--panel-2)">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <b id="pbSym" style="font-size:16px"></b>
+        <span id="pbLtp" class="mono" style="font-size:15px"></span>
+        <span id="pbOpen" style="font-size:12px"></span>
+        <span style="flex:1"></span>
+        <span id="pbMeta" class="dim mono" style="font-size:11px"></span>
+        <button class="btn" onclick="exitPlanMode()" style="padding:4px 12px">✕ Exit plan view</button>
+      </div>
+      <div id="pbSetups" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:9px"></div>
+    </div>
+
     <!-- ===================== NORMAL VIEW ===================== -->
     <div id="normalView">
     <!-- PRO CHART -->
@@ -799,6 +813,8 @@ function toggleSidebar(){
 let currentMode='normal';
 function setMode(m){
   currentMode=m;
+  // switching any tab leaves the plan overlay view
+  if(planMode){ planMode=false; planData=null; document.getElementById('planBar').style.display='none'; }
   document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===m));
   document.getElementById('normalView').style.display    = m==='normal'?'':'none';
   document.getElementById('analysisView').style.display  = m==='analysis'?'':'none';
@@ -811,13 +827,77 @@ function setMode(m){
   else if(m==='suggestion') loadSuggestionMode();
 }
 
-/* Click a monitor row → open that stock on the chart with the Order-Block
-   overlay turned on, so you see the OB zones the plan is watching. */
+/* ---------- Plan overlay on the chart ----------
+   Click a monitor row → open that stock's chart in a focused PLAN VIEW: only the
+   plan's own Order Blocks + every setup's entry/stop/target are drawn (no generic
+   multi-TF indicator clutter), and a status bar shows each technique with a live
+   ✓ / ✗ / pending verdict from the backend (gated strategy + order flow). */
+let planMode=false, planData=null;
+
 function lpmOpen(tsym){
-  SMC.ob=true;
-  const chip=document.querySelector('.ind-chip[data-smc="ob"]'); if(chip) chip.classList.add('on');
-  setMode('normal');
-  selectSymbol(tsym, true);
+  setMode('normal');            // clears any prior plan view
+  selectSymbol(tsym, true);     // switch symbol + load its chart
+  planMode=true;
+  document.getElementById('kpiStrip').style.display='none';
+  document.getElementById('planBar').style.display='';
+  document.getElementById('pbSym').textContent=tsym;
+  document.getElementById('pbSetups').innerHTML='<span class="dim">evaluating plan…</span>';
+  refreshPlanBar(tsym);
+}
+function exitPlanMode(){
+  planMode=false; planData=null;
+  document.getElementById('planBar').style.display='none';
+  document.getElementById('kpiStrip').style.display= currentMode==='suggestion'?'none':'';
+  renderChart(true);
+}
+async function refreshPlanBar(tsym){
+  tsym=tsym||active;
+  try{
+    const j=await fetch('/api/plan/setup_status?tsym='+encodeURIComponent(tsym)).then(r=>r.json());
+    if(!j.ok){ document.getElementById('pbSetups').innerHTML='<span class="dim">'+(j.error||'no plan for this stock')+'</span>'; return; }
+    if(!planMode || active!==tsym) return;   // user navigated away meanwhile
+    planData=j; renderPlanBar(); renderChart(true);
+  }catch(e){ document.getElementById('pbSetups').innerHTML='<span style="color:var(--red)">error</span>'; }
+}
+function _vcol(v){ return v==='ok'?'var(--green)':v==='fail'?'var(--red)':'var(--text-3)'; }
+function renderPlanBar(){
+  const P=planData; if(!P) return;
+  const chg=P.change_pct;
+  document.getElementById('pbSym').textContent=P.tsym;
+  document.getElementById('pbLtp').innerHTML=`₹${fmtNum(P.ltp)}${chg!=null?` <span style="color:${chg>=0?'var(--green)':'var(--red)'};font-size:12px">${chg>=0?'+':''}${fmtNum(chg)}%</span>`:''}`;
+  const oe=P.open_eval||{};
+  document.getElementById('pbOpen').innerHTML=`<span style="color:${_vcol(oe.verdict)};font-weight:700">${oe.verdict==='ok'?'✓':oe.verdict==='fail'?'✗':'○'}</span> <span class="dim">${oe.text||''}</span>`;
+  document.getElementById('pbMeta').textContent=`${P.plan_date}${P.is_today?' · TODAY':''} · ${String(P.bias||'').toUpperCase()} · ${P.cpr_class||''} CPR · ${P.conviction||''}`;
+  // valid (not filtered-out) setups first, then filtered ones dimmed
+  const setups=(P.setups||[]).slice().sort((a,b)=>(a.status==='skipped_by_filter'?1:0)-(b.status==='skipped_by_filter'?1:0));
+  document.getElementById('pbSetups').innerHTML=setups.map(s=>{
+    const c=_vcol(s.verdict), filtered=s.status==='skipped_by_filter';
+    const sideCol=s.side==='LONG'?'var(--green)':'var(--red)';
+    return `<div title="${filtered?(s.filter_reason||''):(s.valid_when||'')}" style="border:1px solid var(--border);border-left:3px solid ${c};border-radius:8px;padding:5px 9px;font-size:11px;${filtered?'opacity:.5':''}">
+      <span style="color:${c};font-weight:800">${s.icon}</span>
+      <span style="color:${sideCol};font-weight:700"> ${s.side}</span> ${s.name.replace(/ —.*/,'')}
+      <span class="dim mono"> · e ${fmtNum(s.entry)} · sl ${fmtNum(s.stop)} · t ${(s.targets||[]).slice(0,1).map(fmtNum).join('')}</span>
+      <span style="color:${c}"> · ${s.label||''}</span>
+    </div>`;}).join('')||'<span class="dim">no setups</span>';
+}
+/* Draw ONLY the plan's Order Blocks + valid setups' entry/stop/target lines. */
+function buildPlanOverlay(xs){
+  const areas=[],lines=[],points=[]; const P=planData;
+  if(!P) return {areas,lines,points,swings:[]};
+  (P.obs||[]).forEach(z=>{
+    if(z.top==null||z.bottom==null) return;
+    const bull=String(z.dir||'').toLowerCase().startsWith('bull');
+    const fill=bull?'rgba(0,214,143,0.10)':'rgba(255,86,119,0.10)', bc=bull?'#00d68f':'#ff5677';
+    areas.push([{yAxis:z.bottom,itemStyle:{color:fill}},{yAxis:z.top}]);
+    lines.push({yAxis:z.top,lineStyle:{color:bc,type:'solid',width:1,opacity:.7},label:{formatter:'OB',position:'insideEndTop',color:bc,fontSize:9}});
+  });
+  (P.setups||[]).filter(s=>s.status!=='skipped_by_filter').forEach(s=>{
+    const vc=_vcol(s.verdict)==='var(--text-3)'?'#5e8eff':_vcol(s.verdict);
+    if(s.entry!=null) lines.push({yAxis:s.entry,lineStyle:{color:vc,type:'solid',width:1.5},label:{formatter:`${s.icon} ${s.side} ${fmtNum(s.entry)}`,position:'insideStartTop',color:vc,fontSize:10,fontWeight:'bold'}});
+    if(s.stop!=null) lines.push({yAxis:s.stop,lineStyle:{color:'#ff5677',type:'dashed',width:.9,opacity:.85},label:{formatter:`SL ${fmtNum(s.stop)}`,position:'insideStartBottom',color:'#ff5677',fontSize:9}});
+    (s.targets||[]).slice(0,2).forEach((t,i)=>lines.push({yAxis:t,lineStyle:{color:'#00d68f',type:'dotted',width:.9,opacity:.7},label:{formatter:`T${i+1}`,position:'insideEndBottom',color:'#00d68f',fontSize:9}}));
+  });
+  return {areas,lines,points,swings:[]};
 }
 
 let anTfSel='1m';            // analysis-mode timeframe
@@ -1141,8 +1221,11 @@ async function loadSuggestionMode(){
     list.innerHTML=html||'<div class="dim" style="padding:20px">no stocks in the plan for '+j.plan_date+'</div>';
   }catch(e){ list.innerHTML='<div style="padding:20px;color:var(--red)">error loading the plan monitor</div>'; }
 }
-// auto-refresh while the Suggestion page is open
-setInterval(()=>{ if(currentMode==='suggestion' && document.getElementById('suggestionView').style.display!=='none') loadSuggestionMode(); }, 6000);
+// auto-refresh: the Suggestion monitor, and the plan overlay when a stock is open
+setInterval(()=>{
+  if(planMode && active){ refreshPlanBar(active); return; }
+  if(currentMode==='suggestion' && document.getElementById('suggestionView').style.display!=='none') loadSuggestionMode();
+}, 6000);
 function toggleLogScale(){ logScale=!logScale; document.getElementById('logBtn').textContent='Log scale: '+(logScale?'on':'off'); rebuildChart(); }
 
 /* indicator chip handlers */
@@ -1442,7 +1525,8 @@ function renderChart(force){
     const rsi=IND.rsi?rsiArr(closes,14):[];
     const tick=(tf===0);
     const lastClose=closes.length?closes[closes.length-1]:null;
-    const ov=buildSMCOverlays(xs);
+    // Plan view draws ONLY the plan's OBs + setup levels (no generic SMC clutter).
+    const ov=planMode?buildPlanOverlay(xs):buildSMCOverlays(xs);
     const baseLine=lastClose!=null?[{yAxis:lastClose,lineStyle:{color:'#5e8eff',type:'dashed',width:1},label:{show:false}}]:[];
     const ser=[
       {name:'Candles',data:tick?[]:kdata,

@@ -432,6 +432,138 @@ def live_plan_status(date: Optional[str] = None, near_pct: float = 0.5) -> Dict:
             "rows": rows}
 
 
+def _today_intraday(tsym: str, interval: str = "15m") -> List[dict]:
+    """Today's forming intraday candles (fetches today_only so live bars are fresh)."""
+    from upstox_client import UpstoxClient as _UC
+    today = _dt.datetime.now(IST).date()
+    start = _dt.datetime.combine(today, _dt.time(0, 0), IST)
+    s_s = int(start.timestamp()); e_s = s_s + 86400
+    try:
+        from main import _upstox
+        _upstox().fetch_candles(tsym=tsym, interval=interval, today_only=True)
+    except Exception:
+        pass
+    rows = _UC.query(tsym, interval, limit=100000, from_ts=s_s, to_ts=e_s)
+    return [{"t": r["ts"], "o": r["o"], "h": r["h"], "l": r["l"],
+             "c": r["c"], "v": r["v"]} for r in rows]
+
+
+def _verdict(status: str, reached: Optional[str], net: Optional[float]) -> Dict:
+    """Map a score_setup status → live plan verdict (green ✓ / red ✗ / pending)."""
+    r = (reached or "").lower()
+    if status == "filled":
+        if "stop" in r:
+            return {"verdict": "fail", "icon": "✗", "label": "hit stop"}
+        if "target" in r or (net is not None and net > 0):
+            return {"verdict": "ok", "icon": "✓", "label": "hit target"}
+        return {"verdict": "pending", "icon": "◐", "label": "in trade"}
+    if status == "skipped_by_filter":
+        return {"verdict": "fail", "icon": "✗", "label": "not valid today"}
+    if status == "tick_gate_failed":
+        return {"verdict": "fail", "icon": "✗", "label": "order flow against"}
+    if status in ("triggered", "triggered_no_fill"):
+        return {"verdict": "pending", "icon": "◐", "label": "triggered — watching"}
+    return {"verdict": "pending", "icon": "○", "label": "waiting for trigger"}
+
+
+def live_setup_status(tsym: str) -> Dict:
+    """Full live evaluation of ONE stock's plan for the chart overlay: every setup's
+    entry/stop/targets with a live ✓/✗/pending verdict (reusing the gated scorer),
+    the plan's own Order Blocks, and the open-type check. Backend does all the maths."""
+    import plan_score
+    ensure_tables()
+    tsym = tsym.upper()
+    today = _dt.datetime.now(IST).date().isoformat()
+    conn = _db.connect()
+    try:
+        cur = conn.cursor(); PH = _db.PLACE
+        cur.execute(f"SELECT plan_date, plan_json FROM daily_plans WHERE tsym={PH} ORDER BY plan_date", [tsym])
+        rows = [(r[0], r[1]) for r in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+    if not rows:
+        return {"ok": False, "error": f"no plan stored for {tsym}"}
+    upcoming = [r for r in rows if r[0] >= today]
+    date, raw = (upcoming[0] if upcoming else rows[-1])
+    plan = json.loads(raw)
+    is_today = date == today
+
+    latest = {}
+    try:
+        from main import _feed
+        latest = dict(_feed().latest)
+    except Exception:
+        pass
+    snap = latest.get(tsym) or {}
+    ltp = snap.get("lp") if snap.get("lp") is not None else plan.get("last_close")
+    day_open = snap.get("day_open")
+
+    candles = _today_intraday(tsym) if is_today else _intraday_for_day(tsym, _dt.date.fromisoformat(date))
+    if candles:
+        day_open = candles[0]["o"]
+
+    L = plan.get("levels") or {}
+    cpr = L.get("cpr") or {}
+    ctx = {"cpr_class": cpr.get("class"), "bias": plan.get("bias"),
+           "open": (candles[0]["o"] if candles else (day_open if day_open is not None else ltp)),
+           "cam": L.get("camarilla"), "cpr": cpr,
+           "stand_down": (L.get("rvol") or 1.0) < 0.5}
+
+    setups = []
+    for s in plan.get("setups", []):
+        sc = plan_score.score_setup(s, candles, ctx, tsym)
+        v = _verdict(sc["status"], sc.get("reached"), sc.get("net_pct"))
+        dist = None
+        if ltp and s.get("trigger_price"):
+            dist = round(abs(ltp - s["trigger_price"]) / ltp * 100, 2)
+        setups.append({
+            "name": s.get("name"), "side": s.get("side"), "quality": s.get("quality"),
+            "source": s.get("source"), "day_type": s.get("day_type"),
+            "trigger_price": s.get("trigger_price"), "trigger_dir": s.get("trigger_dir"),
+            "entry": s.get("entry"), "stop": s.get("stop"), "targets": s.get("targets"),
+            "valid_when": s.get("valid_when"), "skip_when": s.get("skip_when"),
+            "status": sc["status"], "reached": sc.get("reached"),
+            "net_pct": sc.get("net_pct"), "filter_reason": sc.get("filter_reason"),
+            "dist_pct": dist, **v,
+        })
+
+    obs = []
+    zones = L.get("smc_zones") or {}
+    for k in ("above", "below"):
+        for z in (zones.get(k) or []):
+            if z.get("kind") == "OB":
+                obs.append({"top": z.get("top"), "bottom": z.get("bottom"), "dir": z.get("dir")})
+
+    # open-type check (req 3: did it gap the right way and follow?)
+    pdc = (L.get("prev_day") or {}).get("PDC")
+    open_eval = {"verdict": "pending", "text": "waiting for the open"}
+    if candles and day_open is not None and pdc:
+        gap = (day_open - pdc) / pdc * 100
+        gtype = "gap-up" if gap > 0.3 else "gap-down" if gap < -0.3 else "flat"
+        cur_c = candles[-1]["c"]
+        if gtype == "gap-up":
+            ok = cur_c >= day_open
+            open_eval = {"verdict": "ok" if ok else "fail",
+                         "text": f"{gtype} {gap:+.2f}% — {'holding above open (trend-up)' if ok else 'faded back below open'}"}
+        elif gtype == "gap-down":
+            ok = cur_c <= day_open
+            open_eval = {"verdict": "ok" if ok else "fail",
+                         "text": f"{gtype} {gap:+.2f}% — {'holding below open (trend-down)' if ok else 'reclaimed above open'}"}
+        else:
+            open_eval = {"verdict": "pending",
+                         "text": f"flat open ({gap:+.2f}%) — let the first range set, then follow the break"}
+
+    return {"ok": True, "tsym": tsym, "plan_date": date, "is_today": is_today,
+            "ltp": ltp, "day_open": day_open, "change_pct": snap.get("change_pct"),
+            "bias": plan.get("bias"), "conviction": plan.get("conviction"),
+            "score": plan.get("score"), "cpr_class": cpr.get("class"),
+            "headline": (plan.get("headline") or {}),
+            "day_type_hint": plan.get("day_type_hint"),
+            "open_scenarios": plan.get("open_scenarios"),
+            "open_eval": open_eval, "setups": setups, "obs": obs}
+
+
 def list_plan_dates() -> Dict:
     ensure_tables()
     conn = _db.connect()

@@ -785,6 +785,15 @@ def plan_live(date: Optional[str] = None):
     return plan_pipeline.live_plan_status(date=date)
 
 
+@app.get("/api/plan/setup_status")
+def plan_setup_status(tsym: str):
+    """One stock's full plan evaluated live — setups with entry/stop/target + a
+    ✓/✗/pending verdict, the plan's Order Blocks, and the open-type check. Drives
+    the chart plan overlay when you click a stock from the Suggestion monitor."""
+    import plan_pipeline
+    return plan_pipeline.live_setup_status(tsym)
+
+
 # ---------- Root handler: redirect to /live.html ----------
 @app.get("/")
 def root():
