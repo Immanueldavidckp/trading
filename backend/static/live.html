@@ -1844,10 +1844,24 @@ function renderSidebar(){
       <span class="stock-x" onclick="event.stopPropagation();removeStock('${s.tsym}')">×</span>
     </div>`).join('');
 }
+/* Deep link: /live.html?tsym=RAIN — open that stock's chart on load (adding it
+   to the watchlist if it isn't there yet). Used by the Plan pages' 📈 Chart buttons. */
+let deepLinkSym=(new URLSearchParams(location.search).get('tsym')||'').trim().toUpperCase()||null;
 async function loadSymbols(){
   try{
     const r=await fetch('/api/yahoo/symbols'); const j=await r.json();
     symbols=j.symbols||[];
+    if(deepLinkSym){
+      const want=deepLinkSym; deepLinkSym=null;   // consume once
+      if(!symbols.some(s=>s.tsym===want)){
+        try{
+          const a=await fetch('/api/yahoo/symbols/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:want})}).then(r=>r.json());
+          if(a.ok){ const r2=await fetch('/api/yahoo/symbols'); symbols=(await r2.json()).symbols||symbols; }
+        }catch(e){}
+      }
+      selectSymbol(want,true);
+      return;
+    }
     if(!active&&symbols.length)selectSymbol(symbols[0].tsym,true);
     else renderSidebar();
   }catch(e){}

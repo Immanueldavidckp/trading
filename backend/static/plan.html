@@ -24,6 +24,9 @@
   .tabs{display:flex;gap:4px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:3px}
   .tab{padding:6px 14px;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px;color:var(--muted);border:none;background:none}
   .tab.on{background:var(--blue);color:#fff}
+  .tab.swing.on{background:var(--violet)}
+  .chip.stage{color:var(--violet);background:rgba(168,128,255,.12);border-color:rgba(168,128,255,.4)}
+  .ewin{background:rgba(168,128,255,.10);border:1px solid rgba(168,128,255,.35);border-radius:8px;padding:8px 12px;font-size:12.5px;margin-top:10px}
   .spacer{flex:1}
   select,button.act{background:var(--panel2);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-family:var(--mono);font-size:12px;cursor:pointer}
   button.act:hover{border-color:var(--blue)}
@@ -106,6 +109,10 @@
 <body>
 <header>
   <div class="brand">trade.scratchforge <span>· daily plan</span></div>
+  <div class="tabs" title="Day trade = tomorrow's intraday plan · Swing trade = 2–15 day delivery plan">
+    <button class="tab on" id="modeDay" onclick="setMode('day')">Day trade</button>
+    <button class="tab swing" id="modeSwing" onclick="setMode('swing')">Swing trade</button>
+  </div>
   <div class="tabs">
     <button class="tab on" id="tabPlan" onclick="showTab('plan')">Plan</button>
     <button class="tab" id="tabScore" onclick="showTab('score')">Scorecard</button>
@@ -138,10 +145,31 @@
 <script>
 const $=id=>document.getElementById(id);
 let TAB='plan';
+let MODE='day';               // 'day' = intraday plan · 'swing' = 2–15 day delivery plan
 let PLANS=[], PLAN_DATE='';   // last-rendered plan list (for the TXT downloads)
 const fmt=(v,d=2)=>(v==null||v===''||isNaN(v))?'—':Number(v).toFixed(d);
 const pct=v=>(v==null||isNaN(v))?'—':(v>=0?'+':'')+Number(v).toFixed(2)+'%';
 const todayIST=()=>new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});   // YYYY-MM-DD
+
+// every data endpoint has a day and a swing variant — one switch, no scattering
+const api={
+  dates:   () =>MODE==='day'?'/api/plan/dates':'/api/swing/dates',
+  report:  d =>(MODE==='day'?'/api/plan/report?date=':'/api/swing/report?date=')+d,
+  scorecard:d=>(MODE==='day'?'/api/plan/scorecard?date=':'/api/swing/scorecard?date=')+d,
+  build:   () =>MODE==='day'?'/api/plan/build':'/api/swing/build',
+  score:   d =>(MODE==='day'?'/api/plan/score?plan_date=':'/api/swing/score?plan_date=')+d,
+};
+function openChart(t){location.href='/live.html?tsym='+encodeURIComponent(t);}
+
+function setMode(m){
+  if(MODE===m) return;
+  MODE=m;
+  $('modeDay').classList.toggle('on',m==='day');$('modeSwing').classList.toggle('on',m==='swing');
+  $('buildBtn').title = m==='day' ? 'Build the plan for the next session (heavy)'
+                                  : 'Build the next-session SWING plan (2–15 day holds)';
+  PLANS=[]; PLAN_DATE='';
+  reload(true);   // re-pick the right default date from that mode's own dates
+}
 
 function showTab(t){
   const prevTab=TAB; TAB=t;
@@ -153,7 +181,7 @@ function showTab(t){
 }
 
 async function loadDates(forceDefault){
-  const j=await fetch('/api/plan/dates').then(r=>r.json());
+  const j=await fetch(api.dates()).then(r=>r.json());
   // Both tabs list every plan date — picking an unscored past date on the
   // Scorecard auto-scores it; a future date (nothing traded yet) is shown
   // plainly instead of being queried.
@@ -186,13 +214,15 @@ async function reload(forceDefault){
 // ---------- PLAN ----------
 async function renderPlan(date){
   const cards=$('cards'); const ubar=$('ubar');
-  if(!date){ ubar.innerHTML=''; cards.innerHTML='<div class="empty">No plan built yet. Click <b>⚙ Build next</b> to generate tomorrow\'s plan for the top-50 stocks under ₹300.</div>'; return; }
+  if(!date){ ubar.innerHTML=''; cards.innerHTML='<div class="empty">No '+(MODE==='swing'?'swing':'day')+' plan built yet. Click <b>⚙ Build next</b> to generate it for the top-50 stocks under ₹300.</div>'; return; }
   cards.innerHTML='<div class="empty">loading…</div>';
-  const j=await fetch('/api/plan/report?date='+date).then(r=>r.json());
-  if(!j.ok||!j.plans.length){ cards.innerHTML='<div class="empty">No plans for '+date+'.</div>'; ubar.innerHTML=''; PLANS=[]; return; }
+  const j=await fetch(api.report(date)).then(r=>r.json());
+  if(!j.ok||!j.plans.length){ cards.innerHTML='<div class="empty">No '+(MODE==='swing'?'swing ':'')+'plans for '+date+'.</div>'; ubar.innerHTML=''; PLANS=[]; return; }
   PLANS=j.plans; PLAN_DATE=date;
-  ubar.innerHTML=`Plan for <b>${date}</b> · <b>${j.count}</b> stocks · sorted by confluence score`;
-  cards.innerHTML=j.plans.map((p,i)=>planCard(p,i)).join('');
+  ubar.innerHTML = MODE==='swing'
+    ? `Swing plan live from <b>${date}</b> · <b>${j.count}</b> stocks · 2–15 session holds · sorted by confluence score`
+    : `Plan for <b>${date}</b> · <b>${j.count}</b> stocks · sorted by confluence score`;
+  cards.innerHTML=j.plans.map((p,i)=>MODE==='swing'?swingCard(p,i):planCard(p,i)).join('');
 }
 
 function biasChip(b){const c=b==='bullish'?'bull':b==='bearish'?'bear':'neut';return `<span class="chip ${c}">${b}</span>`;}
@@ -221,7 +251,7 @@ function planCard(p,i){
       <div><div class="sym">${p.tsym} <span class="csub">₹${fmt(p.last_close)} · ${p.day_type_hint?'':''}</span></div>
         <div class="csub">${h.read||''}</div>
         <div class="csub">${p.num_setups} setups · take max ${p.max_trades} · ${p.turnover_cr?('₹'+p.turnover_cr+'cr turnover'):''}</div></div>
-      <div class="chips"><button class="dlbtn" onclick="event.stopPropagation();downloadOne(${i})" title="Save ${p.tsym}'s plan as a text file">⬇ TXT</button>${biasChip(p.bias)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
+      <div class="chips"><button class="dlbtn" onclick="event.stopPropagation();openChart('${p.tsym}')" title="Open ${p.tsym} on the chart">📈 Chart</button><button class="dlbtn" onclick="event.stopPropagation();downloadOne(${i})" title="Save ${p.tsym}'s plan as a text file">⬇ TXT</button>${biasChip(p.bias)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
     </div>
     <div class="cbody">
       <div class="headline">
@@ -256,10 +286,83 @@ function planCard(p,i){
     </div></div>`;
 }
 
+// ---------- SWING PLAN CARDS ----------
+function stageChip(st){return `<span class="chip stage">${st||'—'}</span>`;}
+function swingCard(p,i){
+  const T=p.trend||{}, pr=p.profile||{}, sp=p.score_parts||{}, ew=p.entry_window||{}, mr=p.market_regime||{};
+  const setups=(p.setups||[]).map(s=>`
+    <tr>
+      <td><span class="side ${s.side}">${s.side}</span></td>
+      <td><b>${s.name}</b><div class="q">${s.source}</div></td>
+      <td class="mono">▲ ${fmt(s.trigger_price)}<div class="q">${s.trigger}</div><div class="q">cap ${fmt(s.limit_price)} — never chase past this</div></td>
+      <td class="mono">${fmt(s.entry)}</td>
+      <td class="mono neg">${fmt(s.stop)}</td>
+      <td class="tgt mono"><b>${(s.targets||[]).map(fmt).join(' · ')}</b>${(s.context_targets||[]).length?`<div class="q">near ${s.context_targets.map(fmt).join(', ')}</div>`:''}</td>
+      <td class="mono">${s.rr_t1}R→${s.rr_final}R</td>
+      <td class="mono">${s.shares_for_risk??'—'}<div class="q">@₹${s.risk_rupees||1000} risk</div></td>
+      <td class="mono">enter by <b>${s.entry_by||'—'}</b>
+        <div class="q">~${s.expected_hold_sessions} sessions → exit ≈ ${s.expected_exit_date||'—'} (heuristic)</div>
+        <div class="q"><b>hard exit by ${s.exit_by_date||'—'}</b> (${s.time_stop_sessions}-session time stop)</div>
+        ${s.no_progress?`<div class="q">exit if < +${s.no_progress.min_gain_pct}% after ${s.no_progress.after_sessions} sessions</div>`:''}</td>
+      <td><div class="whenok">✓ ${s.valid_when}</div><div class="whenno">✗ ${s.skip_when}</div></td>
+    </tr>`).join('');
+  const scoreParts=Object.entries(sp).map(([k,v])=>`${k.replace(/_/g,' ')} ${v}`).join(' · ');
+  const flags=[pr.nr7?'NR7':null,pr.inside_nr4?'inside+NR4':null,pr.bbw_126_low?'BB-squeeze':null,pr.atr_contracting?'ATR↓':null].filter(Boolean).join(' · ')||'none';
+  return `<div class="card" id="card${i}">
+    <div class="chead" onclick="document.getElementById('card${i}').classList.toggle('open')">
+      <div class="rankn">${p.universe_rank||i+1}</div>
+      <div><div class="sym">${p.tsym} <span class="csub">₹${fmt(p.last_close)}</span></div>
+        <div class="csub">${p.headline||''}</div>
+        <div class="csub">${p.num_setups} setup(s) · RS ${T.momentum_percentile!=null?T.momentum_percentile+' pctile':'—'} · template ${T.template_passes??'—'}/7 · ATR ${fmt(pr.atr_pct)}%/d${p.turnover_cr?(' · ₹'+p.turnover_cr+'cr turnover'):''}</div></div>
+      <div class="chips"><button class="dlbtn" onclick="event.stopPropagation();openChart('${p.tsym}')" title="Open ${p.tsym} on the chart">📈 Chart</button><button class="dlbtn" onclick="event.stopPropagation();downloadOne(${i})" title="Save ${p.tsym}'s swing plan as a text file">⬇ TXT</button>${biasChip(p.bias)}${stageChip(p.stage)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
+    </div>
+    <div class="cbody">
+      <div class="headline">
+        <div class="hl-read">🎯 ${p.headline||''}</div>
+        <div class="csub mono">score: ${scoreParts}</div>
+        ${mr.breadth_above_sma200!=null?`<div class="csub" style="margin-top:4px">market breadth: ${(mr.breadth_above_sma200*100).toFixed(0)}% of universe above 200-SMA — regime ${mr.on?'ON':'<b style=\'color:var(--red)\'>OFF</b>'}</div>`:''}
+      </div>
+      <div class="ewin">📅 <b>Entry window ${ew.first_session||''} → ${ew.last_session||''}</b> — ${ew.note||''}</div>
+      <h4>Trend & momentum (evening close data)</h4>
+      <div class="lvls">
+        <div class="lv"><div class="t">Stage</div><div class="v">${p.stage} · template ${T.template_passes??'—'}/7 ${T.template_pass?'✓ strict':''}</div></div>
+        <div class="lv"><div class="t">SMA 50 / 150 / 200</div><div class="v">${fmt(T.sma50)} / ${fmt(T.sma150)} / ${fmt(T.sma200)}</div></div>
+        <div class="lv"><div class="t">52-week high / low</div><div class="v">${fmt(T.week52_high)} / ${fmt(T.week52_low)} <span class="q">(${fmt(T.pct_from_52w_high)}% from high)</span></div></div>
+        <div class="lv"><div class="t">Returns 21 / 63 / 126d</div><div class="v">${pct(T.ret_21d)} · ${pct(T.ret_63d)} · ${pct(T.ret_126d)}</div></div>
+        <div class="lv"><div class="t">Momentum rank (universe)</div><div class="v">${T.momentum_percentile!=null?T.momentum_percentile+' pctile':'—'} <span class="q">vol-normalized 21/63/126d blend</span></div></div>
+        <div class="lv"><div class="t">Compression flags</div><div class="v">${flags}</div></div>
+      </div>
+      <h4>Risk profile</h4>
+      <div class="lvls">
+        <div class="lv"><div class="t">ATR14 · ATR%</div><div class="v">${fmt(pr.atr14)} · ${fmt(pr.atr_pct)}%/day</div></div>
+        <div class="lv"><div class="t">RVOL · up/down vol 20d</div><div class="v">${fmt(pr.rvol)}× · ${fmt(pr.updown_vol_ratio_20d)}</div></div>
+        <div class="lv"><div class="t">Median turnover 20d</div><div class="v">₹${fmt(pr.med_turnover_cr_20d)}cr/day</div></div>
+        <div class="lv"><div class="t">Gaps >3% (20d)</div><div class="v">${pr.gap3_count_20d??'—'} <span class="q">(≥3 = event-driven, skip)</span></div></div>
+        <div class="lv"><div class="t">Locked-circuit closes (60d)</div><div class="v">${pr.locked_circuit_60d??'—'} <span class="q">(≥2 = circuit-prone, skip)</span></div></div>
+        <div class="lv"><div class="t">20d high · 10d low</div><div class="v">${fmt(pr.hi20)} · ${fmt(pr.lo10)}</div></div>
+      </div>
+      ${(p.setups||[]).length?`
+      <h4>Swing setups — trigger, entry, stop, targets, dates</h4>
+      <div class="scroll"><table><thead><tr>
+        <th>Side</th><th>Setup</th><th>Trigger / cap</th><th>Entry</th><th>Stop</th><th>Targets</th><th>R:R</th><th>Size</th><th>Timing</th><th>Valid / Skip</th>
+      </tr></thead><tbody>${setups}</tbody></table></div>
+      <div class="csub" style="margin-top:6px">${p.estimate_note||''}</div>`
+      :`<div class="daytype" style="margin-top:12px">🚫 No entry tonight — ${p.headline||'no valid setup'}</div>`}
+      <h4>Do NOT trade when</h4>
+      <ul class="rules no">${(p.no_trade||[]).map(r=>`<li>${r}</li>`).join('')}</ul>
+      ${(p.data_warnings||[]).length?`<h4>Data not checked (verify manually)</h4>
+      <ul class="rules no">${p.data_warnings.map(r=>`<li>${r}</li>`).join('')}</ul>`:''}
+      <h4>Risk rules</h4>
+      <ul class="rules">${(p.risk_rules||[]).map(r=>`<li>${r}</li>`).join('')}</ul>
+      <div class="csub" style="margin-top:10px">${p.cost_note||''}</div>
+    </div></div>`;
+}
+
 // ---------- SCORECARD (plan-vs-actual review) ----------
-const _autoScored={};   // date -> true, so a missing scorecard is auto-scored ONCE
+const _autoScored={};   // mode|date -> true, so a missing scorecard is auto-scored ONCE
 async function renderScore(date){
   const tiles=$('tiles'), results=$('results'), honesty=$('honesty');
+  if(MODE==='swing') return renderSwingScore(date);
   if(!date){ tiles.innerHTML=''; results.innerHTML='<div class="empty">No plans built yet.</div>'; honesty.style.display='none'; return; }
   // A future/today's-still-open session has no candles yet — say so instantly
   // instead of asking the backend to score it (it would only find nothing).
@@ -271,8 +374,8 @@ async function renderScore(date){
   results.innerHTML='<div class="empty">loading…</div>';
 
   let j=await fetch('/api/plan/scorecard?date='+date).then(r=>r.json());
-  if((!j.ok||!(j.results||[]).length) && !_autoScored[date]){
-    _autoScored[date]=true;
+  if((!j.ok||!(j.results||[]).length) && !_autoScored['day|'+date]){
+    _autoScored['day|'+date]=true;
     setStatus('Scoring the '+date+' plan against actual candles…');
     try{ await fetch('/api/plan/score?plan_date='+date); }catch(e){}
     j=await fetch('/api/plan/scorecard?date='+date).then(r=>r.json());
@@ -370,6 +473,84 @@ function scoreCard(r,p,i){
     </div></div>`;
 }
 
+// ---------- SWING SCORECARD ----------
+async function renderSwingScore(date){
+  const tiles=$('tiles'), results=$('results'), honesty=$('honesty');
+  if(!date){ tiles.innerHTML=''; results.innerHTML='<div class="empty">No swing plans built yet.</div>'; honesty.style.display='none'; return; }
+  if(date>=todayIST()){
+    tiles.innerHTML=''; honesty.style.display='none';
+    results.innerHTML='<div class="empty">The '+date+' swing plan hasn\'t traded yet — nothing to score.<br>Pick an earlier date; it scores automatically (open positions show as OPEN).</div>';
+    return;
+  }
+  results.innerHTML='<div class="empty">loading…</div>';
+  let j=await fetch(api.scorecard(date)).then(r=>r.json());
+  // swing plans keep evolving while positions are open — re-score on every view
+  if(!_autoScored['swing|'+date] || !(j.results||[]).length){
+    _autoScored['swing|'+date]=true;
+    setStatus('Replaying the '+date+' swing plan against the daily candles since…');
+    try{ await fetch(api.score(date)); }catch(e){}
+    j=await fetch(api.scorecard(date)).then(r=>r.json());
+    setStatus('Scored '+date+'.');
+  }
+  const res=(j.results||[]);
+  if(!res.length){
+    tiles.innerHTML=''; honesty.style.display='none';
+    results.innerHTML='<div class="empty">No completed sessions after <b>'+date+'</b> yet — check back tomorrow evening.</div>';
+    return;
+  }
+  const a=j.scorecard||{};
+  const cls=v=>v>0?'pos':v<0?'neg':'';
+  tiles.innerHTML=`
+    <div class="tile"><div class="t">Swings taken</div><div class="v">${a.n_trades??0}</div><div class="d">${a.n_win??0}W / ${a.n_loss??0}L · ${a.n_no_trade??0} no-trade · ${a.n_open??0} still open</div></div>
+    <div class="tile"><div class="t">Hit rate</div><div class="v ${a.hit_rate>=0.5?'pos':'neg'}">${a.hit_rate!=null?(a.hit_rate*100).toFixed(0)+'%':'—'}</div><div class="d">closed swings only</div></div>
+    <div class="tile"><div class="t">Expectancy / swing</div><div class="v ${cls(a.expectancy_pct)}">${a.expectancy_pct!=null?pct(a.expectancy_pct):'—'}</div><div class="d">net of ~${a.cost_pct_per_trade??0.35}% delivery cost</div></div>
+    <div class="tile"><div class="t">Book net</div><div class="v ${cls(a.book_net_pct)}">${a.book_net_pct!=null?pct(a.book_net_pct):'—'}</div><div class="d">one primary swing per stock</div></div>
+    <div class="tile"><div class="t">Profit factor</div><div class="v">${a.profit_factor??'—'}</div><div class="d">gains ÷ losses</div></div>
+    <div class="tile"><div class="t">Avg days held</div><div class="v">${a.avg_days_held??'—'}</div><div class="d">open unrealized: ${a.open_unrealized_pct!=null?pct(a.open_unrealized_pct):'—'}</div></div>`;
+  honesty.style.display='';honesty.innerHTML='📏 <b>Honest read:</b> '+(a.honesty_note||'Simulated, cost-adjusted replay. Small samples prove nothing.');
+  const order={'win':0,'loss':1,'open':2,'no-trade':3,'no-plan':4};
+  res.sort((x,y)=>(order[x.outcome]??9)-(order[y.outcome]??9) || ((y.net_pct??-99)-(x.net_pct??-99)));
+  results.innerHTML=res.map((r,i)=>swingScoreCard(r,i)).join('');
+}
+
+function swingScoreCard(r,i){
+  const p=r.primary||{};
+  const badge = r.outcome==='win'  ? `<span class="chip high">WIN ${pct(r.net_pct)}</span>`
+             : r.outcome==='loss' ? `<span class="chip lowr">LOSS ${pct(r.net_pct)}</span>`
+             : r.outcome==='open' ? `<span class="chip medium">OPEN ${p.net_pct!=null?pct(p.net_pct):''}</span>`
+             : `<span class="chip low">${r.outcome}</span>`;
+  const checks=((r.analysis||{}).checks||[]).map(c=>`
+    <tr><td style="white-space:nowrap"><b>${c.aspect}</b></td>
+        <td>${c.predicted}</td><td>${c.actual}</td>
+        <td align="center"><span class="verd ${c.verdict}">${c.verdict==='RIGHT'?'✓ RIGHT':c.verdict==='WRONG'?'✗ WRONG':c.verdict}</span></td></tr>`).join('');
+  const outcomes=(r.setups||[]).map(st=>{
+    const b = st.status==='filled'
+      ? `<span class="verd ${st.net_pct>0?'RIGHT':'WRONG'}">${st.net_pct>0?'WIN':'LOSS'} ${pct(st.net_pct)}</span>`
+      : st.status==='open'
+      ? `<span class="verd INFO">OPEN ${st.net_pct!=null?pct(st.net_pct):''}</span>`
+      : `<span class="verd INFO">${(st.status||'').replace(/_/g,' ')}</span>`;
+    const extra = (st.status==='filled'||st.status==='open')
+      ? `<span class="mono q"> ${fmt(st.entry)} → ${fmt(st.exit)} · ${st.reached||''} · ${st.days_held??'—'}d held</span>`
+      : st.reached?`<span class="q"> ${st.reached}</span>`:'';
+    return `<div style="font-size:11.5px;padding:4px 0;border-top:1px solid var(--border)">
+      <span class="side ${st.side}">${st.side}</span> ${st.name} ${b}${extra}${st.selected?' <span class="q">← primary</span>':''}
+    </div>`;}).join('');
+  return `<div class="card" id="ssc${i}">
+    <div class="chead" onclick="document.getElementById('ssc${i}').classList.toggle('open')">
+      <div class="rankn">${i+1}</div>
+      <div><div class="sym">${r.tsym}</div>
+        <div class="csub">score ${r.score??'—'} · ${r.conviction||'—'} conviction · ${(r.analysis||{}).sessions_scored??0} session(s) replayed</div></div>
+      <div class="chips"><button class="dlbtn" onclick="event.stopPropagation();openChart('${r.tsym}')" title="Open ${r.tsym} on the chart">📈 Chart</button>${badge}</div>
+    </div>
+    <div class="cbody">
+      ${checks?`<div class="colhead" style="margin-top:12px">Right vs wrong</div>
+      <div class="scroll"><table style="font-size:11.5px"><thead><tr><th>Check</th><th>Plan said</th><th>Market did</th><th>Verdict</th></tr></thead>
+        <tbody>${checks}</tbody></table></div>`:''}
+      <div class="colhead" style="margin-top:12px">Setup outcomes (simulated, net of delivery cost)</div>
+      ${outcomes||'<div class="q">no setups evaluated</div>'}
+    </div></div>`;
+}
+
 // ---------- TXT downloads ----------
 const LINE='='.repeat(64), THIN='-'.repeat(64);
 function planToText(p){
@@ -428,7 +609,8 @@ function downloadText(name, text){
 }
 function downloadOne(i){
   const p=PLANS[i]; if(!p) return;
-  downloadText(`plan_${p.tsym}_${p.plan_date||PLAN_DATE}.txt`, planToText(p));
+  const toText = MODE==='swing' ? swingToText : planToText;
+  downloadText(`${MODE==='swing'?'swing':'plan'}_${p.tsym}_${p.plan_date||PLAN_DATE}.txt`, toText(p));
 }
 async function downloadAll(){
   // Context-aware: on the Plan tab this saves the day's PLAN; on the Scorecard
@@ -437,14 +619,55 @@ async function downloadAll(){
   const date=$('dateSel').value; if(!date){ setStatus('Pick a date first.'); return; }
   let plans=PLANS, d=PLAN_DATE;
   if(!plans.length || d!==date){
-    const j=await fetch('/api/plan/report?date='+date).then(r=>r.json());
+    const j=await fetch(api.report(date)).then(r=>r.json());
     if(!j.ok||!j.plans.length){ setStatus('No plans stored for '+date+'.'); return; }
     plans=j.plans; d=date;
   }
-  const head=[LINE,` DAILY PLAN — ${d} · ${plans.length} stocks (top volume leaders ≤ ₹300)`,
+  const label=MODE==='swing'?'SWING PLAN (2–15 day delivery holds)':'DAILY PLAN';
+  const toText = MODE==='swing' ? swingToText : planToText;
+  const head=[LINE,` ${label} — ${d} · ${plans.length} stocks (top volume leaders ≤ ₹300)`,
     ' Sorted by confluence score · Generated by trade.scratchforge backend',
     ' Analysis only — no orders are placed and no profit is promised.',LINE,'',''].join('\n');
-  downloadText(`plan_ALL_${d}.txt`, head + plans.map(planToText).join('\n\n'));
+  downloadText(`${MODE==='swing'?'swing':'plan'}_ALL_${d}.txt`, head + plans.map(toText).join('\n\n'));
+}
+
+function swingToText(p){
+  const T=p.trend||{}, pr=p.profile||{}, ew=p.entry_window||{}, mr=p.market_regime||{};
+  const out=[];
+  out.push(LINE);
+  out.push(` ${p.tsym} — ₹${fmt(p.last_close)} · SWING plan live from ${p.plan_date||PLAN_DATE}`);
+  out.push(` ${String(p.bias||'').toUpperCase()} · stage: ${p.stage} (template ${T.template_passes??'—'}/7) · ${p.conviction} conviction · score ${p.score} · rank ${p.universe_rank||'—'}${p.turnover_cr?` · ₹${p.turnover_cr}cr turnover`:''}`);
+  out.push(LINE);
+  out.push('', 'THE READ', `  ${p.headline||'—'}`);
+  if(mr.breadth_above_sma200!=null) out.push(`  Market breadth: ${(mr.breadth_above_sma200*100).toFixed(0)}% of universe above 200-SMA — regime ${mr.on?'ON':'OFF'}`);
+  out.push('', `ENTRY WINDOW: ${ew.first_session||'—'} -> ${ew.last_session||'—'} (${ew.note||''})`);
+  out.push('', 'TREND & MOMENTUM', THIN);
+  out.push(`  SMA 50/150/200    : ${fmt(T.sma50)} / ${fmt(T.sma150)} / ${fmt(T.sma200)}`);
+  out.push(`  52w high/low      : ${fmt(T.week52_high)} / ${fmt(T.week52_low)}  (${fmt(T.pct_from_52w_high)}% from high)`);
+  out.push(`  Returns 21/63/126d: ${pct(T.ret_21d)} · ${pct(T.ret_63d)} · ${pct(T.ret_126d)} · momentum rank ${T.momentum_percentile!=null?T.momentum_percentile+' pctile':'—'}`);
+  out.push('', 'RISK PROFILE', THIN);
+  out.push(`  ATR14 ${fmt(pr.atr14)} (${fmt(pr.atr_pct)}%/day) · RVOL ${fmt(pr.rvol)}x · median turnover ₹${fmt(pr.med_turnover_cr_20d)}cr/d`);
+  out.push(`  Gaps>3% in 20d: ${pr.gap3_count_20d??'—'} · locked-circuit closes 60d: ${pr.locked_circuit_60d??'—'} · up/down vol 20d: ${fmt(pr.updown_vol_ratio_20d)}`);
+  out.push('', `SETUPS`, THIN);
+  if(!(p.setups||[]).length) out.push('  NO ENTRY TONIGHT — '+(p.headline||''));
+  (p.setups||[]).forEach((s,i)=>{
+    out.push(`  ${i+1}. [${s.side} · ${s.quality}] ${s.name}   (${s.source})`);
+    out.push(`     Trigger : buy-stop ${fmt(s.trigger_price)}, limit cap ${fmt(s.limit_price)} (never chase past the cap) — ${s.trigger}`);
+    out.push(`     Entry ${fmt(s.entry)} · Stop ${fmt(s.stop)} · Targets ${(s.targets||[]).map(fmt).join(' / ')} (${s.rr_t1}R->${s.rr_final}R)`);
+    out.push(`     Size    : ${s.shares_for_risk??'—'} shares @ ₹${s.risk_rupees||1000} risk`);
+    out.push(`     Timing  : enter by ${s.entry_by||'—'} · ~${s.expected_hold_sessions} sessions to target (~ ${s.expected_exit_date||'—'}, heuristic) · HARD EXIT BY ${s.exit_by_date||'—'}`);
+    if(s.no_progress) out.push(`     No-progress: exit if < +${s.no_progress.min_gain_pct}% after ${s.no_progress.after_sessions} sessions`);
+    out.push(`     Valid   : ${s.valid_when}`);
+    out.push(`     Skip if : ${s.skip_when}`, '');
+  });
+  if((p.setups||[]).length) out.push(`  ${p.estimate_note||''}`,'');
+  out.push('DO NOT TRADE WHEN', THIN);
+  (p.no_trade||[]).forEach(r=>out.push(`  - ${r}`));
+  if((p.data_warnings||[]).length){ out.push('', 'DATA NOT CHECKED (verify manually)', THIN); p.data_warnings.forEach(r=>out.push(`  - ${r}`)); }
+  out.push('', 'RISK RULES', THIN);
+  (p.risk_rules||[]).forEach(r=>out.push(`  - ${r}`));
+  out.push('', THIN, `  ${p.cost_note||'Analysis only — no orders are placed and no profit is promised.'}`, '');
+  return out.join('\n');
 }
 
 function scoreToText(r, p){
@@ -480,7 +703,33 @@ function scoreToText(r, p){
   return out.join('\n');
 }
 
+async function downloadSwingScorecardTxt(){
+  const date=$('dateSel').value; if(!date){ setStatus('Pick a date first.'); return; }
+  const j=await fetch(api.scorecard(date)).then(r=>r.json());
+  const res=j&&j.results||[];
+  if(!res.length){ setStatus('No swing scorecard stored for '+date+' yet.'); return; }
+  const a=j.scorecard||{};
+  const out=[LINE,` SWING SCORECARD — plan vs actual · ${date} · ${res.length} stocks`,
+    ` Taken ${a.n_trades??0} (${a.n_win??0}W/${a.n_loss??0}L${a.hit_rate!=null?', hit '+(a.hit_rate*100).toFixed(0)+'%':''}) · ${a.n_open??0} open · ${a.n_no_trade??0} no-trade`,
+    ` Expectancy ${a.expectancy_pct!=null?pct(a.expectancy_pct):'—'}/swing · book ${a.book_net_pct!=null?pct(a.book_net_pct):'—'} · PF ${a.profit_factor??'—'} · avg hold ${a.avg_days_held??'—'}d`,
+    ' Simulated, cost-adjusted replay of the swing plan against real daily candles — not real trades.',LINE,''];
+  res.forEach(r=>{
+    const p=r.primary||{};
+    out.push(THIN, `${r.tsym} — ${String(r.outcome||'').toUpperCase()}${r.net_pct!=null?' '+pct(r.net_pct):''}`, THIN);
+    (r.setups||[]).forEach(st=>{
+      if(st.status==='filled'||st.status==='open'){
+        out.push(`   [${st.status==='open'?'OPEN':(st.net_pct>0?'WIN ':'LOSS')} ${st.net_pct!=null?pct(st.net_pct):''}] ${st.name} — ${fmt(st.entry)} → ${fmt(st.exit)} (${st.reached||''}, ${st.days_held??'—'}d)${st.selected?' ← primary':''}`);
+      }else{
+        out.push(`   [${(st.status||'').replace(/_/g,' ')}] ${st.name}${st.reached?' — '+st.reached:''}`);
+      }
+    });
+    out.push('');
+  });
+  downloadText(`swing_scorecard_${date}.txt`, out.join('\n'));
+}
+
 async function downloadScorecardTxt(){
+  if(MODE==='swing') return downloadSwingScorecardTxt();
   const date=$('dateSel').value; if(!date){ setStatus('Pick a date first.'); return; }
   if(date>=todayIST()){ setStatus(date+" hasn't happened yet — nothing to download."); return; }
   const [sc,rep]=await Promise.all([
@@ -509,9 +758,9 @@ async function downloadScorecardTxt(){
 // ---------- actions ----------
 async function runBuild(){
   const b=$('buildBtn'); b.disabled=true; b.textContent='building…';
-  setStatus('Building the next-session plan for the top-50 (fetching candles — can take ~1–2 min)…');
-  try{ const j=await fetch('/api/plan/build').then(r=>r.json());
-    setStatus(`Built ${j.built} plans for ${j.plan_date} (source: ${j.universe_source}, ${j.skipped} skipped).`);
+  setStatus('Building the next-session '+(MODE==='swing'?'SWING':'day')+' plan for the top-50 (fetching candles — can take ~1–2 min)…');
+  try{ const j=await fetch(api.build()).then(r=>r.json());
+    setStatus(`Built ${j.built} ${MODE==='swing'?'swing ':''}plans for ${j.plan_date} (source: ${j.universe_source}, ${j.skipped} skipped).`);
     await reload();
   }catch(e){ setStatus('Build failed: '+e); }
   b.disabled=false; b.textContent='⚙ Build next';
@@ -520,7 +769,7 @@ async function runScore(){
   const date=$('dateSel').value; if(!date){setStatus('Pick a date first.');return;}
   const b=$('scoreBtn'); b.disabled=true; b.textContent='scoring…';
   setStatus('Scoring '+date+' vs actual candles…');
-  try{ const j=await fetch('/api/plan/score?plan_date='+date).then(r=>r.json());
+  try{ const j=await fetch(api.score(date)).then(r=>r.json());
     setStatus(j.ok?`Scored ${j.scored} plans for ${date}.`:'Score: '+(j.error||'failed'));
     showTab('score');
   }catch(e){ setStatus('Score failed: '+e); }
@@ -528,8 +777,11 @@ async function runScore(){
 }
 function setStatus(t){const s=$('status');s.style.display='';s.textContent=t;}
 
-$('foot').innerHTML='Techniques from your <b>short_term_trading_compendium_india.md</b> — prev-day levels, CPR, Camarilla, ORB, SMC/FVG confluence (§5–12), '
-  +'universe = today\'s volume leaders ≤₹300 (§27), scoring net of costs (§3) with §33 metrics. Educational engineering reference; not investment advice.';
+$('foot').innerHTML='<b>Day trade</b>: prev-day levels, CPR, Camarilla, ORB, SMC/FVG confluence — scored net of ~0.25% intraday costs. '
+  +'<b>Swing trade</b>: George-Hwang 52-week-high momentum + Minervini/Weinstein Stage-2 gate, Landry pullback resumption, '
+  +'Crabel/Bollinger volatility-compression breakouts, vol-normalized cross-sectional momentum rank, market-breadth regime gate — '
+  +'long-only (retail can\'t short delivery in India), scored net of ~0.65% delivery costs (STT+brokerage+DP+slippage). '
+  +'Universe = today\'s volume leaders ≤₹300. Score weights are priors; the scorecard measures them. Educational engineering reference; not investment advice.';
 reload();
 </script>
 </body>

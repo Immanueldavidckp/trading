@@ -794,6 +794,55 @@ def plan_setup_status(tsym: str):
     return plan_pipeline.live_setup_status(tsym)
 
 
+# ---------- Swing plan system (2–15 day delivery swings, evening build) ----------
+
+@app.get("/api/swing/build")
+def swing_build(for_date: Optional[str] = None, top_n: int = 50):
+    """Build the next-session SWING plan for the top-N ≤₹300 volume leaders.
+    Run every evening after the close (same cadence as /api/plan/build)."""
+    import swing_pipeline
+    return swing_pipeline.build_swing_plans(for_date=for_date, top_n=top_n)
+
+
+@app.get("/api/swing/score")
+def swing_score_ep(plan_date: str):
+    """Replay a date's swing plans against the daily candles that followed.
+    Safe to run any evening — unresolved positions come back as 'open'."""
+    import swing_pipeline
+    return swing_pipeline.score_swing_plans(plan_date)
+
+
+@app.get("/api/swing/report")
+def swing_report(date: Optional[str] = None):
+    """The evening swing plan report (default: latest built)."""
+    import swing_pipeline
+    if not date:
+        d = swing_pipeline.list_swing_dates().get("plan_dates") or []
+        if not d:
+            return {"ok": False, "error": "no swing plans built yet"}
+        date = d[0]
+    return swing_pipeline.get_swing_report(date)
+
+
+@app.get("/api/swing/scorecard")
+def swing_scorecard(date: Optional[str] = None):
+    """The swing plan-vs-actual scorecard for a date (default: latest scored)."""
+    import swing_pipeline
+    if not date:
+        d = swing_pipeline.list_swing_dates().get("scored_dates") or []
+        if not d:
+            return {"ok": False, "error": "no swing scorecards yet"}
+        date = d[0]
+    return swing_pipeline.get_swing_scorecard(date)
+
+
+@app.get("/api/swing/dates")
+def swing_dates():
+    """Available swing plan + scored dates (for the report date-picker)."""
+    import swing_pipeline
+    return swing_pipeline.list_swing_dates()
+
+
 # ---------- Root handler: redirect to /live.html ----------
 @app.get("/")
 def root():
