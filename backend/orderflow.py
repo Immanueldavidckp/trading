@@ -254,6 +254,11 @@ def heatmap(tsym: str, minutes: int = 30, time_bins: int = 150,
     best_bid = [None] * nt
     best_ask = [None] * nt
     ltp_line = [None] * nt
+    # How deep the book actually reached in each column. Outside this band we
+    # have NO INFORMATION (only 30 levels are transmitted per side) — which is
+    # a different thing from "quoted and empty" and must not be drawn as such.
+    seen_lo = [None] * nt
+    seen_hi = [None] * nt
 
     for s in snaps:
         ts, bp, bq, ap, aq, ltp = s
@@ -265,6 +270,14 @@ def heatmap(tsym: str, minutes: int = 30, time_bins: int = 150,
         for p, q in zip(ap, aq):
             if p:
                 ask[pidx(p)][ti] += q
+        lo_p = min([p for p in bp if p] or [0]) or None
+        hi_p = max([p for p in ap if p] or [0]) or None
+        if lo_p is not None:
+            i = pidx(lo_p)
+            seen_lo[ti] = i if seen_lo[ti] is None else min(seen_lo[ti], i)
+        if hi_p is not None:
+            i = pidx(hi_p)
+            seen_hi[ti] = i if seen_hi[ti] is None else max(seen_hi[ti], i)
         # last-in-bin, not max/min across it — taking the extremes would draw
         # the widest spread observed rather than the one that prevailed
         if bp:
@@ -296,10 +309,14 @@ def heatmap(tsym: str, minutes: int = 30, time_bins: int = 150,
                                   "qty": 0, "price": tr["price"]})
         m["qty"] += tr["qty"]
 
+    # Percentile-clamped scale (Bookmap's model): everything at/below the lower
+    # cutoff renders as background and everything at/above the upper cutoff
+    # saturates. Without the lower cutoff the bottom decile is visual noise.
     flat = [v for r in bid for v in r if v] + [v for r in ask for v in r if v]
     flat.sort()
     p99 = flat[int(len(flat) * 0.99)] if flat else 1
     p50 = flat[len(flat) // 2] if flat else 1
+    p05 = flat[int(len(flat) * 0.05)] if flat else 0
 
     return {
         "ok": True, "tsym": tsym, "source": "d30",
@@ -310,9 +327,12 @@ def heatmap(tsym: str, minutes: int = 30, time_bins: int = 150,
         "prices": [round(p_lo + i * row, 2) for i in range(np_)],
         "bid": bid, "ask": ask,
         "best_bid": best_bid, "best_ask": best_ask, "ltp": ltp_line,
+        "depth_lo": seen_lo, "depth_hi": seen_hi,
         "trades": list(merged.values()),
-        "scale": {"p50": p50, "p99": p99,
-                  "note": "colour intensity: log-scaled, clipped at the 99th pct level size"},
+        "scale": {"p50": p50, "p99": p99, "p05": p05,
+                  "note": "log-scaled between the 5th and 99th percentile level sizes"},
+        "depth_note": ("Only 30 levels per side are transmitted, so anything outside "
+                       "depth_lo..depth_hi in a column is UNKNOWN, not empty."),
         "events": book_events(snaps, tk, tick),
         "approximation": "book sampled ~1/s (true 30 levels); prints are 1s-polled volume deltas",
     }

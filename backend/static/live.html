@@ -1854,27 +1854,44 @@ function drawHeatmap(){
   const nt=hm.n_time, np=hm.n_price;
   const cw=gw/nt, ch=gh/np;
   const y=pi=>PAD_T+(np-1-pi)*ch;            // price increases upward
-  const p50=hm.scale.p50||1, p99=hm.scale.p99||1;
+  // percentile-clamped log scale: <=5th pct reads as background, >=99th saturates
+  const p50=hm.scale.p50||1, p99=hm.scale.p99||1, p05=hm.scale.p05||0;
   const denom=Math.log1p(p99/p50)||1;
-  const inten=q=>q<=0?0:Math.min(1,Math.log1p(q/p50)/denom);
+  const inten=q=>q<=p05?0:Math.min(1,Math.log1p(q/p50)/denom);
 
   // Liquidity cells. A cell can hold BOTH bid and ask resting within one time
   // bin (rows near the touch usually do), so paint the dominant side rather
   // than letting whichever is drawn second erase the other.
+  const dlo=hm.depth_lo||[], dhi=hm.depth_hi||[];
+  const known=(pi,ti)=>{
+    const lo=dlo[ti], hi=dhi[ti];
+    return lo==null||hi==null ? false : (pi>=lo && pi<=hi);
+  };
   for(let pi=0;pi<np;pi++){
     for(let ti=0;ti<nt;ti++){
       const b=hm.bid[pi][ti], a=hm.ask[pi][ti];
-      if(b<=0 && a<=0) continue;
+      if(b<=0 && a<=0){
+        // Outside the 30 transmitted levels we have NO information — mark it
+        // faintly rather than painting it like a confidently empty book.
+        if(!known(pi,ti)){
+          ctx.fillStyle='rgba(120,134,160,0.045)';
+          ctx.fillRect(AX_W+ti*cw,y(pi),Math.max(cw,1),Math.max(ch,1));
+        }
+        continue;
+      }
       const bidSide=b>=a;
       const q=bidSide?b:a;
       ctx.fillStyle=(bidSide?'rgba(0,214,143,':'rgba(255,86,119,')+(0.06+0.82*inten(q))+')';
       ctx.fillRect(AX_W+ti*cw,y(pi),Math.max(cw,1),Math.max(ch,1));
     }
   }
-  // traded prints
-  const maxTrade=Math.max(1,...(hm.trades||[]).map(t=>t.qty));
+  // Traded prints. Radius scales with sqrt(qty) so AREA tracks size, and the
+  // reference is the 95th percentile rather than the max — otherwise one block
+  // print flattens every other dot to the floor radius.
+  const tq=(hm.trades||[]).map(t=>t.qty).sort((x,y)=>x-y);
+  const qCap=tq.length?Math.max(1,tq[Math.floor(tq.length*0.95)]):1;
   (hm.trades||[]).forEach(t=>{
-    const r=Math.max(1.4,Math.sqrt(t.qty/maxTrade)*7);
+    const r=Math.max(1.4,Math.sqrt(Math.min(t.qty,qCap)/qCap)*7);
     ctx.beginPath();
     ctx.arc(AX_W+(t.ti+0.5)*cw, y(t.pi)+ch/2, r, 0, 6.284);
     ctx.fillStyle=t.side==='BUY'?'rgba(120,255,200,.85)':'rgba(255,150,170,.85)';
@@ -1965,7 +1982,7 @@ function drawHeatmap(){
     let txt=`${hm.time_labels[ti]}  ₹${price}`;
     if(b>0) txt+=`\nbid resting  ${fmtCompact(b)}`;
     if(a>0) txt+=`\nask resting  ${fmtCompact(a)}`;
-    if(b<=0 && a<=0) txt+=`\n(outside the 30 visible levels)`;
+    if(b<=0 && a<=0) txt+=known(pi,ti)?`\nno resting size`:`\nunknown — beyond the 30 levels`;
     tr.forEach(t=>{ txt+=`\ntraded ${t.side}  ${fmtCompact(t.qty)}`; });
     tip.textContent=txt; tip.style.display='';
     tip.style.left=Math.min(mx2+14,W-160)+'px'; tip.style.top=(my+14)+'px';
