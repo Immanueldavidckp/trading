@@ -67,8 +67,15 @@ CREATE TABLE IF NOT EXISTS market_depth (
     buy_depth      TEXT,
     sell_depth     TEXT,
     INDEX idx_md_sym_ts (tsym, received_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=4;
 """
+# ROW_FORMAT note: buy_depth/sell_depth are repetitive JSON and are ~86% of this
+# table's bytes. Measured on live data, KEY_BLOCK_SIZE=4 compresses the table
+# 4.28x with a 99.6% page-compression success rate. Writes are ~4x slower in
+# isolation, which is irrelevant here: that is still ~5,900 rows/s against a
+# feed that peaks near 60 rows/s. Keep this on the DDL so a rebuilt database
+# doesn't silently come back uncompressed.
 
 
 def ensure_depth_table():
