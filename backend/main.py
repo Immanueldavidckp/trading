@@ -72,6 +72,15 @@ def startup_event():
         except Exception as e:
             print(f"Upstox auto-login error: {e}")
 
+    # 30-level depth stream (Upstox Plus, websocket full_d30): watchlist +
+    # day-plan universe, capped at 50 keys. Pure live view — the 1s REST poll
+    # below still records the 5-level history exactly as before.
+    try:
+        res = _depth30().start(_d30_default_symbols())
+        print(f"Depth30 stream: {res}")
+    except Exception as e:
+        print(f"Depth30 start failed: {e}")
+
     # Auto-start the Upstox real-time feed (full-quote poll -> price_changes +
     # market_depth). Replaces the old Yahoo poller as the single data source.
     try:
@@ -155,6 +164,36 @@ def upstox_depth(tsym: str):
     if not d:
         return {"stat": "Not_Ok", "emsg": "No depth recorded yet for " + tsym}
     return {"stat": "Ok", "tsym": tsym.upper(), **d}
+
+
+@app.get("/api/upstox/depth30")
+def upstox_depth30(tsym: str):
+    """30-level order book (Upstox Plus websocket full_d30) for a symbol, with
+    automatic fallback to the recorded 5-level REST book when the stream has no
+    fresh data. Requesting a symbol auto-subscribes it (LRU within the 50-key cap)."""
+    d = _depth30()
+    d.ensure(tsym)
+    b = d.get_book(tsym)
+    if b:
+        return {"stat": "Ok", "tsym": tsym.upper(), "source": "d30",
+                "levels": max(len(b["buy"]), len(b["sell"])), **b}
+    old = UpstoxQuoteFeed.latest_depth(tsym)
+    if not old:
+        return {"stat": "Not_Ok", "emsg": "No depth available yet for " + tsym}
+    return {"stat": "Ok", "tsym": tsym.upper(), "source": "rest5",
+            "levels": min(5, len(old.get("buy") or [])), **old}
+
+
+@app.get("/api/upstox/depth30/status")
+def upstox_depth30_status():
+    """Health of the 30-level stream: connection, subscriptions, live books."""
+    return _depth30().status()
+
+
+@app.get("/api/upstox/depth30/start")
+def upstox_depth30_start():
+    """(Re)connect the 30-level stream with the default subscription set."""
+    return _depth30().start(_d30_default_symbols())
 
 
 # ---------- Analysis + Suggestion modes ----------
@@ -504,6 +543,32 @@ def _upstox() -> UpstoxClient:
     return upstox
 
 
+# ---------- 30-level depth stream (Upstox Plus) ----------
+depth30 = None
+
+
+def _depth30():
+    global depth30
+    if depth30 is None:
+        from upstox_depth30 import Depth30Feed
+        depth30 = Depth30Feed(_upstox())
+    return depth30
+
+
+def _d30_default_symbols() -> list:
+    """Watchlist + day-plan universe (deduped, order preserved) — the default
+    full_d30 subscription set, capped inside Depth30Feed at 50 keys."""
+    from upstox_feed import load_watchlist, load_extra_symbols
+    syms = [w.get("tsym") for w in load_watchlist()] + list(load_extra_symbols())
+    seen, out = set(), []
+    for s in syms:
+        u = (s or "").upper()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
 @app.get("/api/upstox/status")
 def upstox_status():
     """Check if Upstox is configured and logged in."""
@@ -550,6 +615,11 @@ def upstox_do_autologin():
     if feed is None:
         feed = UpstoxQuoteFeed(u, interval_sec=1.0)
         feed.start()
+    # the D30 websocket authenticates per-connection — reconnect on the new token
+    try:
+        _depth30().start(_d30_default_symbols())
+    except Exception as e:
+        print(f"Depth30 restart after autologin failed: {e}")
     return {"ok": True, "user": res.get("user"), "logged_in": True}
 
 

@@ -9,3 +9,5 @@ websocket-client==1.9.0
 websockets>=12.0
 mysql-connector-python>=8.3
 upstox-totp>=1.0.7
+upstox-python-sdk>=2.18          # MarketDataStreamerV3 (30-level full_d30 stream)
+protobuf<5                       # feed decode; held <5 for grpcio-status compat

@@ -337,8 +337,8 @@
         </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><div><div class="panel-title">Order book — 5 level (Upstox)</div><div class="panel-sub" id="depthSub">live order depth</div></div></div>
-        <div id="depthLadder" style="font-family:'JetBrains Mono',monospace;font-size:12px;padding:4px 0">
+        <div class="panel-head"><div><div class="panel-title" id="depthTitle">Order book — 5 level (Upstox)</div><div class="panel-sub" id="depthSub">live order depth</div></div></div>
+        <div id="depthLadder" style="font-family:'JetBrains Mono',monospace;font-size:12px;padding:4px 0;max-height:430px;overflow-y:auto">
           <div class="dim" style="padding:14px;text-align:center">waiting for depth…</div>
         </div>
         <!-- Order-book imbalance bar: green = buy pressure, red = sell pressure -->
@@ -1706,11 +1706,17 @@ function applyLatest(r){
   document.getElementById('kpiVol').textContent=fmtCompact(r.volume);
 }
 
-/* ---------- Live 5-level order book (Upstox depth) ---------- */
-let depthTimer=null;
+/* ---------- Live order book (Upstox) — 30-level D30 stream with automatic
+   fallback to the recorded 5-level REST book ---------- */
+let depthTimer=null, lastDepthSym=null;
 async function pollDepth(){
   if(!active){return;}
   try{
+    const r=await fetch(`/api/upstox/depth30?tsym=${encodeURIComponent(active)}`);
+    const d=await r.json();
+    if(d.stat==='Ok'){ renderDepth(d); return; }
+  }catch(e){}
+  try{ // legacy fallback (older backend without the D30 endpoint)
     const r=await fetch(`/api/upstox/depth?tsym=${encodeURIComponent(active)}`);
     const d=await r.json();
     if(d.stat==='Ok') renderDepth(d);
@@ -1723,22 +1729,38 @@ function renderDepth(d){
     const col=side==='ask'?'255,86,119':'0,214,143';
     const w=Math.round((lvl.quantity/maxQ)*100);
     const align=side==='ask'?'right':'left';
+    const ord=lvl.orders!=null?`<span class="dim" style="font-size:9px"> ·${lvl.orders}</span>`:'';
     return `<div style="position:relative;display:flex;justify-content:space-between;padding:3px 12px;${side==='ask'?'flex-direction:row-reverse':''}">
       <div style="position:absolute;top:0;${align}:0;height:100%;width:${w}%;background:rgba(${col},0.13)"></div>
       <span style="position:relative;color:rgb(${col});font-weight:600">${fmtNum(lvl.price)}</span>
-      <span style="position:relative;color:var(--text-2)">${fmtCompact(lvl.quantity)}<span class="dim" style="font-size:9px"> ·${lvl.orders}</span></span>
+      <span style="position:relative;color:var(--text-2)">${fmtCompact(lvl.quantity)}${ord}</span>
     </div>`;
   };
-  // 5 ask rows (highest price on top → lowest near spread), then 5 bid rows
-  const askRows=sell.slice(0,5).reverse().map(l=>row('ask',l)).join('');
-  const bidRows=buy.slice(0,5).map(l=>row('bid',l)).join('');
+  const isD30=d.source==='d30';
+  const N=isD30?30:5;
+  // ask rows (highest price on top → lowest near spread), then bid rows
+  const askRows=sell.slice(0,N).reverse().map(l=>row('ask',l)).join('');
+  const bidRows=buy.slice(0,N).map(l=>row('bid',l)).join('');
   const bestBid=buy[0]?.price, bestAsk=sell[0]?.price;
   const spread=(bestBid!=null&&bestAsk!=null)?(bestAsk-bestBid).toFixed(2):'—';
   const mid=(bestBid!=null&&bestAsk!=null)?((bestBid+bestAsk)/2).toFixed(2):'—';
-  document.getElementById('depthLadder').innerHTML=
+  document.getElementById('depthTitle').textContent=
+    isD30?'Order book — 30 level (Upstox Plus D30)':'Order book — 5 level (Upstox)';
+  document.getElementById('depthSub').textContent=
+    isD30?`live D30 stream · ${Math.min(buy.length,N)} bid / ${Math.min(sell.length,N)} ask levels`:'live order depth';
+  const el=document.getElementById('depthLadder');
+  const prevScroll=el.scrollTop, sameSym=lastDepthSym===active;
+  el.innerHTML=
     askRows+
-    `<div style="text-align:center;padding:4px 12px;border-block:1px dashed var(--border);color:var(--text-3);font-size:10.5px">spread ${spread} · mid ${mid}</div>`+
+    `<div id="spreadRow" style="text-align:center;padding:4px 12px;border-block:1px dashed var(--border);color:var(--text-3);font-size:10.5px">spread ${spread} · mid ${mid}</div>`+
     bidRows;
+  // keep the user's scroll position between refreshes; on symbol change, center the spread
+  if(sameSym){ el.scrollTop=prevScroll; }
+  else{
+    lastDepthSym=active;
+    const sp=document.getElementById('spreadRow');
+    if(sp) el.scrollTop=Math.max(0,sp.offsetTop-el.clientHeight/2);
+  }
   // imbalance = total buy qty vs total sell qty across the whole book
   const tb=d.total_buy_qty||0, ts=d.total_sell_qty||0, tot=tb+ts;
   const buyPct=tot>0?Math.round(tb/tot*100):50;
