@@ -1858,12 +1858,17 @@ function drawHeatmap(){
   const denom=Math.log1p(p99/p50)||1;
   const inten=q=>q<=0?0:Math.min(1,Math.log1p(q/p50)/denom);
 
-  // liquidity cells
+  // Liquidity cells. A cell can hold BOTH bid and ask resting within one time
+  // bin (rows near the touch usually do), so paint the dominant side rather
+  // than letting whichever is drawn second erase the other.
   for(let pi=0;pi<np;pi++){
     for(let ti=0;ti<nt;ti++){
       const b=hm.bid[pi][ti], a=hm.ask[pi][ti];
-      if(b>0){ ctx.fillStyle=`rgba(0,214,143,${0.06+0.82*inten(b)})`; ctx.fillRect(AX_W+ti*cw,y(pi),Math.max(cw,1),Math.max(ch,1)); }
-      if(a>0){ ctx.fillStyle=`rgba(255,86,119,${0.06+0.82*inten(a)})`; ctx.fillRect(AX_W+ti*cw,y(pi),Math.max(cw,1),Math.max(ch,1)); }
+      if(b<=0 && a<=0) continue;
+      const bidSide=b>=a;
+      const q=bidSide?b:a;
+      ctx.fillStyle=(bidSide?'rgba(0,214,143,':'rgba(255,86,119,')+(0.06+0.82*inten(q))+')';
+      ctx.fillRect(AX_W+ti*cw,y(pi),Math.max(cw,1),Math.max(ch,1));
     }
   }
   // traded prints
@@ -1960,6 +1965,7 @@ function drawHeatmap(){
     let txt=`${hm.time_labels[ti]}  ₹${price}`;
     if(b>0) txt+=`\nbid resting  ${fmtCompact(b)}`;
     if(a>0) txt+=`\nask resting  ${fmtCompact(a)}`;
+    if(b<=0 && a<=0) txt+=`\n(outside the 30 visible levels)`;
     tr.forEach(t=>{ txt+=`\ntraded ${t.side}  ${fmtCompact(t.qty)}`; });
     tip.textContent=txt; tip.style.display='';
     tip.style.left=Math.min(mx2+14,W-160)+'px'; tip.style.top=(my+14)+'px';
@@ -2049,6 +2055,7 @@ function renderFootprint(){
     if(b.unfinished_high) flags.push('unfinished high');
     if(b.unfinished_low) flags.push('unfinished low');
     if(b.divergence) flags.push('delta divergence');
+    if(b.delta_faded) flags.push(`delta faded (peaked ${fmtCompact(b.max_delta)})`);
     (b.stacked||[]).forEach(s=>flags.push(`${s.side==='buy'?'▲':'▼'} stacked ${s.from}–${s.to}`));
     return `<div style="min-width:250px;background:var(--panel-2,#0d1420);border:1px solid var(--border);border-radius:9px;padding:8px">
       <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px">
