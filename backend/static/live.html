@@ -169,6 +169,8 @@
         <button class="mode-btn active" data-mode="normal" onclick="setMode('normal')">Normal</button>
         <button class="mode-btn" data-mode="analysis" onclick="setMode('analysis')">Analysis</button>
         <button class="mode-btn" data-mode="suggestion" onclick="setMode('suggestion')">Suggestion</button>
+        <button class="mode-btn" data-mode="orderflow" onclick="setMode('orderflow')"
+                title="Liquidity heatmap · volume profile · footprint — from the 30-level book">⚡ Order Flow</button>
         <button class="mode-btn" id="planTab" title="Daily plan — top-50 stocks ≤₹300: evening plan + plan-vs-actual scorecard"
                 onclick="location.href='/plan.html'" style="display:inline-flex;align-items:center;gap:5px">📋 Plan</button>
       </div>
@@ -457,6 +459,91 @@
       </div>
       <div id="lpmList" style="display:flex;flex-direction:column;gap:10px">
         <div class="dim" style="padding:20px">loading plan…</div>
+      </div>
+    </div>
+
+    <!-- ===================== ORDER FLOW VIEW ===================== -->
+    <div id="orderflowView" class="view-pad" style="display:none">
+      <div class="ana-card" style="margin-bottom:12px;display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap">
+        <div>
+          <div class="kpi-label" style="margin-bottom:4px">Heatmap window</div>
+          <select id="ofWin" class="btn" onchange="loadOrderflow(true)">
+            <option value="10">10 min</option>
+            <option value="30" selected>30 min</option>
+            <option value="60">60 min</option>
+          </select>
+        </div>
+        <div>
+          <div class="kpi-label" style="margin-bottom:4px">Footprint candle</div>
+          <select id="ofTf" class="btn" onchange="loadOrderflow(true)">
+            <option value="1m">1 min</option>
+            <option value="5m" selected>5 min</option>
+            <option value="15m">15 min</option>
+          </select>
+        </div>
+        <div>
+          <div class="kpi-label" style="margin-bottom:4px">Profile</div>
+          <select id="ofProf" class="btn" onchange="drawOrderflow()">
+            <option value="delta" selected>Buy/sell split</option>
+            <option value="total">Total volume</option>
+          </select>
+        </div>
+        <button class="btn" onclick="loadOrderflow(true)">↻ Refresh</button>
+        <div id="ofStatus" class="dim mono" style="font-size:11px;flex:1;text-align:right"></div>
+      </div>
+
+      <!-- plain-English read -->
+      <div class="ana-card" style="margin-bottom:12px">
+        <div class="panel-title" style="margin-bottom:6px">What the flow is saying</div>
+        <ul id="ofRead" style="margin:0;padding-left:18px;color:var(--text-2);font-size:12.5px;line-height:1.75">
+          <li class="dim">loading…</li>
+        </ul>
+      </div>
+
+      <!-- heatmap + volume profile share one price axis -->
+      <div class="ana-card" style="margin-bottom:12px;position:relative">
+        <div class="panel-head" style="margin-bottom:8px">
+          <div>
+            <div class="panel-title">Liquidity heatmap · volume profile</div>
+            <div class="panel-sub">Brightness = resting size at that price (30 levels each side). Circles = executed prints, sized by quantity. Right panel = volume traded per price.</div>
+          </div>
+        </div>
+        <canvas id="ofCanvas" style="width:100%;height:520px;display:block;border-radius:8px"></canvas>
+        <div id="ofTip" style="position:absolute;display:none;pointer-events:none;z-index:5;
+             background:rgba(6,12,22,.96);border:1px solid var(--border);border-radius:7px;
+             padding:6px 9px;font-family:'JetBrains Mono',monospace;font-size:11px;white-space:pre"></div>
+      </div>
+
+      <!-- CVD -->
+      <div class="ana-card" style="margin-bottom:12px">
+        <div class="panel-head" style="margin-bottom:6px">
+          <div>
+            <div class="panel-title">Cumulative volume delta <span id="ofCvdNow" class="mono"></span></div>
+            <div class="panel-sub">Net aggressive buying minus selling through the session. CVD rising while price falls (or vice-versa) = divergence.</div>
+          </div>
+        </div>
+        <canvas id="ofCvd" style="width:100%;height:130px;display:block"></canvas>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" id="ofGrid2">
+        <div class="ana-card">
+          <div class="panel-title" style="margin-bottom:8px">Book events</div>
+          <div id="ofEvents" style="display:flex;flex-direction:column;gap:7px"></div>
+        </div>
+        <div class="ana-card">
+          <div class="panel-title" style="margin-bottom:8px">Key levels</div>
+          <div id="ofLevels" class="mono" style="font-size:12px;line-height:2"></div>
+        </div>
+      </div>
+
+      <div class="ana-card" style="margin-top:12px">
+        <div class="panel-head" style="margin-bottom:8px">
+          <div>
+            <div class="panel-title">Footprint — bid × ask per candle</div>
+            <div class="panel-sub">Each row is a price. <b>Left = sold at bid, right = bought at ask.</b> Highlighted cells are 3× diagonal imbalances; ▲▼ marks stacked runs.</div>
+          </div>
+        </div>
+        <div id="ofFoot" style="display:flex;gap:10px;overflow-x:auto;padding-bottom:6px"></div>
       </div>
     </div>
 
@@ -824,6 +911,8 @@ function setMode(m){
   document.getElementById('normalView').style.display    = m==='normal'?'':'none';
   document.getElementById('analysisView').style.display  = m==='analysis'?'':'none';
   document.getElementById('suggestionView').style.display= m==='suggestion'?'':'none';
+  document.getElementById('orderflowView').style.display  = m==='orderflow'?'':'none';
+  if(m==='orderflow') loadOrderflow(true);
   // The LTP/Bid/Ask KPI strip is about the ACTIVE chart symbol — irrelevant on the
   // cross-stock Suggestion monitor, so hide it there.
   document.getElementById('kpiStrip').style.display = m==='suggestion'?'none':'';
@@ -1706,6 +1795,273 @@ function applyLatest(r){
   document.getElementById('kpiVol').textContent=fmtCompact(r.volume);
 }
 
+/* =====================================================================
+   ORDER FLOW — liquidity heatmap · volume profile · CVD · footprint
+   Heatmap and profile share ONE price axis, drawn on a single canvas so a
+   wall in the book lines up exactly with the volume that traded there.
+   ===================================================================== */
+let OF=null, ofLoading=false;
+const VP_W=150, AX_W=54, PAD_T=8, PAD_B=22;
+
+async function loadOrderflow(force){
+  if(!active || ofLoading) return;
+  if(currentMode!=='orderflow' && !force) return;
+  ofLoading=true;
+  const st=document.getElementById('ofStatus');
+  try{
+    const win=document.getElementById('ofWin').value;
+    const tf=document.getElementById('ofTf').value;
+    const r=await fetch(`/api/orderflow/all?tsym=${encodeURIComponent(active)}&minutes=${win}&interval=${tf}`);
+    OF=await r.json();
+    st.textContent=`${active} · updated ${new Date().toLocaleTimeString('en-GB',{timeZone:'Asia/Kolkata'})} IST`;
+    drawOrderflow();
+  }catch(e){ st.textContent='order flow unavailable'; }
+  ofLoading=false;
+}
+
+function drawOrderflow(){
+  if(!OF) return;
+  renderOfRead(); drawHeatmap(); drawCvd(); renderOfEvents(); renderOfLevels(); renderFootprint();
+}
+
+function renderOfRead(){
+  const ul=document.getElementById('ofRead');
+  const lines=OF.read||[];
+  const hm=OF.heatmap||{}, vp=OF.volume_profile||{};
+  if(!lines.length){
+    const why = hm.message || vp.message || 'Waiting for live data — order flow builds during market hours.';
+    ul.innerHTML=`<li class="dim">${why}</li>`; return;
+  }
+  ul.innerHTML=lines.map(t=>`<li>${t}</li>`).join('');
+}
+
+/* --- heatmap + volume profile on one canvas, shared price axis --- */
+function drawHeatmap(){
+  const cv=document.getElementById('ofCanvas'), ctx=cv.getContext('2d');
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth, H=cv.clientHeight;
+  cv.width=W*dpr; cv.height=H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  const hm=OF.heatmap||{}, vp=OF.volume_profile||{};
+  if(!hm.ok){
+    ctx.fillStyle='#5f6d84'; ctx.font='13px system-ui'; ctx.textAlign='center';
+    ctx.fillText(hm.message||hm.error||'no book history yet', W/2, H/2);
+    if(hm.snapshots!=null){ ctx.font='11px system-ui';
+      ctx.fillText(`${hm.snapshots} snapshot(s) recorded so far`, W/2, H/2+20); }
+    return;
+  }
+  const gw=W-VP_W-AX_W, gh=H-PAD_T-PAD_B;
+  const nt=hm.n_time, np=hm.n_price;
+  const cw=gw/nt, ch=gh/np;
+  const y=pi=>PAD_T+(np-1-pi)*ch;            // price increases upward
+  const p50=hm.scale.p50||1, p99=hm.scale.p99||1;
+  const denom=Math.log1p(p99/p50)||1;
+  const inten=q=>q<=0?0:Math.min(1,Math.log1p(q/p50)/denom);
+
+  // liquidity cells
+  for(let pi=0;pi<np;pi++){
+    for(let ti=0;ti<nt;ti++){
+      const b=hm.bid[pi][ti], a=hm.ask[pi][ti];
+      if(b>0){ ctx.fillStyle=`rgba(0,214,143,${0.06+0.82*inten(b)})`; ctx.fillRect(AX_W+ti*cw,y(pi),Math.max(cw,1),Math.max(ch,1)); }
+      if(a>0){ ctx.fillStyle=`rgba(255,86,119,${0.06+0.82*inten(a)})`; ctx.fillRect(AX_W+ti*cw,y(pi),Math.max(cw,1),Math.max(ch,1)); }
+    }
+  }
+  // traded prints
+  const maxTrade=Math.max(1,...(hm.trades||[]).map(t=>t.qty));
+  (hm.trades||[]).forEach(t=>{
+    const r=Math.max(1.4,Math.sqrt(t.qty/maxTrade)*7);
+    ctx.beginPath();
+    ctx.arc(AX_W+(t.ti+0.5)*cw, y(t.pi)+ch/2, r, 0, 6.284);
+    ctx.fillStyle=t.side==='BUY'?'rgba(120,255,200,.85)':'rgba(255,150,170,.85)';
+    ctx.fill();
+    if(r>3.5){ ctx.strokeStyle='rgba(255,255,255,.35)'; ctx.lineWidth=.7; ctx.stroke(); }
+  });
+  // last price track
+  ctx.strokeStyle='rgba(255,255,255,.55)'; ctx.lineWidth=1.1; ctx.beginPath();
+  let started=false;
+  hm.ltp.forEach((p,ti)=>{
+    if(p==null) return;
+    const pi=Math.round((p-hm.price_low)/hm.price_row);
+    const yy=y(Math.max(0,Math.min(np-1,pi)))+ch/2, xx=AX_W+(ti+0.5)*cw;
+    if(!started){ ctx.moveTo(xx,yy); started=true; } else ctx.lineTo(xx,yy);
+  });
+  ctx.stroke();
+
+  // price axis (left) + level lines from the profile
+  ctx.font='10px "JetBrains Mono",monospace'; ctx.textAlign='right'; ctx.textBaseline='middle';
+  const step=Math.max(1,Math.round(np/14));
+  for(let pi=0;pi<np;pi+=step){
+    ctx.fillStyle='#5f6d84';
+    ctx.fillText((hm.price_low+pi*hm.price_row).toFixed(2), AX_W-6, y(pi)+ch/2);
+  }
+  const priceY=p=>{
+    const pi=(p-hm.price_low)/hm.price_row;
+    return PAD_T+(np-1-pi)*ch+ch/2;
+  };
+  const hline=(p,col,dash,label)=>{
+    if(p==null) return;
+    const yy=priceY(p);
+    if(yy<PAD_T-2||yy>H-PAD_B+2) return;
+    ctx.save(); ctx.setLineDash(dash||[]); ctx.strokeStyle=col; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(AX_W,yy); ctx.lineTo(W-VP_W,yy); ctx.stroke(); ctx.restore();
+    ctx.textAlign='left'; ctx.fillStyle=col;
+    ctx.fillText(label, AX_W+4, yy-6);
+  };
+  if(vp.ok){
+    hline(vp.poc,'rgba(255,176,32,.9)',[],'POC '+vp.poc);
+    hline(vp.vah,'rgba(160,140,255,.75)',[4,4],'VAH '+vp.vah);
+    hline(vp.val,'rgba(160,140,255,.75)',[4,4],'VAL '+vp.val);
+    hline(vp.vwap,'rgba(90,200,255,.85)',[2,3],'VWAP '+vp.vwap);
+  }
+
+  // volume profile, right panel, same price axis
+  if(vp.ok && vp.profile){
+    const x0=W-VP_W+6, pw=VP_W-14;
+    const mx=Math.max(1,...vp.profile.map(r=>r.vol));
+    const split=document.getElementById('ofProf').value==='delta';
+    ctx.fillStyle='rgba(255,255,255,.035)'; ctx.fillRect(W-VP_W,PAD_T,VP_W,gh);
+    vp.profile.forEach(r=>{
+      const yy=priceY(r.price)-Math.max(ch,1)/2;
+      const h=Math.max(1,ch*0.9);
+      const w=Math.max(0,(r.vol/mx)*pw);
+      if(split){
+        const bw=w*(r.vol?r.buy/r.vol:0);
+        ctx.fillStyle=r.poc?'rgba(255,176,32,.95)':'rgba(0,214,143,.55)';
+        ctx.fillRect(x0,yy,bw,h);
+        ctx.fillStyle=r.poc?'rgba(255,176,32,.6)':'rgba(255,86,119,.5)';
+        ctx.fillRect(x0+bw,yy,w-bw,h);
+      }else{
+        ctx.fillStyle=r.poc?'rgba(255,176,32,.95)':(r.in_va?'rgba(120,150,255,.6)':'rgba(150,160,180,.35)');
+        ctx.fillRect(x0,yy,w,h);
+      }
+    });
+    ctx.fillStyle='#5f6d84'; ctx.textAlign='left'; ctx.font='9.5px "JetBrains Mono",monospace';
+    ctx.fillText('volume by price', W-VP_W+6, H-PAD_B+12);
+  }
+
+  // time axis
+  ctx.fillStyle='#5f6d84'; ctx.textAlign='center'; ctx.font='10px "JetBrains Mono",monospace';
+  const tstep=Math.max(1,Math.round(nt/8));
+  for(let ti=0;ti<nt;ti+=tstep){
+    const lab=(hm.time_labels[ti]||'').slice(0,5);
+    ctx.fillText(lab, AX_W+(ti+0.5)*cw, H-PAD_B+12);
+  }
+
+  cv.onmousemove=e=>{
+    const rect=cv.getBoundingClientRect();
+    const mx2=e.clientX-rect.left, my=e.clientY-rect.top;
+    const tip=document.getElementById('ofTip');
+    if(mx2<AX_W||mx2>W-VP_W||my<PAD_T||my>H-PAD_B){ tip.style.display='none'; return; }
+    const ti=Math.max(0,Math.min(nt-1,Math.floor((mx2-AX_W)/cw)));
+    const pi=Math.max(0,Math.min(np-1,np-1-Math.floor((my-PAD_T)/ch)));
+    const price=(hm.price_low+pi*hm.price_row).toFixed(2);
+    const b=hm.bid[pi][ti], a=hm.ask[pi][ti];
+    const tr=(hm.trades||[]).filter(t=>t.ti===ti&&t.pi===pi);
+    let txt=`${hm.time_labels[ti]}  ₹${price}`;
+    if(b>0) txt+=`\nbid resting  ${fmtCompact(b)}`;
+    if(a>0) txt+=`\nask resting  ${fmtCompact(a)}`;
+    tr.forEach(t=>{ txt+=`\ntraded ${t.side}  ${fmtCompact(t.qty)}`; });
+    tip.textContent=txt; tip.style.display='';
+    tip.style.left=Math.min(mx2+14,W-160)+'px'; tip.style.top=(my+14)+'px';
+  };
+  cv.onmouseleave=()=>{ document.getElementById('ofTip').style.display='none'; };
+}
+
+function drawCvd(){
+  const cv=document.getElementById('ofCvd'), ctx=cv.getContext('2d');
+  const dpr=window.devicePixelRatio||1, W=cv.clientWidth, H=cv.clientHeight;
+  cv.width=W*dpr; cv.height=H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+  const vp=OF.volume_profile||{}; const s=(vp.cvd||[]);
+  const badge=document.getElementById('ofCvdNow');
+  if(!vp.ok||s.length<2){ badge.textContent=''; ctx.fillStyle='#5f6d84'; ctx.font='12px system-ui';
+    ctx.textAlign='center'; ctx.fillText(vp.message||'no tick data in this session yet',W/2,H/2); return; }
+  const last=s[s.length-1].cvd;
+  badge.textContent=` ${last>=0?'+':''}${fmtCompact(last)}`;
+  badge.className='mono '+(last>=0?'green':'red');
+  const mn=Math.min(0,...s.map(x=>x.cvd)), mx=Math.max(0,...s.map(x=>x.cvd));
+  const rng=(mx-mn)||1, x=i=>i/(s.length-1)*(W-8)+4, y=v=>H-6-((v-mn)/rng)*(H-14);
+  ctx.strokeStyle='rgba(255,255,255,.14)'; ctx.beginPath();
+  ctx.moveTo(0,y(0)); ctx.lineTo(W,y(0)); ctx.stroke();
+  const grad=ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0, last>=0?'rgba(0,214,143,.35)':'rgba(255,86,119,.35)');
+  grad.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.beginPath(); ctx.moveTo(x(0),y(s[0].cvd));
+  s.forEach((p,i)=>ctx.lineTo(x(i),y(p.cvd)));
+  ctx.lineTo(x(s.length-1),y(0)); ctx.lineTo(x(0),y(0)); ctx.closePath();
+  ctx.fillStyle=grad; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(x(0),y(s[0].cvd));
+  s.forEach((p,i)=>ctx.lineTo(x(i),y(p.cvd)));
+  ctx.strokeStyle=last>=0?'#00d68f':'#ff5677'; ctx.lineWidth=1.6; ctx.stroke();
+  ctx.fillStyle='#5f6d84'; ctx.font='10px "JetBrains Mono",monospace'; ctx.textAlign='left';
+  ctx.fillText(s[0].time,4,12); ctx.textAlign='right'; ctx.fillText(s[s.length-1].time,W-4,12);
+}
+
+function renderOfEvents(){
+  const el=document.getElementById('ofEvents');
+  const ev=((OF.heatmap||{}).events)||[];
+  if(!ev.length){ el.innerHTML='<div class="dim" style="font-size:12px">No standout book events in this window.</div>'; return; }
+  const icon={wall:'🧱',pull:'🚪',absorption:'🛡️',iceberg:'🧊'};
+  const col={wall:'var(--text)',pull:'var(--amber,#e8b24a)',absorption:'var(--accent,#5e8eff)',iceberg:'#a880ff'};
+  el.innerHTML=ev.slice(0,10).map(e=>`
+    <div style="display:flex;gap:8px;font-size:12px;line-height:1.5">
+      <span>${icon[e.kind]||'•'}</span>
+      <span style="color:${col[e.kind]||'var(--text-2)'}">${e.text}</span>
+    </div>`).join('');
+}
+
+function renderOfLevels(){
+  const vp=OF.volume_profile||{}, el=document.getElementById('ofLevels');
+  if(!vp.ok){ el.innerHTML='<span class="dim">no session profile yet</span>'; return; }
+  const row=(k,v,c)=>`<div><span class="dim">${k}</span> <b class="${c||''}">${v}</b></div>`;
+  const parts=[
+    row('POC (fairest price)', vp.poc),
+    row('Value area', `${vp.val} – ${vp.vah}`),
+    row('VWAP', `${vp.vwap} <span class="dim">±1σ ${vp.bands.m1}/${vp.bands.p1}</span>`),
+    row('Session delta', `${vp.delta>=0?'+':''}${fmtCompact(vp.delta)} (${vp.delta_pct}%)`, vp.delta>=0?'green':'red'),
+    row('Volume', `${fmtCompact(vp.total_volume)} · ${vp.prints} prints`),
+  ];
+  if((vp.hvn||[]).length) parts.push(row('High-volume nodes', vp.hvn.map(x=>x.price).join(' · ')));
+  if((vp.lvn||[]).length) parts.push(row('Low-volume gaps', vp.lvn.map(x=>x.price).join(' · ')));
+  el.innerHTML=parts.join('');
+}
+
+function renderFootprint(){
+  const fp=OF.footprint||{}, el=document.getElementById('ofFoot');
+  if(!fp.ok||!(fp.bars||[]).length){
+    el.innerHTML=`<div class="dim" style="font-size:12px;padding:8px">${fp.message||'no footprint data yet'}</div>`; return;
+  }
+  el.innerHTML=fp.bars.map(b=>{
+    const mx=Math.max(1,...b.rows.map(r=>r.total));
+    const rows=b.rows.slice().reverse().map(r=>{
+      const bw=Math.round(r.bid/mx*46), aw=Math.round(r.ask/mx*46);
+      const bi=r.sell_imb?'background:rgba(255,86,119,.28);':'';
+      const ai=r.buy_imb?'background:rgba(0,214,143,.28);':'';
+      const poc=r.price===b.poc?'border-left:2px solid var(--amber,#e8b24a);':'border-left:2px solid transparent;';
+      return `<div style="display:flex;align-items:center;gap:4px;font-size:10px;${poc}padding-left:3px">
+        <span style="width:34px;text-align:right;color:var(--text-3)">${r.price.toFixed(2)}</span>
+        <span style="width:52px;text-align:right;${bi}border-radius:3px;color:#ff9db0">${r.bid?fmtCompact(r.bid):'·'}</span>
+        <span style="width:${Math.max(bw,1)}px;height:6px;background:rgba(255,86,119,.5);border-radius:2px"></span>
+        <span style="width:${Math.max(aw,1)}px;height:6px;background:rgba(0,214,143,.5);border-radius:2px"></span>
+        <span style="width:52px;${ai}border-radius:3px;color:#7ff0c0">${r.ask?fmtCompact(r.ask):'·'}</span>
+      </div>`;
+    }).join('');
+    const flags=[];
+    if(b.unfinished_high) flags.push('unfinished high');
+    if(b.unfinished_low) flags.push('unfinished low');
+    if(b.divergence) flags.push('delta divergence');
+    (b.stacked||[]).forEach(s=>flags.push(`${s.side==='buy'?'▲':'▼'} stacked ${s.from}–${s.to}`));
+    return `<div style="min-width:250px;background:var(--panel-2,#0d1420);border:1px solid var(--border);border-radius:9px;padding:8px">
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px">
+        <b class="mono">${b.time}</b>
+        <span class="mono ${b.delta>=0?'green':'red'}">Δ ${b.delta>=0?'+':''}${fmtCompact(b.delta)} (${b.delta_pct}%)</span>
+      </div>
+      <div style="max-height:230px;overflow-y:auto">${rows}</div>
+      <div class="dim" style="font-size:9.5px;margin-top:5px;line-height:1.5">
+        vol ${fmtCompact(b.volume)} · POC ${b.poc}${flags.length?'<br>'+flags.join(' · '):''}</div>
+    </div>`;
+  }).join('');
+}
+
 /* ---------- Live order book (Upstox) — 30-level D30 stream with automatic
    fallback to the recorded 5-level REST book ---------- */
 let depthTimer=null, lastDepthSym=null;
@@ -1995,6 +2351,9 @@ setInterval(loadSymbols,8000);
 setInterval(pollLive, 20000);
 setInterval(()=>{ if(active) loadSMC(); }, 60000);
 setInterval(pollDepth, 1500);
+// Order Flow: refresh while the tab is open; redraw on resize (canvas is sized in px)
+setInterval(()=>{ if(currentMode==='orderflow') loadOrderflow(); }, 5000);
+addEventListener('resize', ()=>{ if(currentMode==='orderflow' && OF) drawOrderflow(); });
 </script>
 </body>
 </html>

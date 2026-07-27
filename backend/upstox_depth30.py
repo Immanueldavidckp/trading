@@ -32,6 +32,7 @@ quantities arrive as protobuf-int64 STRINGS. Both are normalized here.
 """
 from __future__ import annotations
 from typing import Dict, List, Optional
+from collections import deque
 import glob
 import importlib.util
 import json
@@ -46,6 +47,13 @@ import requests
 D30_MAX_KEYS = 50            # Upstox Plus: full_d30 cap per websocket connection
 FRESH_SECS = 15              # book older than this = stale (fall back to REST 5-level)
 AUTH_URL = "https://api.upstox.com/v3/feed/market-data-feed/authorize"
+
+# Heatmap history: a RAM ring buffer per recorded symbol (the box has ~1.9 GB
+# total and market_depth is already >3 GB on disk, so book history is
+# deliberately NOT persisted — 1 snapshot/sec × 40 min × 8 symbols ≈ 25 MB).
+HIST_SECS = 2400             # ~40 minutes of book history per symbol
+HIST_MAX_SYMBOLS = 8         # LRU: symbols whose books get recorded
+HIST_MIN_GAP = 1.0           # seconds between recorded snapshots (feed is faster)
 
 
 def _int(v):
@@ -92,6 +100,9 @@ class Depth30Feed:
         self._sym2key: Dict[str, str] = {}
         self._watch_syms: set = set()          # protected from LRU eviction
         self._last_seen: Dict[str, float] = {}
+        # heatmap history: tsym -> deque[(ts, bid_p, bid_q, ask_p, ask_q, ltp)]
+        self._hist: Dict[str, deque] = {}
+        self._hist_last: Dict[str, float] = {}
         self._pb2 = None
         self._ws = None                        # live WebSocketApp (when open)
         self._lock = threading.Lock()
@@ -261,6 +272,16 @@ class Depth30Feed:
                     "total_buy_qty": sum(x["quantity"] for x in buy),
                     "total_sell_qty": sum(x["quantity"] for x in sell),
                 }
+                # ring-buffer the ladder for the liquidity heatmap (throttled)
+                h = self._hist.get(tsym)
+                if h is not None and (now - self._hist_last.get(tsym, 0)) >= HIST_MIN_GAP:
+                    self._hist_last[tsym] = now
+                    h.append((round(now, 2),
+                              tuple(x["price"] for x in buy),
+                              tuple(x["quantity"] for x in buy),
+                              tuple(x["price"] for x in sell),
+                              tuple(x["quantity"] for x in sell),
+                              ltpc.get("ltp")))
             if feeds:
                 self._last_msg = now
         except Exception as e:
@@ -305,6 +326,32 @@ class Depth30Feed:
                 self._error = f"subscribe {t}: {str(e)[:150]}"
                 return False
 
+    def record(self, tsym: str) -> bool:
+        """Start ring-buffering `tsym`'s ladder for the heatmap (LRU-capped at
+        HIST_MAX_SYMBOLS). Idempotent; called by the order-flow endpoints."""
+        t = (tsym or "").upper()
+        if not t:
+            return False
+        self.ensure(t)
+        if t in self._hist:
+            return True
+        if len(self._hist) >= HIST_MAX_SYMBOLS:
+            victim = min(self._hist, key=lambda s: self._last_seen.get(s, 0))
+            if victim == t:
+                return True
+            self._hist.pop(victim, None)
+            self._hist_last.pop(victim, None)
+        self._hist[t] = deque(maxlen=int(HIST_SECS / HIST_MIN_GAP))
+        return True
+
+    def history(self, tsym: str, seconds: int = 1800) -> List[tuple]:
+        """Recorded ladder snapshots for the last `seconds` (oldest-first)."""
+        h = self._hist.get((tsym or "").upper())
+        if not h:
+            return []
+        cut = time.time() - seconds
+        return [s for s in h if s[0] >= cut]
+
     # ── reads ───────────────────────────────────────────────────────────────
 
     def get_book(self, tsym: str) -> Optional[dict]:
@@ -321,6 +368,7 @@ class Depth30Feed:
             "n_subscribed": len(self._sym2key), "cap": D30_MAX_KEYS,
             "books_live": sum(1 for b in self.books.values()
                               if time.time() - b["ts"] <= FRESH_SECS),
+            "recording": {s: len(h) for s, h in self._hist.items()},
             "last_msg_age_s": round(time.time() - self._last_msg, 1) if self._last_msg else None,
             "error": self._error,
         }

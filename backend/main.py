@@ -196,6 +196,52 @@ def upstox_depth30_start():
     return _depth30().start(_d30_default_symbols())
 
 
+# ---------- Order flow: liquidity heatmap · volume profile · footprint ----------
+
+@app.get("/api/orderflow/heatmap")
+def of_heatmap(tsym: str, minutes: int = 30, time_bins: int = 150):
+    """Bookmap-style liquidity heatmap: time × price grid of resting 30-level
+    depth, traded prints overlaid, plus walls / pulls / absorption / icebergs."""
+    import orderflow
+    return orderflow.heatmap(tsym, minutes=max(2, min(int(minutes), 120)),
+                             time_bins=int(time_bins))
+
+
+@app.get("/api/orderflow/volume_profile")
+def of_volume_profile(tsym: str, day: Optional[str] = None, rows: int = 60,
+                      minutes: Optional[int] = None):
+    """Volume profile: POC, 70% value area, HVN/LVN, VWAP ±σ bands, delta per
+    price and the CVD series. Session by default; `minutes` = rolling window."""
+    import orderflow
+    return orderflow.volume_profile(tsym, day=day, rows=int(rows),
+                                    minutes=int(minutes) if minutes else None)
+
+
+@app.get("/api/orderflow/footprint")
+def of_footprint(tsym: str, interval: str = "5m", bars: int = 12,
+                 day: Optional[str] = None):
+    """Bid×ask footprint per candle with diagonal imbalances, stacked
+    imbalances, per-candle POC and unfinished auctions."""
+    import orderflow
+    return orderflow.footprint(tsym, interval=interval,
+                               bars=max(1, min(int(bars), 40)), day=day)
+
+
+@app.get("/api/orderflow/tape")
+def of_tape(tsym: str, minutes: int = 30, limit: int = 400):
+    """Classified time & sales (Lee-Ready), large prints flagged."""
+    import orderflow
+    return orderflow.tape(tsym, minutes=int(minutes), limit=int(limit))
+
+
+@app.get("/api/orderflow/all")
+def of_all(tsym: str, minutes: int = 30, interval: str = "5m"):
+    """Everything the Order Flow page needs in one round trip."""
+    import orderflow
+    return orderflow.dashboard(tsym, minutes=max(2, min(int(minutes), 120)),
+                               interval=interval)
+
+
 # ---------- Analysis + Suggestion modes ----------
 @app.get("/api/analysis/ticks")
 def analysis_ticks(tsym: str, limit: int = 400):
