@@ -64,8 +64,11 @@ def _load_pb2():
         try:
             if not p or os.path.abspath(p) == backend:
                 continue
-            hits += glob.glob(os.path.join(p, "upstox_client", "proto",
-                                           "MarketDataFeed*_pb2.py"))
+            # SDK layout has varied: upstox_client/proto/… and
+            # upstox_client/feeder/proto/… — search the package recursively
+            hits += glob.glob(os.path.join(p, "upstox_client", "**",
+                                           "MarketDataFeed*_pb2.py"),
+                              recursive=True)
         except Exception:
             continue
     # prefer the V3 proto if both generations are present
