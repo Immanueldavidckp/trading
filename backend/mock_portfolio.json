@@ -1,5 +1,30 @@
 {
-    "orders": [],
+    "orders": [
+        {
+            "order_id": "MOCK-84665EE7",
+            "tsym": "TCS",
+            "side": "BUY",
+            "qty": 10,
+            "order_type": "LIMIT",
+            "price": 4200.0,
+            "product": "D",
+            "status": "COMPLETE",
+            "placed_at": "2026-07-29 01:18:31 IST",
+            "mode": "MOCK"
+        },
+        {
+            "order_id": "MOCK-4A85D634",
+            "tsym": "SUZLON",
+            "side": "BUY",
+            "qty": 25,
+            "order_type": "LIMIT",
+            "price": 55.0,
+            "product": "D",
+            "status": "COMPLETE",
+            "placed_at": "2026-07-29 01:18:31 IST",
+            "mode": "MOCK"
+        }
+    ],
     "positions": {},
     "holdings": [
         {
@@ -17,7 +42,23 @@
             "qty": 100,
             "avgprc": 1420.5,
             "cname": "INFOSYS LIMITED"
+        },
+        {
+            "exch": "NSE",
+            "token": "",
+            "tsym": "TCS",
+            "qty": 10,
+            "avgprc": 4200.0,
+            "cname": "TCS"
+        },
+        {
+            "exch": "NSE",
+            "token": "",
+            "tsym": "SUZLON",
+            "qty": 25,
+            "avgprc": 55.0,
+            "cname": "SUZLON"
         }
     ],
-    "balance": 1000000.0
+    "balance": 956625.0
 }

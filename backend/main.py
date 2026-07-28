@@ -959,6 +959,95 @@ def swing_dates():
     return swing_pipeline.list_swing_dates()
 
 
+# ---------- Trading execution endpoints (mock + live Upstox) ----------
+from upstox_orders import OrderEngine
+
+orders_engine: Optional[OrderEngine] = None
+
+
+def _orders() -> OrderEngine:
+    global orders_engine
+    if orders_engine is None:
+        orders_engine = OrderEngine(upstox_client=_upstox())
+    return orders_engine
+
+
+class PlaceOrderModel(BaseModel):
+    tsym: str
+    side: str                           # BUY or SELL
+    qty: int
+    order_type: Optional[str] = "MARKET"
+    price: Optional[float] = 0.0
+    trigger_price: Optional[float] = 0.0
+    product: Optional[str] = "D"        # D=delivery, I=intraday
+    validity: Optional[str] = "DAY"
+
+
+@app.post("/api/trade/place")
+def trade_place(req: PlaceOrderModel):
+    """Place a BUY or SELL order (mock or live depending on MOCK_MODE env)."""
+    return _orders().place_order(
+        tsym=req.tsym, side=req.side, qty=req.qty,
+        order_type=req.order_type or "MARKET",
+        price=req.price or 0.0,
+        trigger_price=req.trigger_price or 0.0,
+        product=req.product or "D",
+        validity=req.validity or "DAY",
+    )
+
+
+@app.get("/api/trade/orders")
+def trade_orders():
+    """List today's orders."""
+    return _orders().get_orders()
+
+
+@app.post("/api/trade/cancel")
+def trade_cancel(order_id: str):
+    """Cancel a pending order."""
+    return _orders().cancel_order(order_id)
+
+
+@app.get("/api/trade/positions")
+def trade_positions():
+    """Current intraday + delivery positions."""
+    return _orders().get_positions()
+
+
+@app.get("/api/trade/holdings")
+def trade_holdings():
+    """Demat holdings (delivery stocks)."""
+    return _orders().get_holdings()
+
+
+@app.get("/api/trade/funds")
+def trade_funds():
+    """Available balance / margin."""
+    return _orders().get_funds()
+
+
+@app.get("/api/trade/log")
+def trade_log():
+    """Full trade execution log (all sessions)."""
+    return OrderEngine.get_trade_log()
+
+
+@app.get("/api/trade/status")
+def trade_status():
+    """Trading engine status: mode, balance, holdings count."""
+    eng = _orders()
+    funds = eng.get_funds()
+    holdings = eng.get_holdings()
+    return {
+        "ok": True,
+        "mock_mode": eng.mock_mode,
+        "mode": "MOCK (paper trading)" if eng.mock_mode else "LIVE (real money)",
+        "upstox_logged_in": bool(eng._token()),
+        "balance": funds.get("available_balance", funds.get("funds", {})),
+        "holdings_count": len(holdings.get("holdings", [])),
+    }
+
+
 # ---------- Root handler: redirect to /live.html ----------
 @app.get("/")
 def root():
