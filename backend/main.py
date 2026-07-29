@@ -1048,6 +1048,142 @@ def trade_status():
     }
 
 
+# ---------- Nifty F&O: instruments, option chain, strategies, execution ----------
+
+@app.post("/api/fo/refresh_instruments")
+def fo_refresh_instruments():
+    """Download F&O instruments master (NIFTY/BANKNIFTY futures + options)."""
+    return _upstox().refresh_fo_instruments()
+
+
+@app.get("/api/fo/expiries")
+def fo_expiries(underlying: str = "NIFTY"):
+    """List available expiry dates for an index (nearest first)."""
+    expiries = _upstox().fo_expiries(underlying)
+    return {"ok": True, "underlying": underlying.upper(), "expiries": expiries}
+
+
+@app.get("/api/fo/chain")
+def fo_chain(underlying: str = "NIFTY", expiry: str = "", itype: str = ""):
+    """Option chain / futures list for an underlying + expiry.
+    itype: 'FUTIDX', 'OPTIDX', '' (all)."""
+    chain = _upstox().fo_chain(underlying, expiry, itype)
+    return {
+        "ok": True, "underlying": underlying.upper(),
+        "expiry": expiry, "count": len(chain), "instruments": chain,
+    }
+
+
+@app.get("/api/fo/lot_size")
+def fo_lot_size(underlying: str = "NIFTY"):
+    """Get the lot size for an underlying."""
+    ls = _upstox().fo_lot_size(underlying)
+    return {"ok": True, "underlying": underlying.upper(), "lot_size": ls}
+
+
+@app.get("/api/fo/strategies")
+def fo_strategies():
+    """List all available F&O strategies with descriptions."""
+    import nifty_fo_engine
+    return {"ok": True, "strategies": nifty_fo_engine.list_strategies()}
+
+
+class FOStrategyModel(BaseModel):
+    strategy: str                       # e.g. 'bull_call_spread', 'iron_condor'
+    underlying: Optional[str] = "NIFTY"
+    spot: float                         # current index level
+    expiry: Optional[str] = ""
+    lots: Optional[int] = 1
+    bias: Optional[str] = ""
+    strike: Optional[float] = 0
+    buy_strike: Optional[float] = 0
+    sell_strike: Optional[float] = 0
+    call_strike: Optional[float] = 0
+    put_strike: Optional[float] = 0
+    premium: Optional[float] = 0
+    buy_premium: Optional[float] = 0
+    sell_premium: Optional[float] = 0
+    call_prem: Optional[float] = 0
+    put_prem: Optional[float] = 0
+
+
+@app.post("/api/fo/plan")
+def fo_plan(req: FOStrategyModel):
+    """Build a specific F&O strategy plan with computed P&L, breakevens, margin."""
+    import nifty_fo_engine
+    fn = nifty_fo_engine.STRATEGIES.get(req.strategy)
+    if not fn:
+        return {"ok": False, "error": f"Unknown strategy '{req.strategy}'. "
+                f"Available: {list(nifty_fo_engine.STRATEGIES.keys())}"}
+
+    kwargs = {"underlying": req.underlying or "NIFTY", "spot": req.spot,
+              "expiry": req.expiry or "", "lots": req.lots or 1}
+
+    sig = fn.__code__.co_varnames[:fn.__code__.co_argcount]
+    for p in ("strike", "buy_strike", "sell_strike", "call_strike", "put_strike",
+              "premium", "buy_premium", "sell_premium", "call_prem", "put_prem"):
+        if p in sig and getattr(req, p, 0):
+            kwargs[p] = getattr(req, p)
+
+    return {"ok": True, "plan": fn(**kwargs)}
+
+
+@app.get("/api/fo/recommend")
+def fo_recommend(underlying: str = "NIFTY", spot: float = 0,
+                 expiry: str = "", bias: str = "NEUTRAL", lots: int = 1):
+    """Auto-recommend strategies based on market bias (BULLISH/BEARISH/NEUTRAL/VOLATILE)."""
+    import nifty_fo_engine
+    if spot <= 0:
+        return {"ok": False, "error": "Provide a positive spot price."}
+    return nifty_fo_engine.recommend_strategies(underlying, spot, expiry, bias, lots)
+
+
+class FOExecuteModel(BaseModel):
+    strategy: str
+    underlying: Optional[str] = "NIFTY"
+    spot: float
+    expiry: Optional[str] = ""
+    lots: Optional[int] = 1
+    strike: Optional[float] = 0
+    buy_strike: Optional[float] = 0
+    sell_strike: Optional[float] = 0
+    call_strike: Optional[float] = 0
+    put_strike: Optional[float] = 0
+    premium: Optional[float] = 0
+    buy_premium: Optional[float] = 0
+    sell_premium: Optional[float] = 0
+    call_prem: Optional[float] = 0
+    put_prem: Optional[float] = 0
+
+
+@app.post("/api/fo/execute")
+def fo_execute(req: FOExecuteModel):
+    """Build an F&O strategy plan and execute all legs (mock or live)."""
+    import nifty_fo_engine
+    fn = nifty_fo_engine.STRATEGIES.get(req.strategy)
+    if not fn:
+        return {"ok": False, "error": f"Unknown strategy '{req.strategy}'."}
+
+    kwargs = {"underlying": req.underlying or "NIFTY", "spot": req.spot,
+              "expiry": req.expiry or "", "lots": req.lots or 1}
+    sig = fn.__code__.co_varnames[:fn.__code__.co_argcount]
+    for p in ("strike", "buy_strike", "sell_strike", "call_strike", "put_strike",
+              "premium", "buy_premium", "sell_premium", "call_prem", "put_prem"):
+        if p in sig and getattr(req, p, 0):
+            kwargs[p] = getattr(req, p)
+
+    plan = fn(**kwargs)
+    result = _orders().place_fo_strategy(plan)
+    result["plan"] = plan
+    return result
+
+
+@app.get("/api/fo/positions")
+def fo_positions():
+    """Current F&O positions."""
+    return _orders().get_fo_positions()
+
+
 # ---------- Root handler: redirect to /live.html ----------
 @app.get("/")
 def root():

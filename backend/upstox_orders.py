@@ -130,11 +130,18 @@ class OrderEngine:
         return self._live_place(tsym, side, qty, order_type, price,
                                 trigger_price, product, validity, disclosed_qty)
 
+    @staticmethod
+    def _is_fo(tsym: str) -> bool:
+        """Detect if a symbol is an F&O instrument (futures/options)."""
+        t = tsym.upper()
+        return t.endswith("FUT") or t.endswith("CE") or t.endswith("PE")
+
     def _mock_place(self, tsym: str, side: str, qty: int,
                     order_type: str, price: float, product: str) -> dict:
         """Execute order against mock portfolio."""
         portfolio = _load_mock()
         tsym_upper = tsym.strip().upper()
+        is_fo = self._is_fo(tsym_upper)
 
         exec_price = price if (order_type == "LIMIT" and price > 0) else self._get_ltp(tsym_upper)
         if exec_price is None or exec_price <= 0:
@@ -142,43 +149,108 @@ class OrderEngine:
 
         order_id = f"MOCK-{uuid.uuid4().hex[:8].upper()}"
         total_value = exec_price * qty
+        pnl = None
 
-        if side == "BUY":
-            if total_value > portfolio.get("balance", 0):
-                return {"ok": False, "error": f"Insufficient balance. Need Rs.{total_value:.2f}, "
-                        f"have Rs.{portfolio['balance']:.2f}"}
-            portfolio["balance"] -= total_value
-            existing = None
-            for h in portfolio.get("holdings", []):
-                if h["tsym"] == tsym_upper or h["tsym"] == tsym_upper + "-EQ":
-                    existing = h
+        if is_fo:
+            # F&O: track positions, not holdings. Short-selling is allowed.
+            fo_positions = portfolio.setdefault("fo_positions", [])
+            margin_pct = 0.15 if side == "SELL" else 1.0
+            margin_needed = exec_price * qty * margin_pct
+
+            if side == "BUY":
+                if total_value > portfolio.get("balance", 0):
+                    return {"ok": False, "error": f"Insufficient balance. Need Rs.{total_value:.2f}, "
+                            f"have Rs.{portfolio['balance']:.2f}"}
+                portfolio["balance"] -= total_value
+
+            elif side == "SELL":
+                if margin_needed > portfolio.get("balance", 0):
+                    return {"ok": False, "error": f"Insufficient margin. Need Rs.{margin_needed:.2f}, "
+                            f"have Rs.{portfolio['balance']:.2f}"}
+                portfolio["balance"] += total_value  # credit received
+                margin_needed = exec_price * qty * 0.15
+
+            existing_pos = None
+            for p in fo_positions:
+                if p["tsym"] == tsym_upper:
+                    existing_pos = p
                     break
-            if existing:
-                old_val = existing["avgprc"] * existing["qty"]
-                new_val = old_val + total_value
-                existing["qty"] += qty
-                existing["avgprc"] = round(new_val / existing["qty"], 2)
+
+            if existing_pos:
+                if existing_pos["side"] == side:
+                    old_val = existing_pos["avgprc"] * existing_pos["qty"]
+                    new_val = old_val + total_value
+                    existing_pos["qty"] += qty
+                    existing_pos["avgprc"] = round(new_val / existing_pos["qty"], 2)
+                    existing_pos["margin_used"] = round(
+                        existing_pos["avgprc"] * existing_pos["qty"] * margin_pct, 2)
+                else:
+                    if qty >= existing_pos["qty"]:
+                        pnl = round((exec_price - existing_pos["avgprc"]) * existing_pos["qty"], 2)
+                        if existing_pos["side"] == "SELL":
+                            pnl = -pnl
+                        remaining = qty - existing_pos["qty"]
+                        portfolio["fo_positions"] = [p for p in fo_positions if p is not existing_pos]
+                        if remaining > 0:
+                            portfolio["fo_positions"].append({
+                                "tsym": tsym_upper, "side": side, "qty": remaining,
+                                "avgprc": exec_price, "product": product,
+                                "margin_used": round(exec_price * remaining * margin_pct, 2),
+                                "opened_at": _now_ist(),
+                            })
+                    else:
+                        pnl = round((exec_price - existing_pos["avgprc"]) * qty, 2)
+                        if existing_pos["side"] == "SELL":
+                            pnl = -pnl
+                        existing_pos["qty"] -= qty
+                        existing_pos["margin_used"] = round(
+                            existing_pos["avgprc"] * existing_pos["qty"] * margin_pct, 2)
             else:
-                portfolio["holdings"].append({
-                    "exch": "NSE", "token": "", "tsym": tsym_upper,
-                    "qty": qty, "avgprc": exec_price, "cname": tsym_upper,
+                fo_positions.append({
+                    "tsym": tsym_upper, "side": side, "qty": qty,
+                    "avgprc": exec_price, "product": product,
+                    "margin_used": round(margin_needed, 2),
+                    "opened_at": _now_ist(),
                 })
 
-        elif side == "SELL":
-            holding = None
-            for h in portfolio.get("holdings", []):
-                if h["tsym"] == tsym_upper or h["tsym"] == tsym_upper + "-EQ":
-                    holding = h
-                    break
-            if not holding or holding["qty"] < qty:
-                avail = holding["qty"] if holding else 0
-                return {"ok": False, "error": f"Insufficient holdings. Have {avail} of {tsym_upper}, need {qty}."}
-            portfolio["balance"] += total_value
-            pnl = round((exec_price - holding["avgprc"]) * qty, 2)
-            holding["qty"] -= qty
-            if holding["qty"] == 0:
-                portfolio["holdings"] = [h for h in portfolio["holdings"]
-                                         if h is not holding]
+        else:
+            # Equity: existing logic
+            if side == "BUY":
+                if total_value > portfolio.get("balance", 0):
+                    return {"ok": False, "error": f"Insufficient balance. Need Rs.{total_value:.2f}, "
+                            f"have Rs.{portfolio['balance']:.2f}"}
+                portfolio["balance"] -= total_value
+                existing = None
+                for h in portfolio.get("holdings", []):
+                    if h["tsym"] == tsym_upper or h["tsym"] == tsym_upper + "-EQ":
+                        existing = h
+                        break
+                if existing:
+                    old_val = existing["avgprc"] * existing["qty"]
+                    new_val = old_val + total_value
+                    existing["qty"] += qty
+                    existing["avgprc"] = round(new_val / existing["qty"], 2)
+                else:
+                    portfolio["holdings"].append({
+                        "exch": "NSE", "token": "", "tsym": tsym_upper,
+                        "qty": qty, "avgprc": exec_price, "cname": tsym_upper,
+                    })
+
+            elif side == "SELL":
+                holding = None
+                for h in portfolio.get("holdings", []):
+                    if h["tsym"] == tsym_upper or h["tsym"] == tsym_upper + "-EQ":
+                        holding = h
+                        break
+                if not holding or holding["qty"] < qty:
+                    avail = holding["qty"] if holding else 0
+                    return {"ok": False, "error": f"Insufficient holdings. Have {avail} of {tsym_upper}, need {qty}."}
+                portfolio["balance"] += total_value
+                pnl = round((exec_price - holding["avgprc"]) * qty, 2)
+                holding["qty"] -= qty
+                if holding["qty"] == 0:
+                    portfolio["holdings"] = [h for h in portfolio["holdings"]
+                                             if h is not holding]
 
         order_entry = {
             "order_id": order_id,
@@ -188,6 +260,7 @@ class OrderEngine:
             "order_type": order_type,
             "price": exec_price,
             "product": product,
+            "segment": "NFO" if is_fo else "NSE",
             "status": "COMPLETE",
             "placed_at": _now_ist(),
             "mode": "MOCK",
@@ -196,7 +269,7 @@ class OrderEngine:
         _save_mock(portfolio)
 
         log_entry = {**order_entry, "balance_after": portfolio["balance"]}
-        if side == "SELL":
+        if pnl is not None:
             log_entry["pnl"] = pnl
         _append_trade_log(log_entry)
 
@@ -210,10 +283,11 @@ class OrderEngine:
             "exec_price": exec_price,
             "total_value": round(total_value, 2),
             "balance_after": round(portfolio["balance"], 2),
+            "segment": "NFO" if is_fo else "NSE",
             "status": "COMPLETE",
             "placed_at": order_entry["placed_at"],
         }
-        if side == "SELL":
+        if pnl is not None:
             result["pnl"] = pnl
         return result
 
@@ -389,6 +463,75 @@ class OrderEngine:
             return {"ok": True, "trades": log}
         except Exception:
             return {"ok": True, "trades": []}
+
+    # ── F&O: Place multi-leg strategy order ────────────────────────────────
+
+    def place_fo_strategy(self, strategy: dict) -> dict:
+        """Execute all legs of an F&O strategy (from nifty_fo_engine).
+        Each leg is placed as a separate order. Returns combined result."""
+        legs = strategy.get("legs", [])
+        if not legs:
+            return {"ok": False, "error": "Strategy has no legs."}
+
+        underlying = strategy.get("underlying", "NIFTY")
+        expiry = strategy.get("expiry", "")
+        lot_size = strategy.get("lot_size", 25)
+        results = []
+        all_ok = True
+
+        for i, leg in enumerate(legs):
+            side = leg["side"]
+            qty = leg["qty"]
+            price = leg.get("price", 0)
+            strike = leg.get("strike", 0)
+            option_type = leg.get("option_type", "")
+            instrument = leg.get("instrument", "OPT")
+
+            if instrument == "FUT":
+                tsym = f"{underlying}FUT"
+            else:
+                tsym = f"{underlying}{int(strike)}{option_type}"
+
+            res = self.place_order(
+                tsym=tsym,
+                side=side,
+                qty=qty,
+                order_type="LIMIT" if price > 0 else "MARKET",
+                price=price,
+                product="I",
+            )
+            res["leg"] = i + 1
+            res["leg_desc"] = f"{side} {qty}x {tsym} @ Rs.{price}"
+            results.append(res)
+            if not res.get("ok"):
+                all_ok = False
+
+        return {
+            "ok": all_ok,
+            "strategy": strategy.get("strategy", "Unknown"),
+            "underlying": underlying,
+            "expiry": expiry,
+            "legs_total": len(legs),
+            "legs_filled": sum(1 for r in results if r.get("ok")),
+            "leg_results": results,
+            "margin_required": strategy.get("margin_required"),
+            "max_profit": strategy.get("max_profit"),
+            "max_loss": strategy.get("max_loss"),
+            "placed_at": _now_ist(),
+        }
+
+    def get_fo_positions(self) -> dict:
+        """Return F&O positions from the mock portfolio."""
+        if self.mock_mode:
+            portfolio = _load_mock()
+            fo_positions = portfolio.get("fo_positions", [])
+            margin_used = sum(p.get("margin_used", 0) for p in fo_positions)
+            return {
+                "ok": True, "mode": "MOCK",
+                "fo_positions": fo_positions,
+                "margin_used": round(margin_used, 2),
+            }
+        return self.get_positions()
 
     # ── Helper: get LTP from feed or stored data ─────────────────────────────
 

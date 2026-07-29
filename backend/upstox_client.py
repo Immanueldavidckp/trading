@@ -1,5 +1,5 @@
 """
-Upstox API v2 client — historical candle data for all NSE stocks.
+Upstox API v2 client — historical candle data for NSE stocks + F&O (Nifty/BankNifty).
 
 Setup (one-time):
   1. Go to https://developer.upstox.com/developer/apps
@@ -39,6 +39,7 @@ UPSTOX_REDIRECT   = os.environ.get("UPSTOX_REDIRECT_URI", "http://127.0.0.1:8000
 BASE       = "https://api.upstox.com/v2"
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "local_data", "upstox_token.json")
 INST_FILE  = os.path.join(os.path.dirname(__file__), "local_data", "upstox_instruments.json")
+FO_INST_FILE = os.path.join(os.path.dirname(__file__), "local_data", "upstox_fo_instruments.json")
 
 # Upstox native interval strings
 _NATIVE = {
@@ -125,10 +126,12 @@ class UpstoxClient:
         self.redirect   = os.environ.get("UPSTOX_REDIRECT_URI", UPSTOX_REDIRECT)
         self.access_token: Optional[str] = None
         self._inst: dict = {}       # "RELIANCE" / "RELIANCE-EQ" -> instrument_key
+        self._fo_inst: list = []    # F&O instruments: [{sym, key, underlying, expiry, strike, option_type, lot_size, itype}, ...]
         self._inst_lock = threading.Lock()
         ensure_candles_table()
         self._load_token()
         self._load_instruments()
+        self._load_fo_instruments()
 
     # ── credentials ──────────────────────────────────────────────────────────
 
@@ -233,9 +236,149 @@ class UpstoxClient:
             return {"ok": False, "error": str(e)}
 
     def instrument_key(self, tsym: str) -> Optional[str]:
-        """Return Upstox instrument key for a symbol like 'RELIANCE' or 'RELIANCE-EQ'."""
+        """Return Upstox instrument key for a symbol like 'RELIANCE' or 'RELIANCE-EQ'.
+        Also resolves F&O trading symbols (e.g. 'NIFTY25JULFUT')."""
         with self._inst_lock:
-            return self._inst.get(tsym.strip().upper())
+            k = self._inst.get(tsym.strip().upper())
+            if k:
+                return k
+            for fo in self._fo_inst:
+                if fo["sym"] == tsym.strip().upper():
+                    return fo["key"]
+            return None
+
+    # ── F&O instruments ──────────────────────────────────────────────────────
+
+    def _load_fo_instruments(self):
+        if os.path.exists(FO_INST_FILE):
+            try:
+                with open(FO_INST_FILE) as f:
+                    with self._inst_lock:
+                        self._fo_inst = json.load(f)
+                return
+            except Exception:
+                pass
+        self._fo_inst = []
+
+    def refresh_fo_instruments(self) -> dict:
+        """Download Upstox NSE_FO instruments (NIFTY/BANKNIFTY futures + options)."""
+        url = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+        try:
+            r = requests.get(url, timeout=60)
+            data = json.loads(gzip.decompress(r.content))
+            fo_list = []
+            for item in data:
+                seg = item.get("segment", "")
+                if seg != "NSE_FO":
+                    continue
+                itype = item.get("instrument_type", "")
+                if itype not in ("FUTIDX", "OPTIDX", "FUTSTK", "OPTSTK"):
+                    continue
+                sym = (item.get("tradingsymbol") or item.get("trading_symbol", "")).strip().upper()
+                key = item.get("instrument_key", "")
+                underlying = (item.get("underlying_symbol") or item.get("name", "")).strip().upper()
+                if not sym or not key:
+                    continue
+                # Only keep NIFTY and BANKNIFTY index derivatives (+ FINNIFTY)
+                if underlying not in ("NIFTY", "BANKNIFTY", "FINNIFTY", "NIFTY 50", "NIFTY BANK", "NIFTY FIN SERVICE"):
+                    if itype not in ("FUTIDX", "OPTIDX"):
+                        continue
+                expiry = item.get("expiry", "")
+                strike = float(item.get("strike_price") or item.get("strike", 0) or 0)
+                option_type = (item.get("option_type") or "").upper()  # CE, PE, or ""
+                lot_size = int(item.get("lot_size", 0) or 0)
+                fo_list.append({
+                    "sym": sym,
+                    "key": key,
+                    "underlying": underlying,
+                    "expiry": expiry,
+                    "strike": strike,
+                    "option_type": option_type if option_type in ("CE", "PE") else "",
+                    "lot_size": lot_size,
+                    "itype": itype,
+                })
+            with self._inst_lock:
+                self._fo_inst = fo_list
+            os.makedirs(os.path.dirname(FO_INST_FILE), exist_ok=True)
+            with open(FO_INST_FILE, "w") as f:
+                json.dump(fo_list, f)
+            fut_count = sum(1 for x in fo_list if "FUT" in x["itype"])
+            opt_count = sum(1 for x in fo_list if "OPT" in x["itype"])
+            return {"ok": True, "futures": fut_count, "options": opt_count, "total": len(fo_list)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def fo_instrument_key(self, underlying: str, expiry: str,
+                          strike: float = 0, option_type: str = "") -> Optional[str]:
+        """Look up a specific F&O contract's instrument key.
+        For futures: fo_instrument_key('NIFTY', '2025-07-31')
+        For options: fo_instrument_key('NIFTY', '2025-07-31', 25000, 'CE')
+        """
+        underlying = underlying.strip().upper()
+        option_type = option_type.strip().upper()
+        with self._inst_lock:
+            for fo in self._fo_inst:
+                if fo["underlying"] not in (underlying, underlying + " 50", "NIFTY " + underlying.replace("NIFTY", "").strip()):
+                    # Flexible matching: NIFTY matches "NIFTY", "NIFTY 50"
+                    if not fo["underlying"].startswith(underlying):
+                        continue
+                if fo["expiry"] != expiry:
+                    continue
+                if option_type:
+                    if fo["option_type"] != option_type:
+                        continue
+                    if abs(fo["strike"] - strike) > 0.01:
+                        continue
+                else:
+                    if fo["itype"] not in ("FUTIDX", "FUTSTK"):
+                        continue
+                return fo["key"]
+        return None
+
+    def fo_chain(self, underlying: str = "NIFTY", expiry: str = "",
+                 itype: str = "") -> list:
+        """Return the option chain (or futures list) for a given underlying.
+        itype filter: 'FUTIDX', 'OPTIDX', '' (all).
+        If expiry is empty, returns all expiries."""
+        underlying = underlying.strip().upper()
+        itype = itype.strip().upper()
+        with self._inst_lock:
+            out = []
+            for fo in self._fo_inst:
+                if not fo["underlying"].startswith(underlying):
+                    continue
+                if expiry and fo["expiry"] != expiry:
+                    continue
+                if itype and fo["itype"] != itype:
+                    continue
+                out.append(fo)
+        out.sort(key=lambda x: (x["expiry"], x["strike"], x["option_type"]))
+        return out
+
+    def fo_expiries(self, underlying: str = "NIFTY") -> list:
+        """List available expiry dates for a given underlying, nearest first."""
+        underlying = underlying.strip().upper()
+        seen = set()
+        out = []
+        with self._inst_lock:
+            for fo in self._fo_inst:
+                if not fo["underlying"].startswith(underlying):
+                    continue
+                if fo["expiry"] not in seen:
+                    seen.add(fo["expiry"])
+                    out.append(fo["expiry"])
+        out.sort()
+        return out
+
+    def fo_lot_size(self, underlying: str = "NIFTY") -> int:
+        """Return the lot size for a given underlying."""
+        underlying = underlying.strip().upper()
+        with self._inst_lock:
+            for fo in self._fo_inst:
+                if fo["underlying"].startswith(underlying) and fo["lot_size"] > 0:
+                    return fo["lot_size"]
+        defaults = {"NIFTY": 25, "BANKNIFTY": 15, "FINNIFTY": 25}
+        return defaults.get(underlying, 25)
 
     # ── fetch candles ─────────────────────────────────────────────────────────
 
