@@ -1,5 +1,84 @@
 {
-    "orders": [],
+    "orders": [
+        {
+            "order_id": "MOCK-464C9966",
+            "tsym": "NIFTY24850CE",
+            "side": "BUY",
+            "qty": 25,
+            "order_type": "LIMIT",
+            "price": 180.0,
+            "product": "I",
+            "segment": "NFO",
+            "status": "COMPLETE",
+            "placed_at": "2026-07-29 09:53:52 IST",
+            "mode": "MOCK"
+        },
+        {
+            "order_id": "MOCK-46E87E29",
+            "tsym": "NIFTY24950CE",
+            "side": "SELL",
+            "qty": 25,
+            "order_type": "LIMIT",
+            "price": 130.0,
+            "product": "I",
+            "segment": "NFO",
+            "status": "COMPLETE",
+            "placed_at": "2026-07-29 09:53:52 IST",
+            "mode": "MOCK"
+        },
+        {
+            "order_id": "MOCK-3459ADFE",
+            "tsym": "NIFTY25100CE",
+            "side": "SELL",
+            "qty": 25,
+            "order_type": "LIMIT",
+            "price": 65.0,
+            "product": "I",
+            "segment": "NFO",
+            "status": "COMPLETE",
+            "placed_at": "2026-07-29 09:53:52 IST",
+            "mode": "MOCK"
+        },
+        {
+            "order_id": "MOCK-D203AFF2",
+            "tsym": "NIFTY25200CE",
+            "side": "BUY",
+            "qty": 25,
+            "order_type": "LIMIT",
+            "price": 40.0,
+            "product": "I",
+            "segment": "NFO",
+            "status": "COMPLETE",
+            "placed_at": "2026-07-29 09:53:52 IST",
+            "mode": "MOCK"
+        },
+        {
+            "order_id": "MOCK-533C2CAF",
+            "tsym": "NIFTY24600PE",
+            "side": "SELL",
+            "qty": 25,
+            "order_type": "LIMIT",
+            "price": 55.0,
+            "product": "I",
+            "segment": "NFO",
+            "status": "COMPLETE",
+            "placed_at": "2026-07-29 09:53:52 IST",
+            "mode": "MOCK"
+        },
+        {
+            "order_id": "MOCK-8466733D",
+            "tsym": "NIFTY24500PE",
+            "side": "BUY",
+            "qty": 25,
+            "order_type": "LIMIT",
+            "price": 30.0,
+            "product": "I",
+            "segment": "NFO",
+            "status": "COMPLETE",
+            "placed_at": "2026-07-29 09:53:52 IST",
+            "mode": "MOCK"
+        }
+    ],
     "positions": {},
     "holdings": [
         {
@@ -17,6 +96,62 @@
             "qty": 100,
             "avgprc": 1420.5,
             "cname": "INFOSYS LIMITED"
+        }
+    ],
+    "fo_positions": [
+        {
+            "tsym": "NIFTY24850CE",
+            "side": "BUY",
+            "qty": 25,
+            "avgprc": 180.0,
+            "product": "I",
+            "margin_used": 4500.0,
+            "opened_at": "2026-07-29 09:53:52 IST"
+        },
+        {
+            "tsym": "NIFTY24950CE",
+            "side": "SELL",
+            "qty": 25,
+            "avgprc": 130.0,
+            "product": "I",
+            "margin_used": 487.5,
+            "opened_at": "2026-07-29 09:53:52 IST"
+        },
+        {
+            "tsym": "NIFTY25100CE",
+            "side": "SELL",
+            "qty": 25,
+            "avgprc": 65.0,
+            "product": "I",
+            "margin_used": 243.75,
+            "opened_at": "2026-07-29 09:53:52 IST"
+        },
+        {
+            "tsym": "NIFTY25200CE",
+            "side": "BUY",
+            "qty": 25,
+            "avgprc": 40.0,
+            "product": "I",
+            "margin_used": 1000.0,
+            "opened_at": "2026-07-29 09:53:52 IST"
+        },
+        {
+            "tsym": "NIFTY24600PE",
+            "side": "SELL",
+            "qty": 25,
+            "avgprc": 55.0,
+            "product": "I",
+            "margin_used": 206.25,
+            "opened_at": "2026-07-29 09:53:52 IST"
+        },
+        {
+            "tsym": "NIFTY24500PE",
+            "side": "BUY",
+            "qty": 25,
+            "avgprc": 30.0,
+            "product": "I",
+            "margin_used": 750.0,
+            "opened_at": "2026-07-29 09:53:52 IST"
         }
     ],
     "balance": 1000000.0

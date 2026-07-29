@@ -959,6 +959,231 @@ def swing_dates():
     return swing_pipeline.list_swing_dates()
 
 
+# ---------- Trading execution endpoints (mock + live Upstox) ----------
+from upstox_orders import OrderEngine
+
+orders_engine: Optional[OrderEngine] = None
+
+
+def _orders() -> OrderEngine:
+    global orders_engine
+    if orders_engine is None:
+        orders_engine = OrderEngine(upstox_client=_upstox())
+    return orders_engine
+
+
+class PlaceOrderModel(BaseModel):
+    tsym: str
+    side: str                           # BUY or SELL
+    qty: int
+    order_type: Optional[str] = "MARKET"
+    price: Optional[float] = 0.0
+    trigger_price: Optional[float] = 0.0
+    product: Optional[str] = "D"        # D=delivery, I=intraday
+    validity: Optional[str] = "DAY"
+
+
+@app.post("/api/trade/place")
+def trade_place(req: PlaceOrderModel):
+    """Place a BUY or SELL order (mock or live depending on MOCK_MODE env)."""
+    return _orders().place_order(
+        tsym=req.tsym, side=req.side, qty=req.qty,
+        order_type=req.order_type or "MARKET",
+        price=req.price or 0.0,
+        trigger_price=req.trigger_price or 0.0,
+        product=req.product or "D",
+        validity=req.validity or "DAY",
+    )
+
+
+@app.get("/api/trade/orders")
+def trade_orders():
+    """List today's orders."""
+    return _orders().get_orders()
+
+
+@app.post("/api/trade/cancel")
+def trade_cancel(order_id: str):
+    """Cancel a pending order."""
+    return _orders().cancel_order(order_id)
+
+
+@app.get("/api/trade/positions")
+def trade_positions():
+    """Current intraday + delivery positions."""
+    return _orders().get_positions()
+
+
+@app.get("/api/trade/holdings")
+def trade_holdings():
+    """Demat holdings (delivery stocks)."""
+    return _orders().get_holdings()
+
+
+@app.get("/api/trade/funds")
+def trade_funds():
+    """Available balance / margin."""
+    return _orders().get_funds()
+
+
+@app.get("/api/trade/log")
+def trade_log():
+    """Full trade execution log (all sessions)."""
+    return OrderEngine.get_trade_log()
+
+
+@app.get("/api/trade/status")
+def trade_status():
+    """Trading engine status: mode, balance, holdings count."""
+    eng = _orders()
+    funds = eng.get_funds()
+    holdings = eng.get_holdings()
+    return {
+        "ok": True,
+        "mock_mode": eng.mock_mode,
+        "mode": "MOCK (paper trading)" if eng.mock_mode else "LIVE (real money)",
+        "upstox_logged_in": bool(eng._token()),
+        "balance": funds.get("available_balance", funds.get("funds", {})),
+        "holdings_count": len(holdings.get("holdings", [])),
+    }
+
+
+# ---------- Nifty F&O: instruments, option chain, strategies, execution ----------
+
+@app.post("/api/fo/refresh_instruments")
+def fo_refresh_instruments():
+    """Download F&O instruments master (NIFTY/BANKNIFTY futures + options)."""
+    return _upstox().refresh_fo_instruments()
+
+
+@app.get("/api/fo/expiries")
+def fo_expiries(underlying: str = "NIFTY"):
+    """List available expiry dates for an index (nearest first)."""
+    expiries = _upstox().fo_expiries(underlying)
+    return {"ok": True, "underlying": underlying.upper(), "expiries": expiries}
+
+
+@app.get("/api/fo/chain")
+def fo_chain(underlying: str = "NIFTY", expiry: str = "", itype: str = ""):
+    """Option chain / futures list for an underlying + expiry.
+    itype: 'FUTIDX', 'OPTIDX', '' (all)."""
+    chain = _upstox().fo_chain(underlying, expiry, itype)
+    return {
+        "ok": True, "underlying": underlying.upper(),
+        "expiry": expiry, "count": len(chain), "instruments": chain,
+    }
+
+
+@app.get("/api/fo/lot_size")
+def fo_lot_size(underlying: str = "NIFTY"):
+    """Get the lot size for an underlying."""
+    ls = _upstox().fo_lot_size(underlying)
+    return {"ok": True, "underlying": underlying.upper(), "lot_size": ls}
+
+
+@app.get("/api/fo/strategies")
+def fo_strategies():
+    """List all available F&O strategies with descriptions."""
+    import nifty_fo_engine
+    return {"ok": True, "strategies": nifty_fo_engine.list_strategies()}
+
+
+class FOStrategyModel(BaseModel):
+    strategy: str                       # e.g. 'bull_call_spread', 'iron_condor'
+    underlying: Optional[str] = "NIFTY"
+    spot: float                         # current index level
+    expiry: Optional[str] = ""
+    lots: Optional[int] = 1
+    bias: Optional[str] = ""
+    strike: Optional[float] = 0
+    buy_strike: Optional[float] = 0
+    sell_strike: Optional[float] = 0
+    call_strike: Optional[float] = 0
+    put_strike: Optional[float] = 0
+    premium: Optional[float] = 0
+    buy_premium: Optional[float] = 0
+    sell_premium: Optional[float] = 0
+    call_prem: Optional[float] = 0
+    put_prem: Optional[float] = 0
+
+
+@app.post("/api/fo/plan")
+def fo_plan(req: FOStrategyModel):
+    """Build a specific F&O strategy plan with computed P&L, breakevens, margin."""
+    import nifty_fo_engine
+    fn = nifty_fo_engine.STRATEGIES.get(req.strategy)
+    if not fn:
+        return {"ok": False, "error": f"Unknown strategy '{req.strategy}'. "
+                f"Available: {list(nifty_fo_engine.STRATEGIES.keys())}"}
+
+    kwargs = {"underlying": req.underlying or "NIFTY", "spot": req.spot,
+              "expiry": req.expiry or "", "lots": req.lots or 1}
+
+    sig = fn.__code__.co_varnames[:fn.__code__.co_argcount]
+    for p in ("strike", "buy_strike", "sell_strike", "call_strike", "put_strike",
+              "premium", "buy_premium", "sell_premium", "call_prem", "put_prem"):
+        if p in sig and getattr(req, p, 0):
+            kwargs[p] = getattr(req, p)
+
+    return {"ok": True, "plan": fn(**kwargs)}
+
+
+@app.get("/api/fo/recommend")
+def fo_recommend(underlying: str = "NIFTY", spot: float = 0,
+                 expiry: str = "", bias: str = "NEUTRAL", lots: int = 1):
+    """Auto-recommend strategies based on market bias (BULLISH/BEARISH/NEUTRAL/VOLATILE)."""
+    import nifty_fo_engine
+    if spot <= 0:
+        return {"ok": False, "error": "Provide a positive spot price."}
+    return nifty_fo_engine.recommend_strategies(underlying, spot, expiry, bias, lots)
+
+
+class FOExecuteModel(BaseModel):
+    strategy: str
+    underlying: Optional[str] = "NIFTY"
+    spot: float
+    expiry: Optional[str] = ""
+    lots: Optional[int] = 1
+    strike: Optional[float] = 0
+    buy_strike: Optional[float] = 0
+    sell_strike: Optional[float] = 0
+    call_strike: Optional[float] = 0
+    put_strike: Optional[float] = 0
+    premium: Optional[float] = 0
+    buy_premium: Optional[float] = 0
+    sell_premium: Optional[float] = 0
+    call_prem: Optional[float] = 0
+    put_prem: Optional[float] = 0
+
+
+@app.post("/api/fo/execute")
+def fo_execute(req: FOExecuteModel):
+    """Build an F&O strategy plan and execute all legs (mock or live)."""
+    import nifty_fo_engine
+    fn = nifty_fo_engine.STRATEGIES.get(req.strategy)
+    if not fn:
+        return {"ok": False, "error": f"Unknown strategy '{req.strategy}'."}
+
+    kwargs = {"underlying": req.underlying or "NIFTY", "spot": req.spot,
+              "expiry": req.expiry or "", "lots": req.lots or 1}
+    sig = fn.__code__.co_varnames[:fn.__code__.co_argcount]
+    for p in ("strike", "buy_strike", "sell_strike", "call_strike", "put_strike",
+              "premium", "buy_premium", "sell_premium", "call_prem", "put_prem"):
+        if p in sig and getattr(req, p, 0):
+            kwargs[p] = getattr(req, p)
+
+    plan = fn(**kwargs)
+    result = _orders().place_fo_strategy(plan)
+    result["plan"] = plan
+    return result
+
+
+@app.get("/api/fo/positions")
+def fo_positions():
+    """Current F&O positions."""
+    return _orders().get_fo_positions()
+
+
 # ---------- Root handler: redirect to /live.html ----------
 @app.get("/")
 def root():
