@@ -621,6 +621,52 @@ def upstox_status():
     return _upstox().status()
 
 
+@app.get("/api/instruments/search")
+def instruments_search(q: str, kind: Optional[str] = None, limit: int = 40):
+    """Search equities, indices, futures and options.
+    `kind` = EQ | FUT | OPT | INDEX. Powers the chart's symbol picker."""
+    return {"ok": True, "query": q,
+            "results": _upstox().search_instruments(q, limit=max(1, min(int(limit), 200)),
+                                                    kind=kind)}
+
+
+@app.get("/api/instruments/refresh")
+def instruments_refresh():
+    """Re-download the NSE master (equities + F&O + indices). Run after expiry
+    rolls so the nearest-future aliases point at the new contract."""
+    return _upstox().refresh_instruments()
+
+
+@app.get("/api/instruments/chain")
+def instruments_chain(underlying: str = "NIFTY", expiry: Optional[str] = None):
+    """Option chain for an underlying: available expiries, and the strikes for
+    one of them (nearest by default) with both CE and PE contracts."""
+    ux = _upstox()
+    rows = ux.search_instruments(underlying, limit=4000, kind="OPT")
+    rows = [r for r in rows if (r.get("underlying") or "").upper() == underlying.upper()]
+    expiries = sorted({r["expiry"] for r in rows if r.get("expiry")},
+                      key=lambda e: _dt_parse_expiry(e))
+    if not expiries:
+        return {"ok": False, "error": f"no live option contracts found for {underlying}"}
+    want = expiry if expiry in expiries else expiries[0]
+    sel = [r for r in rows if r.get("expiry") == want]
+    strikes = {}
+    for r in sel:
+        st = strikes.setdefault(r["strike"], {"strike": r["strike"]})
+        st["CE" if r["type"] == "CE" else "PE"] = r["tsym"]
+    return {"ok": True, "underlying": underlying.upper(), "expiry": want,
+            "expiries": expiries, "lot_size": (sel[0].get("lot_size") if sel else None),
+            "strikes": [strikes[k] for k in sorted(strikes)]}
+
+
+def _dt_parse_expiry(s: str):
+    import datetime as _d
+    try:
+        return _d.datetime.strptime(s, "%d %b %y")
+    except Exception:
+        return _d.datetime.max
+
+
 @app.get("/api/upstox/login_url")
 def upstox_login_url(redirect: int = 1):
     """

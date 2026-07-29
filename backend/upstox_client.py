@@ -125,7 +125,9 @@ class UpstoxClient:
         self.api_secret = os.environ.get("UPSTOX_API_SECRET", UPSTOX_API_SECRET)
         self.redirect   = os.environ.get("UPSTOX_REDIRECT_URI", UPSTOX_REDIRECT)
         self.access_token: Optional[str] = None
-        self._inst: dict = {}       # "RELIANCE" / "RELIANCE-EQ" -> instrument_key
+        self._inst: dict = {}       # "RELIANCE" / "NIFTY-FUT" / … -> instrument_key
+        self._cat: list = []        # searchable catalogue (EQ + F&O + indices)
+        self._key2sym: dict = {}    # instrument_key -> canonical trading symbol
         self._fo_inst: list = []    # F&O instruments: [{sym, key, underlying, expiry, strike, option_type, lot_size, itype}, ...]
         self._inst_lock = threading.Lock()
         ensure_candles_table()
@@ -199,53 +201,199 @@ class UpstoxClient:
     # ── instruments master ────────────────────────────────────────────────────
 
     def _load_instruments(self):
-        """Load cached instrument map from disk; download if missing."""
+        """Load the cached instrument map + catalogue from disk; download if missing."""
         if os.path.exists(INST_FILE):
             try:
                 with open(INST_FILE) as f:
+                    blob = json.load(f)
+                # v2 format = {"map": {...}, "catalogue": [...]}; anything else is
+                # the old equity-only dict and must be rebuilt to pick up F&O.
+                if isinstance(blob, dict) and "map" in blob and "catalogue" in blob:
                     with self._inst_lock:
-                        self._inst = json.load(f)
-                return
+                        self._inst = blob["map"]
+                        self._cat = blob["catalogue"]
+                        self._key2sym = {r["k"]: r["s"] for r in blob["catalogue"]}
+                    return
             except Exception:
                 pass
         self.refresh_instruments()
 
     def refresh_instruments(self) -> dict:
-        """Download Upstox NSE instruments master and rebuild the symbol→key map."""
+        """Download the Upstox NSE master and rebuild the symbol→key map.
+
+        Covers the whole tradable NSE surface, not just cash equities:
+          • NSE_EQ   EQ / BE            — cash equities
+          • NSE_FO   FUT / CE / PE      — futures & options (unexpired only)
+          • NSE_INDEX                   — spot indices (NIFTY 50, BANKNIFTY, …)
+
+        F&O trading symbols carry spaces ("NIFTY FUT 25 AUG 26"), so every
+        contract is also registered under a compact space-free alias, and each
+        underlying gets a rolling "<UNDER>-FUT" alias pointing at the NEAREST
+        unexpired future so a chart link doesn't break at every expiry."""
         url = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
         try:
-            r = requests.get(url, timeout=30)
+            r = requests.get(url, timeout=60)
             data = json.loads(gzip.decompress(r.content))
-            inst = {}
-            for item in data:
-                sym = (item.get("tradingsymbol") or item.get("trading_symbol", "")).strip().upper()
-                key = item.get("instrument_key", "")
-                seg = item.get("segment", "")
-                itype = item.get("instrument_type", "")
-                # NSE cash-market equities: segment NSE_EQ, type EQ (normal) or BE (trade-to-trade)
-                if sym and key and seg == "NSE_EQ" and itype in ("EQ", "BE"):
-                    inst[sym]           = key   # e.g. "RELIANCE"
-                    inst[sym + "-EQ"]   = key   # e.g. "RELIANCE-EQ"  (matches watchlist tsym)
-            with self._inst_lock:
-                self._inst = inst
-            os.makedirs(os.path.dirname(INST_FILE), exist_ok=True)
-            with open(INST_FILE, "w") as f:
-                json.dump(inst, f)
-            return {"ok": True, "instruments": len(inst) // 2}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    def instrument_key(self, tsym: str) -> Optional[str]:
-        """Return Upstox instrument key for a symbol like 'RELIANCE' or 'RELIANCE-EQ'.
-        Also resolves F&O trading symbols (e.g. 'NIFTY25JULFUT')."""
+        now_ms = datetime.now().timestamp() * 1000
+        inst: dict = {}
+        cat: list = []
+        futures: dict = {}          # underlying -> [(expiry, sym, key)]
+        counts = {"EQ": 0, "FUT": 0, "OPT": 0, "INDEX": 0}
+
+        def reg(sym: str, key: str, overwrite: bool = False):
+            if not sym:
+                return
+            if overwrite or sym not in inst:
+                inst[sym] = key
+
+        for item in data:
+            sym = (item.get("tradingsymbol") or item.get("trading_symbol") or "").strip().upper()
+            key = item.get("instrument_key") or ""
+            seg = item.get("segment") or ""
+            itype = item.get("instrument_type") or ""
+            if not sym or not key:
+                continue
+            expiry = item.get("expiry") or 0
+
+            if seg == "NSE_EQ" and itype in ("EQ", "BE"):
+                reg(sym, key, overwrite=True)
+                reg(sym + "-EQ", key, overwrite=True)   # watchlist tsym form
+                cat.append({"s": sym, "k": key, "t": "EQ", "u": sym})
+                counts["EQ"] += 1
+
+            elif seg == "NSE_FO" and itype in ("FUT", "CE", "PE"):
+                if expiry and expiry < now_ms:
+                    continue                            # expired contract
+                under = (item.get("asset_symbol") or item.get("underlying_symbol") or "").upper()
+                reg(sym, key)
+                reg(sym.replace(" ", ""), key)
+                rec = {"s": sym, "k": key, "t": itype, "u": under,
+                       "e": expiry, "l": item.get("lot_size")}
+                if itype in ("CE", "PE"):
+                    rec["x"] = item.get("strike_price")
+                    counts["OPT"] += 1
+                else:
+                    futures.setdefault(under, []).append((expiry, sym, key))
+                    counts["FUT"] += 1
+                cat.append(rec)
+
+            elif seg == "NSE_INDEX":
+                # the master's trading_symbol for the headline index is just
+                # "NIFTY"; its human name ("Nifty 50") is what people type
+                nm = (item.get("name") or "").strip().upper()
+                reg(sym, key)
+                reg(sym.replace(" ", ""), key)
+                if nm and nm != sym:
+                    reg(nm, key)
+                    reg(nm.replace(" ", ""), key)
+                cat.append({"s": sym, "k": key, "t": "INDEX", "u": sym, "n": nm})
+                counts["INDEX"] += 1
+
+        # rolling nearest-expiry future alias per underlying
+        for under, rows in futures.items():
+            rows.sort()
+            _, _, key = rows[0]
+            reg(f"{under}-FUT", key, overwrite=True)
+            reg(f"{under}FUT", key, overwrite=True)
+
         with self._inst_lock:
-            k = self._inst.get(tsym.strip().upper())
+            self._inst = inst
+            self._cat = cat
+            self._key2sym = {r["k"]: r["s"] for r in cat}
+        try:
+            os.makedirs(os.path.dirname(INST_FILE), exist_ok=True)
+            with open(INST_FILE, "w") as f:
+                json.dump({"map": inst, "catalogue": cat}, f, separators=(",", ":"))
+        except Exception as e:
+            return {"ok": False, "error": f"saved in memory but disk write failed: {e}"}
+        return {"ok": True, "aliases": len(inst), "instruments": len(cat), **counts}
+
+    def instrument_key(self, tsym: str) -> Optional[str]:
+        """Upstox instrument key for 'RELIANCE', 'NIFTY-FUT', 'NIFTY 24500 CE 04 AUG 26'…"""
+        if not tsym:
+            return None
+        q = tsym.strip().upper()
+        with self._inst_lock:
+            k = self._inst.get(q) or self._inst.get(q.replace(" ", ""))
             if k:
                 return k
+            # fall back to the F&O execution-engine contract list (e.g. 'NIFTY25JULFUT')
             for fo in self._fo_inst:
-                if fo["sym"] == tsym.strip().upper():
+                if fo["sym"] == q:
                     return fo["key"]
             return None
+
+    def canonical_symbol(self, tsym: str) -> Optional[str]:
+        """The concrete contract symbol behind any alias — 'NIFTY-FUT' becomes
+        'NIFTY FUT 25 AUG 26'.
+
+        This matters for storage: 'NIFTY-FUT' rolls to a new contract at every
+        expiry, so persisting candles under the alias would silently splice two
+        different instruments into one series. Watchlist entries and stored
+        candles must always use the concrete symbol."""
+        key = self.instrument_key(tsym)
+        if not key:
+            return None
+        with self._inst_lock:
+            return self._key2sym.get(key) or (tsym or "").strip().upper()
+
+    def search_instruments(self, query: str, limit: int = 40,
+                           kind: Optional[str] = None) -> list:
+        """Rank instruments matching `query`. `kind` filters to EQ/FUT/OPT/INDEX.
+        Ordered so the useful contract surfaces first: exact hits, then nearest
+        expiry, then strike."""
+        q = (query or "").strip().upper()
+        if not q:
+            return []
+        want = None
+        if kind:
+            k = kind.upper()
+            want = {"CE", "PE"} if k in ("OPT", "OPTION") else {k}
+        toks = [t for t in q.replace("-", " ").split() if t]
+        # an exact alias hit ("NIFTY-FUT", "NIFTY 50") outranks everything —
+        # without this, "NIFTY" surfaces BANKNIFTY/MIDCPNIFTY contracts first
+        direct = self.instrument_key(q)
+        base = q.replace("-FUT", "").replace(" FUT", "").strip()
+        with self._inst_lock:
+            cat = self._cat
+        out = []
+        for rec in cat:
+            if want and rec["t"] not in want:
+                continue
+            s = rec["s"]
+            under = rec.get("u") or ""
+            name = rec.get("n") or ""
+            if not all(t in s or t in under or t in name for t in toks):
+                continue
+            if direct and rec["k"] == direct:
+                rank = 0
+            elif s == q or name == q:
+                rank = 1
+            elif s.replace(" ", "") == q.replace(" ", ""):
+                rank = 2
+            elif under == base:          # every NIFTY contract beats NIFTYNXT50
+                rank = 3
+            elif s.startswith(q):
+                rank = 4
+            else:
+                rank = 5
+            out.append((rank, rec.get("e") or 0, rec.get("x") or 0, rec))
+            if len(out) > 6000:
+                break
+        out.sort(key=lambda r: (r[0], r[1], r[2]))
+        res = []
+        for _, _, _, rec in out[:limit]:
+            res.append({
+                "tsym": rec["s"], "key": rec["k"], "type": rec["t"],
+                "underlying": rec.get("u"),
+                "expiry": (datetime.fromtimestamp(rec["e"] / 1000).strftime("%d %b %y")
+                           if rec.get("e") else None),
+                "strike": rec.get("x"), "lot_size": rec.get("l"),
+            })
+        return res
 
     # ── F&O instruments ──────────────────────────────────────────────────────
 
@@ -702,11 +850,16 @@ class UpstoxClient:
 
     def status(self) -> dict:
         with self._inst_lock:
-            inst_count = len(self._inst) // 2
+            cat = self._cat
+            inst_count = len(cat) or len(self._inst) // 2
+            by_type = {}
+            for r in cat:
+                by_type[r["t"]] = by_type.get(r["t"], 0) + 1
         return {
             "configured":         self.has_creds(),
             "logged_in":          bool(self.access_token),
             "api_key":            (self.api_key[:6] + "***") if self.api_key else "(not set)",
             "instruments_cached": inst_count,
+            "instruments_by_type": by_type,
             "redirect_uri":       self.redirect,
         }

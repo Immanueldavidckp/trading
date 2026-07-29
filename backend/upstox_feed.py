@@ -198,18 +198,31 @@ class UpstoxQuoteFeed:
         return out
 
     def add_symbol(self, query: str) -> dict:
+        """Add an equity, index, future or option. Accepts the exact trading
+        symbol ('NIFTY 24500 CE 04 AUG 26'), its space-free form, or a rolling
+        alias like 'NIFTY-FUT'; otherwise falls back to a ranked search."""
         q = (query or "").strip().upper()
         if not q:
             return {"ok": False, "error": "empty query"}
-        # resolve against the Upstox instrument master
         key = self.ux.instrument_key(q) or self.ux.instrument_key(q.replace("-EQ", ""))
         name = None
         if not key:
-            match = self._search_instruments(q)
-            if match:
-                q, key, name = match["tsym"], match["key"], match["name"]
+            hits = self.ux.search_instruments(q, limit=1)
+            if hits:
+                q, key = hits[0]["tsym"], hits[0]["key"]
+                name = hits[0].get("underlying") or q
+        elif not q.endswith("-EQ"):
+            # store the CONCRETE contract, never a rolling alias: "NIFTY-FUT"
+            # points at a different instrument after each expiry, so keeping it
+            # as the watchlist/candle key would splice two contracts together
+            canon = self.ux.canonical_symbol(q)
+            if canon:
+                q = canon
         if not key:
-            return {"ok": False, "error": f"'{query}' not found in NSE equities"}
+            return {"ok": False,
+                    "error": f"'{query}' not found. Try a symbol (RELIANCE), an index "
+                             f"(NIFTY 50), a future (NIFTY-FUT) or an option "
+                             f"(NIFTY 24500 CE 04 AUG 26)."}
         if any(w["tsym"] == q for w in self._watch):
             return {"ok": True, "already": True, "added": {"tsym": q}}
         item = {"tsym": q, "name": name or q}
@@ -225,18 +238,12 @@ class UpstoxQuoteFeed:
         return {"ok": True}
 
     def _search_instruments(self, q: str) -> Optional[dict]:
-        """Find an NSE equity by trading symbol or company name substring."""
-        with self.ux._inst_lock:
-            inst = dict(self.ux._inst)
-        # exact trading-symbol hit first
-        if q in inst:
-            return {"tsym": q, "key": inst[q], "name": q}
-        # otherwise scan names from the raw instruments file
-        try:
-            raw = json.load(open(self.ux.__class__.__dict__.get("INST_FILE", "")))  # noqa
-        except Exception:
-            raw = None
-        return None  # name search handled by instrument_key fallback for now
+        """Best single match across equities, indices and F&O."""
+        hits = self.ux.search_instruments(q, limit=1)
+        if not hits:
+            return None
+        return {"tsym": hits[0]["tsym"], "key": hits[0]["key"],
+                "name": hits[0].get("underlying") or hits[0]["tsym"]}
 
     # -- poll loop --
     def _loop(self):
