@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in — Trading Dashboard</title>
+<style>
+  :root{
+    --bg:#07090d; --bg-2:#0d1119; --panel:#12161f; --panel-2:#1a1f2b;
+    --border:#232a38; --border-bright:#2f3848;
+    --text:#e5ecf5; --text-2:#9ba6b8; --text-3:#5e6776;
+    --red:#ff5677; --red-bg:rgba(255,86,119,0.10);
+    --blue:#5e8eff; --purple:#b372ff;
+    --grad:linear-gradient(135deg,#5e8eff 0%,#b372ff 100%);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:radial-gradient(ellipse at top,rgba(94,142,255,0.07),transparent 55%),var(--bg);
+    color:var(--text);font-family:'Inter',system-ui,sans-serif;font-size:14px;
+    -webkit-font-smoothing:antialiased;display:grid;place-items:center}
+  .card{width:min(380px,92vw);background:var(--panel);border:1px solid var(--border);
+    border-radius:16px;padding:34px 30px 30px;box-shadow:0 24px 60px rgba(0,0,0,.45)}
+  .brand{display:flex;align-items:center;gap:11px;margin-bottom:26px}
+  .brand-mark{width:38px;height:38px;border-radius:10px;background:var(--grad);
+    display:grid;place-items:center;color:#fff;font-weight:700;font-size:17px}
+  .brand-name{font-weight:700;font-size:16px}
+  .brand-sub{font-size:11px;color:var(--text-3)}
+  label{display:block;font-size:11px;font-weight:600;color:var(--text-2);
+    letter-spacing:.6px;text-transform:uppercase;margin:0 0 6px 2px}
+  input{width:100%;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;
+    color:var(--text);padding:11px 13px;font-size:14px;outline:none;font-family:inherit;
+    margin-bottom:16px;transition:border-color .15s}
+  input:focus{border-color:var(--blue)}
+  button{width:100%;background:var(--grad);color:#fff;border:none;border-radius:10px;
+    padding:12px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;
+    margin-top:4px;transition:opacity .15s}
+  button:hover{opacity:.9}
+  button:disabled{opacity:.5;cursor:default}
+  .err{background:var(--red-bg);border:1px solid rgba(255,86,119,.3);color:var(--red);
+    border-radius:8px;padding:9px 12px;font-size:12.5px;margin-bottom:16px;display:none}
+  .foot{margin-top:20px;text-align:center;font-size:11px;color:var(--text-3)}
+</style>
+</head>
+<body>
+  <form class="card" id="loginForm" autocomplete="on">
+    <div class="brand">
+      <div class="brand-mark">T</div>
+      <div>
+        <div class="brand-name">Trading Dashboard</div>
+        <div class="brand-sub">Sign in to continue</div>
+      </div>
+    </div>
+    <div class="err" id="err"></div>
+    <label for="id">ID</label>
+    <input id="id" name="username" type="text" autocomplete="username" autofocus required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit" id="btn">Sign in</button>
+    <div class="foot">Access restricted — authorised accounts only</div>
+  </form>
+<script>
+  const form = document.getElementById('loginForm');
+  const err = document.getElementById('err');
+  const btn = document.getElementById('btn');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.style.display = 'none';
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          id: document.getElementById('id').value.trim(),
+          password: document.getElementById('password').value,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        window.location.href = '/live.html';
+      } else {
+        err.textContent = data.error || 'Login failed';
+        err.style.display = 'block';
+      }
+    } catch (ex) {
+      err.textContent = 'Cannot reach the server';
+      err.style.display = 'block';
+    }
+    btn.disabled = false; btn.textContent = 'Sign in';
+  });
+</script>
+</body>
+</html>

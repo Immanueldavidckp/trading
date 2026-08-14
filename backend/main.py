@@ -17,9 +17,70 @@ load_dotenv(os.path.join(_BACKEND_DIR, ".env"), override=True)
 
 from upstox_client import UpstoxClient, ALL_INTERVALS
 from upstox_feed import UpstoxQuoteFeed
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
+from fastapi import Request
+import auth
 
 app = FastAPI(title="Upstox Trading Backend")
+
+# ---------- Authentication (2 fixed accounts: super admin + user) ----------
+
+# Paths reachable without a session. The Upstox callback/autologin stay open
+# because the OAuth redirect and the daily cron hit them without a cookie.
+_AUTH_EXEMPT = (
+    "/login.html",
+    "/api/auth/login",
+    "/api/upstox/callback",
+    "/api/upstox/autologin",
+)
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if path in _AUTH_EXEMPT:
+        return await call_next(request)
+    user = auth.check_token(request.cookies.get(auth.SESSION_COOKIE, ""))
+    if user is None:
+        if path.startswith("/api/"):
+            return JSONResponse({"ok": False, "error": "not logged in"}, status_code=401)
+        return RedirectResponse(url="/login.html", status_code=302)
+    request.state.user = user
+    return await call_next(request)
+
+
+class LoginModel(BaseModel):
+    id: str
+    password: str
+
+
+@app.post("/api/auth/login")
+def auth_login(body: LoginModel):
+    if not auth.verify_password(body.id, body.password):
+        return JSONResponse({"ok": False, "error": "invalid id or password"}, status_code=401)
+    user_id = body.id.strip()
+    resp = JSONResponse({"ok": True, "id": user_id, "role": auth.USERS[user_id]["role"]})
+    resp.set_cookie(
+        auth.SESSION_COOKIE,
+        auth.make_token(user_id),
+        max_age=auth.SESSION_TTL,
+        httponly=True,
+        samesite="lax",
+    )
+    return resp
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.SESSION_COOKIE)
+    return resp
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    """Who is logged in (id + role). Middleware already guarantees a session."""
+    return {"ok": True, **request.state.user}
 
 # Enable CORS for React frontend (Vite defaults to 5173 or 5174)
 app.add_middleware(
@@ -537,6 +598,10 @@ async def ws_prices(websocket: WebSocket):
     Streams every new price change to the client as it is recorded.
     Optional query param ?tsym=RELIANCE-EQ to filter, ?backlog=N to send last N first.
     """
+    # WebSockets bypass the HTTP auth middleware — check the session cookie here.
+    if auth.check_token(websocket.cookies.get(auth.SESSION_COOKIE, "")) is None:
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
     tsym = websocket.query_params.get("tsym")
     try:
