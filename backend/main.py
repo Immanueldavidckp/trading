@@ -32,13 +32,20 @@ _AUTH_EXEMPT = (
     "/api/auth/login",
     "/api/upstox/callback",
     "/api/upstox/autologin",
+    # PWA install assets. The browser fetches the manifest and the service
+    # worker without credentials, so behind the cookie wall they'd 302 to the
+    # login page and the app would never become installable. None of them
+    # carry user data.
+    "/manifest.webmanifest",
+    "/sw.js",
 )
+_AUTH_EXEMPT_PREFIX = ("/icons/",)
 
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
-    if path in _AUTH_EXEMPT:
+    if path in _AUTH_EXEMPT or path.startswith(_AUTH_EXEMPT_PREFIX):
         return await call_next(request)
     user = auth.check_token(request.cookies.get(auth.SESSION_COOKIE, ""))
     if user is None:
@@ -1295,11 +1302,26 @@ def fo_positions():
     return _orders().get_fo_positions()
 
 
-# ---------- Root handler: redirect to /live.html ----------
+# ---------- Root handler: phones get the mobile app, desktops the dashboard ----------
+_MOBILE_UA = ("android", "iphone", "ipod", "windows phone", "blackberry", "iemobile", "opera mini")
+
+
 @app.get("/")
-def root():
-    """Redirect to the live dashboard."""
-    return RedirectResponse(url="/live.html", status_code=302)
+def root(request: Request):
+    """Send phones to the mobile app and everything else to the live dashboard.
+
+    iPad is deliberately treated as desktop — the 3-column dashboard fits a
+    tablet fine, and the phone layout would waste the screen.
+    """
+    ua = request.headers.get("user-agent", "").lower()
+    is_phone = any(t in ua for t in _MOBILE_UA)
+    return RedirectResponse(url="/m.html" if is_phone else "/live.html", status_code=302)
+
+
+@app.get("/m")
+def mobile_short():
+    """Short URL that's easy to type on a phone."""
+    return RedirectResponse(url="/m.html", status_code=302)
 
 
 # Serve static dashboard files (live.html etc.)
