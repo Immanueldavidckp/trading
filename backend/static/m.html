@@ -1571,12 +1571,15 @@ async function renderPlanShell(){
   wirePlanCtl();
   try{
     const d=await api(P.api().dates);
-    const all=Array.from(new Set([...(d.plan_dates||[]),...(d.scored_dates||[])])).sort().reverse();
-    S.planDates=all;
+    const scored=(d.scored_dates||[]).slice().sort().reverse();
+    const all=Array.from(new Set([...(d.plan_dates||[]),...scored])).sort().reverse();
+    S.planDates=all; S.scoredDates=scored;
     if(!S.planDate||!all.includes(S.planDate)){
       if(S.planSub==='score'){
+        // land on a date that actually has a scorecard; only fall back to a
+        // plain plan date (which will auto-score) when nothing is scored yet
         const t=todayIST();
-        S.planDate = all.find(x=>x<t) || all[all.length-1] || null;
+        S.planDate = scored.find(x=>x<t) || scored[0] || all.find(x=>x<t) || all[all.length-1] || null;
       } else S.planDate = all[0]||null;
     }
     $('#planBody').innerHTML = planCtl()+'<div id="pOut"><div class="empty"><span class="spin"></span></div></div>';
@@ -1752,26 +1755,32 @@ function swingCard(p,i){
       </div>
     </div></div>`;
 }
+/* the engines report rates as fractions (hit_rate 1 == 100%) but percentage
+   moves as already-multiplied numbers (book_net_pct 1.363 == 1.363%) — keep
+   the two straight or a perfect day reads as "1%" */
+const rate = v => v==null ? '—' : nf(v*100,0)+'%';
+const pctv = (v,d=2) => v==null ? '—' : nf(v,d)+'%';
+const pf   = v => v==null ? '—' : (v>=999 ? '∞' : nf(v,2));
 function scoreTiles(sc){
   const swing=S.planMode==='swing';
   const t=(l,v,s,c)=>`<div class="tile"><span>${l}</span><b class="${c||''}">${v}</b><div class="hint" style="margin:2px 0 0">${s}</div></div>`;
   return `<div class="tiles" style="margin-bottom:10px">
     ${swing
       ? t('Swings taken',(sc.n_trades||0),`${sc.n_win||0}W / ${sc.n_loss||0}L · ${sc.n_no_trade||0} no-trade · ${sc.n_open||0} open`)
-      : t('Win rate',nf(sc.hit_rate,0)+'%',`${sc.n_win||0}W / ${sc.n_loss||0}L of ${sc.n_trades||0} taken`)}
+      : t('Win rate',rate(sc.hit_rate),`${sc.n_win||0}W / ${sc.n_loss||0}L of ${sc.n_trades||0} taken`)}
     ${swing
-      ? t('Hit rate',nf(sc.hit_rate,0)+'%','closed swings only')
+      ? t('Hit rate',rate(sc.hit_rate),'closed swings only')
       : t('Stood down',(sc.n_no_trade||0),`flow said don't trade · ${sc.n_pending||0} pending`)}
     ${swing
-      ? t('Expectancy / swing',nf(sc.expectancy_pct,2)+'%',`net of ~${nf(sc.cost_pct_per_trade||0.35,2)}% cost`,cls(sc.expectancy_pct))
-      : t('Plan success',nf(sc.checks_success,0)+'%',`✓${sc.checks_right||0} · ✗${sc.checks_wrong||0} predictions`)}
+      ? t('Expectancy / swing',pctv(sc.expectancy_pct),`net of ~${nf(sc.cost_pct_per_trade||0.35,2)}% cost`,cls(sc.expectancy_pct))
+      : t('Plan success',rate(sc.checks_success),`✓${sc.checks_right||0} · ✗${sc.checks_wrong||0} predictions`)}
     ${swing
-      ? t('Book net',nf(sc.book_net_pct,2)+'%','one primary swing per stock',cls(sc.book_net_pct))
-      : t('Expectancy',nf(sc.expectancy_bps,0)+' bps','net of cost',cls(sc.expectancy_bps))}
-    ${t('Profit factor',nf(sc.profit_factor,2),'gains ÷ losses')}
+      ? t('Book net',pctv(sc.book_net_pct),'one primary swing per stock',cls(sc.book_net_pct))
+      : t('Expectancy',sc.expectancy_bps==null?'—':nf(sc.expectancy_bps,0)+' bps','net of cost',cls(sc.expectancy_bps))}
+    ${t('Profit factor',pf(sc.profit_factor),'gains ÷ losses')}
     ${swing
-      ? t('Avg days held',nf(sc.avg_days_held,1),`open unrealized: ${nf(sc.open_unrealized_pct,2)}%`)
-      : t('Book net',nf(sc.book_net_pct,2)+'%','sum of primary trades',cls(sc.book_net_pct))}
+      ? t('Avg days held',sc.avg_days_held==null?'—':nf(sc.avg_days_held,1),`open unrealized: ${pctv(sc.open_unrealized_pct)}`)
+      : t('Book net',pctv(sc.book_net_pct),'sum of primary trades',cls(sc.book_net_pct))}
   </div>
   <div class="scen" style="margin-bottom:10px">📏 <b>Honest read:</b> ${esc(sc.honesty_note||'Simulated, cost-adjusted replay. Small samples prove nothing.')}</div>`;
 }
@@ -1789,7 +1798,7 @@ function scoreCard(r,i){
           ${oc?`<span class="pill ${ocPill}">${esc(oc.toUpperCase())}</span>`:''}
           <span class="pill n">score ${nf(r.score,0)}</span>
           <span class="pill ${chipFor(r.conviction)}">${esc(r.conviction||'')}</span>
-          ${a.right!=null?`<span class="pill n">✓${a.right} ✗${a.wrong||0} · ${nf(a.success_rate,0)}%</span>`:''}
+          ${a.right!=null?`<span class="pill n">✓${a.right} ✗${a.wrong||0} · ${rate(a.success_rate)}</span>`:''}
           ${r.primary?'<span class="pill b">primary ✓</span>':''}
         </div></div></div>
     <div class="pc-b">
