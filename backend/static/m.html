@@ -415,6 +415,8 @@ canvas.cv{width:100%;display:block;border-radius:var(--r-sm);touch-action:pan-y}
           <button class="chip sm" id="refBtn">↻ Refresh</button>
           <button class="chip sm" id="pauseBtn">⏸ Pause</button>
           <button class="chip sm" id="alertBtn">🔔 Alerts</button>
+          <button class="chip sm" id="planOvBtn">📋 Plan</button>
+          <button class="chip sm" id="sigBtn">🎯 Signals</button>
         </div>
       </div>
       <div id="cs-book" class="cs view-body" style="display:none"></div>
@@ -1019,6 +1021,89 @@ $('#alertBtn').onclick= ()=>{
     };});
 };
 
+/* ── per-symbol plan overlay (live.html's plan bar, as a sheet) ─────────── */
+const OUTCOME={win:['✓ WIN','g'],loss:['✗ LOSS','r'],'no-trade':['— NO TRADE','n'],
+               no_trade:['— NO TRADE','n'],in_progress:['◐ IN PROGRESS','y'],waiting:['○ WAITING','n']};
+const VICON={pass:'✓',fail:'✗',pending:'○',info:'●'};
+$('#planOvBtn').onclick = ()=>{
+  if(!S.sym) return toast('Pick an instrument first.');
+  sheet(`Plan — ${S.sym}`,'<div class="empty"><span class="spin"></span></div>',loadPlanOverlay);
+};
+async function loadPlanOverlay(){
+  try{
+    const d=await api(`/api/plan/setup_status?tsym=${encodeURIComponent(S.sym)}`);
+    if(!d.ok){ $('#shB').innerHTML=`<div class="empty">${esc(d.error||'no plan for this stock')}</div>`; return; }
+    const h=d.headline||{}, dec=d.decision||{}, oe=d.open_eval||{};
+    const [otxt,ocls]=OUTCOME[d.outcome]||[String(d.outcome||'—'),'n'];
+    $('#shB').innerHTML=
+      `<div class="row wrap" style="gap:5px;margin-bottom:9px">
+         <span class="pill ${ocls}">${esc(otxt)}</span>
+         <span class="pill n">${esc(d.plan_date||'')}${d.is_today?' · TODAY':''}</span>
+         <span class="pill ${chipFor(d.bias)}">${esc(d.bias||'')}</span>
+         <span class="pill n">${esc(d.cpr_class||'')} CPR</span>
+         <span class="pill ${chipFor(d.conviction)}">${esc(d.conviction||'')}</span></div>
+       <div class="between" style="margin-bottom:9px"><span class="mono" style="font-size:16px;font-weight:700">${rs(d.ltp)}</span>
+         <span class="mono ${cls(d.change_pct)}">${pct(d.change_pct)}</span></div>
+       <div class="scen">🎯 ${esc(h.read||'')}${h.primary_play?`<br><br>▶ <b>${esc(h.primary_play)}</b>`:''}</div>
+       ${ul(h.if_then)}
+       ${oe.text?`<div class="scen">📊 ${esc(oe.text)}</div>`:''}
+       ${d.day_type_hint?`<div class="hint">${esc(d.day_type_hint)}</div>`:''}
+       <div class="sec-label">Decision checkpoints</div>
+       ${(dec.checkpoints||[]).map(c=>`<div class="lpm-s"><div class="between">
+          <span><b>${c.n}. ${esc(c.name||'')}</b></span>
+          <span class="pill ${c.verdict==='pass'?'g':c.verdict==='fail'?'r':c.verdict==='pending'?'y':'n'}">${VICON[c.verdict]||'●'}</span></div>
+          <span class="d">${esc(c.result||'')}</span></div>`).join('')||'<div class="hint">evaluating…</div>'}
+       ${dec.selected?`<div class="hint" style="margin-top:8px">Selected: <b>${esc(dec.selected)}</b> · day type <b>${esc(dec.daytype||'')}</b></div>`:''}
+       <div class="sec-label">Setups</div>
+       ${(d.setups||[]).map(s=>{
+         const bad=s.verdict==='fail';
+         return `<div class="scen" style="${bad?'opacity:.6':''}">
+           <div class="between"><span>${s.selected?'★ ':''}${esc(s.icon||'')} <b class="${s.side==='LONG'?'g':'r'}">${esc(s.side||'')}</b> ${esc(s.name||'')}</span>
+             <span class="pill ${bad?'r':'g'}">${esc(s.label||s.status||'')}</span></div>
+           <div class="hint mono">trig ${nf(s.trigger_price)} · e ${nf(s.entry)} · sl ${nf(s.stop)} · t ${(s.targets||[]).map(t=>nf(t)).join('/')}${s.dist_pct!=null?` · ${nf(s.dist_pct,2)}% away`:''}</div>
+           ${s.filter_reason?`<div class="hint r">${esc(s.filter_reason)}</div>`:`<div class="hint">${esc(s.valid_when||'')}</div>`}</div>`;
+       }).join('')||'<div class="hint">no setups</div>'}
+       ${(d.obs||[]).length?`<div class="sec-label">Plan order blocks</div>
+         ${d.obs.map(o=>`<div class="between" style="padding:4px 0;font-size:var(--fs-sm)">
+           <span class="${o.dir==='bear'?'r':'g'}">${esc(o.dir||'')} OB</span>
+           <span class="mono">${nf(o.bottom)} – ${nf(o.top)}</span></div>`).join('')}`:''}
+       <button class="btn full" style="margin-top:14px" onclick="sheetClose();nav('plan')">Open the full plan</button>`;
+  }catch(e){ $('#shB').innerHTML='<div class="empty">could not load the plan</div>'; }
+}
+/* ── signals: multi-TF read + backtested FVG plans ──────────────────────── */
+$('#sigBtn').onclick = ()=>{
+  if(!S.sym) return toast('Pick an instrument first.');
+  sheet(`Signals — ${S.sym}`,'<div class="empty"><span class="spin"></span></div>',loadSignals);
+};
+async function loadSignals(){
+  try{
+    const [sg,fv]=await Promise.all([
+      api(`/api/suggestion?tsym=${encodeURIComponent(S.sym)}`).catch(()=>null),
+      api(`/api/fvg_plan?tsym=${encodeURIComponent(S.sym)}`).catch(()=>null),
+    ]);
+    const rows=(sg&&sg.suggestions)||[];
+    const plans=(fv&&fv.plans)||[];
+    $('#shB').innerHTML=
+      `<div class="sec-label">Multi-timeframe read</div>
+       ${rows.length?`<div class="tw"><table class="t"><thead><tr><th>TF</th><th>Trend</th><th>Dir</th><th>Entry</th><th>Target</th><th>Zone</th></tr></thead>
+         <tbody>${rows.map(r=>`<tr><td style="text-align:left"><b>${esc(r.interval)}</b></td>
+           <td class="${chipFor(r.bias)==='g'?'g':chipFor(r.bias)==='r'?'r':'m'}">${esc(r.trend||'')}</td>
+           <td>${esc(r.direction||'')}</td><td class="mono">${nf(r.entry)}</td>
+           <td class="mono g">${nf(r.target)}</td><td class="d">${esc(r.zone||'')}</td></tr>`).join('')}
+         </tbody></table></div>
+         ${rows[0]&&rows[0].rationale?`<div class="hint" style="margin-top:8px">${esc(rows[0].interval)}: ${esc(rows[0].rationale)}</div>`:''}`
+        :'<div class="hint">no read available</div>'}
+       <div class="sec-label">Backtested FVG plans</div>
+       ${plans.length?plans.map(p=>{
+         const m=p.min_target||{};
+         return `<div class="scen"><div class="between"><b>${esc(p.interval)}</b>
+           ${m.win_rate!=null?`<span class="pill ${m.win_rate>=0.5?'g':'n'}">${rate(m.win_rate)} win</span>`:''}</div>
+           <div class="hint mono">${m.profit_per_share!=null?`₹${nf(m.profit_per_share)}/share`:''}${m.n!=null?` · n=${m.n}`:''}${m.ev!=null?` · EV ${nf(m.ev,2)}`:''}</div></div>`;
+       }).join(''):'<div class="hint">no FVG plans for this symbol</div>'}
+       <div class="hint" style="margin-top:10px">Analysis only — these are historical statistics, not advice.</div>`;
+  }catch(e){ $('#shB').innerHTML='<div class="empty">signals unavailable</div>'; }
+}
+
 /* ── chart sub-tabs ─────────────────────────────────────────────────────── */
 seg('#chartSeg',s=>{
   S.chartSub=s;
@@ -1115,6 +1200,8 @@ async function loadBook(){
          <div class="imb"><i style="width:${imb}%"></i></div>
        </div>
        <div class="card"><div class="between" style="font-size:var(--fs-sm)"><span class="m">LTP</span><span class="mono">${rs(d.ltp)}</span></div>
+         <div class="between" style="font-size:var(--fs-sm);margin-top:6px"><span class="m">Microprice</span><span class="mono">${
+           (bid!=null&&ask!=null&&(tb+ts))?nf((bid*ts+ask*tb)/(tb+ts)):'—'}</span></div>
          <div class="between" style="font-size:var(--fs-sm);margin-top:6px"><span class="m">ATP</span><span class="mono">${rs(d.atp)}</span></div>
          <div class="between" style="font-size:var(--fs-sm);margin-top:6px"><span class="m">Volume</span><span class="mono">${cmp(d.volume)}</span></div>
          <div class="between" style="font-size:var(--fs-sm);margin-top:6px"><span class="m">Open interest</span><span class="mono">${cmp(d.oi)}</span></div>
