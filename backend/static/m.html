@@ -289,11 +289,12 @@ table.t tr:last-child td{border-bottom:none}
 /* ── CHART ─────────────────────────────────────────────────────────────── */
 #chartWrap{position:relative;width:100%;background:var(--bg);touch-action:none}
 #mchart{width:100%;height:100%}
-#ohlcBar{
+#ohlcBar,#kpiBar{
   font-size:var(--fs-xs);padding:6px 12px;border-bottom:1px solid var(--border);
   background:var(--bg-2);white-space:nowrap;overflow-x:auto;scrollbar-width:none;color:var(--text-2);flex:0 0 auto;
 }
-#ohlcBar::-webkit-scrollbar{display:none}
+#ohlcBar::-webkit-scrollbar,#kpiBar::-webkit-scrollbar{display:none}
+#kpiBar{padding-top:5px;padding-bottom:5px;color:var(--text-3)}
 .tf-row{display:flex;gap:5px;padding:7px 12px;overflow-x:auto;scrollbar-width:none;background:var(--bg-2);border-bottom:1px solid var(--border);flex:0 0 auto}
 .tf-row::-webkit-scrollbar{display:none}
 .tf-row .chip{min-height:32px;padding:0 12px;font-size:var(--fs-sm)}
@@ -403,6 +404,7 @@ canvas.cv{width:100%;display:block;border-radius:var(--r-sm);touch-action:pan-y}
       </div>
       <div id="cs-chart" class="cs" style="display:flex;flex-direction:column;flex:1;min-height:0">
         <div class="tf-row" id="tfRow"></div>
+        <div id="kpiBar">bid — · ask — · spread — · vol — · —</div>
         <div id="ohlcBar">hover / drag the chart…</div>
         <div id="chartWrap" style="flex:1;min-height:0"><div id="mchart"></div></div>
         <div class="tf-row" style="border-top:1px solid var(--border);border-bottom:none">
@@ -411,6 +413,7 @@ canvas.cv{width:100%;display:block;border-radius:var(--r-sm);touch-action:pan-y}
           <button class="chip sm" id="zoomBtn">⤢ Reset</button>
           <button class="chip sm" id="logBtn">Log: off</button>
           <button class="chip sm" id="refBtn">↻ Refresh</button>
+          <button class="chip sm" id="pauseBtn">⏸ Pause</button>
           <button class="chip sm" id="alertBtn">🔔 Alerts</button>
         </div>
       </div>
@@ -979,6 +982,25 @@ $('#smcBtn').onclick = ()=>{
         : 'no SMC data yet';
     });
 };
+/* the six KPI readings live.html shows above its chart; LTP and change are
+   already in the header, so this strip carries the other four plus the stamp */
+function updateKpi(t){
+  const n=$('#kpiBar'); if(!n||!t) return;
+  const bid=t.bid>0?t.bid:null, ask=t.ask>0?t.ask:null;
+  const spr=(bid!=null&&ask!=null)?ask-bid:null;
+  n.innerHTML =
+    `<span class="m">bid</span> <span class="mono g">${bid!=null?nf(bid):'—'}</span> · `+
+    `<span class="m">ask</span> <span class="mono r">${ask!=null?nf(ask):'—'}</span> · `+
+    `<span class="m">spread</span> <span class="mono">${spr!=null?nf(spr):'—'}</span> · `+
+    `<span class="m">vol</span> <span class="mono">${cmp(t.volume)}</span> · `+
+    `<span class="mono d">${ist(new Date(t.received_at).getTime())} IST</span>`;
+}
+$('#pauseBtn').onclick = ()=>{
+  S.paused=!S.paused;
+  $('#pauseBtn').textContent = S.paused?'▶ Resume':'⏸ Pause';
+  $('#pauseBtn').classList.toggle('on',S.paused);
+  setConn(S.paused?'closed':'live');
+};
 $('#zoomBtn').onclick = ()=>{ if(S.chart) S.chart.dispatchAction({type:'dataZoom',start:0,end:100}); };
 $('#logBtn').onclick  = ()=>{ S.logScale=!S.logScale; renderChart(); };
 $('#refBtn').onclick  = refreshChart;
@@ -1023,6 +1045,7 @@ function startChartTab(){
   if(s==='drill'){ initDrill(); }
 }
 async function pollLive(){
+  if(S.paused) return;
   if(!S.sym||!S.candles.length) return;
   try{
     const lim=S.tfLimit||S.limit;
@@ -1041,13 +1064,14 @@ function wsOpen(){
   let ws; try{ ws=new WebSocket(url); }catch(e){ return; }
   S.ws=ws;
   ws.onmessage = ev=>{
+    if(S.paused) return;
     let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
     const rows=m.rows||[]; if(!rows.length) return;
     rows.forEach(r=>{ S.ticks.unshift(r); });
     S.ticks=S.ticks.slice(0,300);
     const last=rows[rows.length-1];
     S.ltp=last.lp; S.chgPct=last.change_pct; S.lastTickTs=Date.now();
-    setHeader(); setConn('live');
+    setHeader(); setConn('live'); updateKpi(last);
     if(S.tab==='chart'&&S.chartSub==='ticks') renderTicks();
   };
   ws.onclose = ()=>{ S.ws=null; S.wsTimer=setTimeout(()=>{ if(!document.hidden) wsOpen(); },4000); };
@@ -1110,10 +1134,13 @@ function renderTicks(){
      <div class="tw"><table class="t"><thead><tr>
        <th>Time</th><th>Price</th><th>Bid</th><th>Ask</th><th>Spr</th><th>Vol Δ</th></tr></thead><tbody>
        ${S.ticks.slice(0,200).map(t=>{
-         const spr=(t.ask!=null&&t.bid!=null)?t.ask-t.bid:null;
+         // outside market hours one side of the book is 0 — don't render a
+         // phantom quote or a negative spread from it
+         const bid=t.bid>0?t.bid:null, ask=t.ask>0?t.ask:null;
+         const spr=(bid!=null&&ask!=null)?ask-bid:null;
          return `<tr><td class="mono d">${ist(new Date(t.received_at).getTime())}</td>
            <td class="mono ${cls(t.change)}">${nf(t.lp)}</td>
-           <td class="mono g">${nf(t.bid)}</td><td class="mono r">${nf(t.ask)}</td>
+           <td class="mono g">${bid!=null?nf(bid):'—'}</td><td class="mono r">${ask!=null?nf(ask):'—'}</td>
            <td class="mono m">${spr!=null?nf(spr):'—'}</td><td class="mono">${cmp(t.volume)}</td></tr>`;
        }).join('')}</tbody></table></div>`;
 }
