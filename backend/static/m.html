@@ -1062,7 +1062,12 @@ async function loadBook(){
     let d = S.depth30 ? await api(`/api/upstox/depth30?tsym=${encodeURIComponent(S.sym)}`) : null;
     if(!d||d.stat!=='Ok') d = await api(`/api/upstox/depth?tsym=${encodeURIComponent(S.sym)}`);
     if(d.stat!=='Ok'){ box.innerHTML='<div class="empty">waiting for depth…</div>'; return; }
-    const buy=d.buy||[], sell=d.sell||[];
+    /* the feed pads the book out to a fixed level count with zero-price rows
+       once the session closes — drop those or the ladder shows phantom levels
+       and the spread comes out negative. Quantities are `quantity`, not `qty`. */
+    const lv = a => (a||[]).filter(x=>x&&x.price>0).map(x=>({price:x.price,qty:x.quantity!=null?x.quantity:x.qty,orders:x.orders}));
+    const buy=lv(d.buy), sell=lv(d.sell);
+    if(!buy.length&&!sell.length){ box.innerHTML='<div class="empty">no depth right now — the book fills during market hours.</div>'; return; }
     const mx=Math.max(...buy.map(x=>x.qty||0),...sell.map(x=>x.qty||0),1);
     const tb=buy.reduce((a,b)=>a+(b.qty||0),0), ts=sell.reduce((a,b)=>a+(b.qty||0),0);
     const imb=tb+ts?tb/(tb+ts)*100:50;
@@ -1235,12 +1240,14 @@ async function loadDrillTicks(start){
        <div class="card"><div class="card-t">Every tick in this candle</div>
          <div class="card-s">Tap a tick to expand its 5-level book. ⚡ = control flipped.</div>
          <div class="tw"><table class="t"><thead><tr><th>#</th><th>Time</th><th>Price</th><th>Aggr.</th><th>Vol</th><th>Imb.</th></tr></thead>
-         <tbody id="drTicks">${(d.ticks||[]).map((t,i)=>
-           `<tr data-i="${i}"><td class="d">${i+1}</td><td class="mono d">${ist(t.t||t.received_at)}</td>
-            <td class="mono">${nf(t.price!=null?t.price:t.lp)}</td>
-            <td class="${t.aggressor==='BUY'?'g':'r'}" style="font-weight:700;font-size:11px">${esc(t.aggressor||'')}${t.flip?' ⚡':''}</td>
-            <td class="mono">${cmp(t.vol||t.volume)}</td>
-            <td class="mono ${cls(t.imbalance)}">${t.imbalance!=null?(t.imbalance).toFixed(0)+'%':'—'}</td></tr>`).join('')}
+         <tbody id="drTicks">${(d.ticks||[]).map((t,i,arr)=>{
+           const agg=String(t.agg||'').toUpperCase();
+           const flip=i>0 && String(arr[i-1].agg||'').toUpperCase()!==agg;   // ⚡ = control changed hands
+           return `<tr data-i="${i}"><td class="d">${i+1}</td><td class="mono d">${esc(t.t||'')}</td>
+            <td class="mono">${nf(t.ltp)}</td>
+            <td class="${agg==='BUY'?'g':'r'}" style="font-weight:700;font-size:11px">${esc(agg)}${flip?' ⚡':''}</td>
+            <td class="mono">${cmp(t.vol)}</td>
+            <td class="mono ${cls(t.imb)}">${t.imb!=null?Number(t.imb).toFixed(0)+'%':'—'}</td></tr>`;}).join('')}
          </tbody></table></div></div>`;
     drill.ticks=d.ticks||[];
     $$('#drTicks tr').forEach(tr=>tr.onclick=()=>expandTick(tr,+tr.dataset.i));
@@ -1251,12 +1258,13 @@ function expandTick(tr,i){
   if(nx&&nx.classList.contains('exp')){ nx.remove(); return; }
   $$('#drTicks tr.exp').forEach(n=>n.remove());
   const t=drill.ticks[i]; if(!t) return;
-  const buy=t.buy||[], sell=t.sell||[];
-  const row=(x,c)=>`<div class="between" style="font-size:11px;padding:2px 0"><span class="mono ${c}">${nf(x.price)}</span><span class="mono m">${cmp(x.qty)}</span></div>`;
+  const lv=a=>(a||[]).filter(x=>x&&x.price>0);
+  const buy=lv(t.buy), sell=lv(t.sell);
+  const row=(x,c)=>`<div class="between" style="font-size:11px;padding:2px 0"><span class="mono ${c}">${nf(x.price)}</span><span class="mono m">${cmp(x.quantity!=null?x.quantity:x.qty)}</span></div>`;
   const td=el('tr','exp');
   td.innerHTML=`<td colspan="6" style="background:var(--panel-2);padding:9px">
     ${sell.slice().reverse().map(x=>row(x,'r')).join('')}
-    <div class="dl-spread" style="margin:5px 0">5-level book @ ${ist(t.t||t.received_at)} · OI ${cmp(t.oi)}</div>
+    <div class="dl-spread" style="margin:5px 0">5-level book @ ${esc(t.t||'')} · OI ${cmp(t.oi)}</div>
     ${buy.map(x=>row(x,'g')).join('')}</td>`;
   tr.after(td);
 }
@@ -1910,9 +1918,10 @@ async function loadLive(){
     const rows=d.rows||[];
     if(!rows.length){ $('#lpmList').innerHTML='<div class="empty">no stocks in the plan</div>'; return; }
     $('#lpmList').innerHTML=rows.map(r=>{
-      const ob=r.ob||{};
-      const obBadge = ob.touching?`<span class="pill r">⛏ AT ORDER BLOCK ${esc((ob.zone||[]).join('–'))}</span>`
-                    : ob.approaching?`<span class="pill y">⛏ approaching OB · ${nf(ob.dist_pct,2)}%</span>`:'';
+      const ob=r.ob||{}, z=ob.zone||{};
+      const zt = z.bottom!=null ? `${nf(z.bottom)}–${nf(z.top)}` : '';
+      const obBadge = ob.touching?`<span class="pill r">⛏ AT ORDER BLOCK ${esc(zt)}</span>`
+                    : ob.approaching?`<span class="pill y">⛏ approaching OB · ${nf(ob.dist_pct,2)}%${zt?' · '+esc(zt):''}</span>`:'';
       return `<div class="lpm${r.priority?' prio':''}${!r.in_play?' idle':''}" onclick="openChart('${esc(r.tsym)}')">
         <div class="between"><span style="font-weight:700">${esc(r.tsym)}</span>
           <span><span class="mono">${rs(r.ltp)}</span> <span class="mono ${cls(r.change_pct)}">${pct(r.change_pct)}</span></span></div>
