@@ -105,6 +105,35 @@ public class MainActivity extends Activity {
         web.setBackgroundColor(Color.parseColor("#07090d"));
         setContentView(web);
 
+        // Android 15+ forces edge-to-edge for targetSdk 35+, so the status bar
+        // and the gesture pill draw straight over the page — the bottom tab
+        // bar's middle label ends up under the pill. A WebView doesn't feed
+        // those insets to CSS env(safe-area-inset-*), so inset the view itself.
+        // The window background is the same colour, so the bars blend in.
+        web.setOnApplyWindowInsetsListener(new android.view.View.OnApplyWindowInsetsListener() {
+            @Override
+            public android.view.WindowInsets onApplyWindowInsets(
+                    android.view.View v, android.view.WindowInsets insets) {
+                int l, t, r, b;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    android.graphics.Insets i = insets.getInsets(
+                            android.view.WindowInsets.Type.systemBars()
+                                    | android.view.WindowInsets.Type.displayCutout());
+                    l = i.left; t = i.top; r = i.right; b = i.bottom;
+                } else {
+                    l = insets.getSystemWindowInsetLeft();
+                    t = insets.getSystemWindowInsetTop();
+                    r = insets.getSystemWindowInsetRight();
+                    b = insets.getSystemWindowInsetBottom();
+                }
+                v.setPadding(l, t, r, b);
+                return insets;
+            }
+        });
+        // Insets are dispatched when the view attaches, which already happened
+        // in setContentView above — ask for another pass now the listener exists.
+        web.requestApplyInsets();
+
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);

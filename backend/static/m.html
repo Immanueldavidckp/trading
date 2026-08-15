@@ -775,7 +775,9 @@ function renderChart(){
 
   // panes: price always; volume / rsi / macd stack underneath when enabled
   const subs=[]; if(S.ind.vol)subs.push('vol'); if(S.ind.rsi)subs.push('rsi'); if(S.ind.macd)subs.push('macd');
-  const subH=14, gap=3, topPad=6, botPad=20;
+  // botPad only has to fit one row of time labels; anything more is chart
+  // area thrown away, which on a 375px-wide phone is the scarcest thing there is
+  const subH=14, gap=3, topPad=6, botPad=9;
   const priceH = 100 - botPad - topPad - subs.length*(subH+gap);
   const grids=[{left:6,right:52,top:topPad+'%',height:priceH+'%',containLabel:false}];
   const xAxes=[{type:'category',data:labels,gridIndex:0,scale:true,boundaryGap:true,

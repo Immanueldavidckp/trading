@@ -7,7 +7,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="36" />
+    <!-- targetSdk 34 on purpose. From 35 Android forces edge-to-edge, which
+         draws the status bar and gesture pill over the page; a WebView does
+         not feed those insets to CSS env(safe-area-inset-*), so the bottom
+         tab bar ends up under the pill. Targeting 34 keeps the system
+         insetting the window, which is exactly what this layout wants.
+         Nothing here needs a 35+ API, and the app is sideloaded, so no Play
+         Store target requirement applies. -->
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="34" />
 
     <application
         android:allowBackup="true"
