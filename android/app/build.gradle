@@ -1,0 +1,51 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Signing credentials live in the gitignored keystore/keystore.properties so
+// no password is ever committed. Without it, only debug builds are possible.
+def ksProps = new Properties()
+def ksFile = rootProject.file('keystore/keystore.properties')
+if (ksFile.exists()) ksFile.withInputStream { ksProps.load(it) }
+
+android {
+    namespace 'online.scratchforge.trade'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "online.scratchforge.trade"
+        // TWA needs a Chrome that supports Trusted Web Activities; 23 is the
+        // practical floor and covers essentially every phone in use.
+        minSdk 23
+        targetSdk 36
+        versionCode 1
+        versionName "1.0"
+    }
+
+    if (ksFile.exists()) {
+        signingConfigs {
+            release {
+                storeFile rootProject.file("keystore/${ksProps.getProperty('storeFile')}")
+                storePassword ksProps.getProperty('storePassword')
+                keyAlias ksProps.getProperty('keyAlias')
+                keyPassword ksProps.getProperty('keyPassword')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (ksFile.exists()) signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}

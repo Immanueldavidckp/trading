@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the launcher icon to jump straight to a tab, mirroring the
+     shortcuts declared in manifest.webmanifest. MainActivity reads the "url"
+     extra; shortcut <intent> elements carry extras reliably across versions
+     where an android:data URI does not. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="chart"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_chart">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="online.scratchforge.trade"
+            android:targetClass="online.scratchforge.trade.MainActivity">
+            <extra android:name="url" android:value="https://trade.scratchforge.online/m.html?tab=chart" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="flow"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_flow">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="online.scratchforge.trade"
+            android:targetClass="online.scratchforge.trade.MainActivity">
+            <extra android:name="url" android:value="https://trade.scratchforge.online/m.html?tab=flow" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="plan"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_plan">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="online.scratchforge.trade"
+            android:targetClass="online.scratchforge.trade.MainActivity">
+            <extra android:name="url" android:value="https://trade.scratchforge.online/m.html?tab=plan" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="trade"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_trade">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="online.scratchforge.trade"
+            android:targetClass="online.scratchforge.trade.MainActivity">
+            <extra android:name="url" android:value="https://trade.scratchforge.online/m.html?tab=trade" />
+        </intent>
+    </shortcut>
+</shortcuts>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark window background so launching the app never flashes white
+         before the page paints. -->
+    <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/backgroundColor</item>
+        <item name="android:colorPrimary">@color/colorPrimary</item>
+        <item name="android:colorPrimaryDark">@color/colorPrimary</item>
+        <item name="android:navigationBarColor">@color/navigationColor</item>
+        <item name="android:statusBarColor">@color/colorPrimary</item>
+    </style>
+</resources>

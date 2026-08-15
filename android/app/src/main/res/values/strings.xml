@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">scratchforge</string>
+    <string name="launch_url">https://trade.scratchforge.online/m.html</string>
+    <string name="shortcut_chart">Chart</string>
+    <string name="shortcut_flow">Order flow</string>
+    <string name="shortcut_plan">Day plan</string>
+    <string name="shortcut_trade">Trade</string>
+</resources>

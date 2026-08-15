@@ -1,0 +1,7 @@
+# Never commit the signing key — whoever holds it can publish updates as you.
+keystore/
+local.properties
+.gradle/
+build/
+app/build/
+*.apk

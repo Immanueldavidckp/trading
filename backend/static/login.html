@@ -77,7 +77,10 @@
       });
       const data = await res.json();
       if (res.ok && data.ok) {
-        window.location.href = '/live.html';
+        // Go to "/" rather than a fixed page so the server's user-agent
+        // routing decides: phones land on the mobile app, desktops on the
+        // full dashboard. Hardcoding /live.html sent phones to the desktop UI.
+        window.location.href = '/';
       } else {
         err.textContent = data.error || 'Login failed';
         err.style.display = 'block';
