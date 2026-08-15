@@ -2433,7 +2433,18 @@ function foConfirmExec(i){
 /* ═══════════════════════════════════════════════════════════════════════════
    BOOT — last, so every module's constants are initialised before it runs
    ═══════════════════════════════════════════════════════════════════════════ */
-(function boot(){
+/* Adopt the first watchlist instrument when none was given. Without this,
+   opening straight onto a non-Watch tab — which is exactly what the Android
+   launcher shortcuts and ?tab= deep links do — lands on an empty screen. */
+async function seedSymbol(){
+  try{
+    const d=await api('/api/yahoo/symbols');
+    const first=(d.symbols||[])[0];
+    if(first && !S.sym){ S.sym=first.tsym; S.name=first.name||''; setHeader(); }
+  }catch(e){}
+}
+
+(async function boot(){
   const p=new URLSearchParams(location.search);
   const deep=p.get('tsym');
   if(deep){ S.sym=deep.toUpperCase(); }
@@ -2441,8 +2452,9 @@ function foConfirmExec(i){
   const t=p.get('tab'); if(t && ['watch','chart','flow','plan','trade'].includes(t)) S.tab=t;
   $$('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===S.tab));
   buildTfRow();
-  nav(S.tab);
   if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  if(!S.sym && S.tab!=='watch') await seedSymbol();
+  nav(S.tab);
 })();
 </script>
 </body>
