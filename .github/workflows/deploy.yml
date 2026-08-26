@@ -1,68 +1,139 @@
 name: Deploy Trading Backend
 
+# Push to main -> CI -> deploy to Lightsail -> health check (rollback on fail).
+# Use the "Run workflow" button with a SHA to redeploy or roll back by hand.
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit SHA, branch or tag to deploy (blank = this branch head)'
+        required: false
+        default: ''
+
+# One deploy at a time, and never cancel one mid-flight — a half-applied
+# release on the box is worse than waiting.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   deploy:
+    needs: ci
     runs-on: ubuntu-latest
-
+    environment: production
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the ref to deploy
+        id: target
+        run: |
+          # The server resolves this to a commit after fetching origin, so a
+          # branch name or tag works here as well as a full SHA.
+          echo 'ref=${{ inputs.ref || github.sha }}' >> "$GITHUB_OUTPUT"
+          echo 'Deploying ${{ inputs.ref || github.sha }}'
+
       - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT || '22' }}
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          test -n "$SSH_PRIVATE_KEY" || { echo "::error::secret SSH_PRIVATE_KEY is not set"; exit 1; }
+          test -n "$SERVER_HOST"     || { echo "::error::secret SERVER_HOST is not set"; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -p "$SSH_PORT" -H "$SERVER_HOST" >> ~/.ssh/known_hosts
 
-      - name: Deploy to Lightsail
+      - name: Render .env from secrets
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          # Default MOCK_MODE to paper trading. Going live is a deliberate act:
+          # set the repo variable MOCK_MODE=false, never a code change.
+          MOCK_MODE: ${{ vars.MOCK_MODE || 'true' }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          UPSTOX_API_KEY: ${{ secrets.UPSTOX_API_KEY }}
+          UPSTOX_API_SECRET: ${{ secrets.UPSTOX_API_SECRET }}
+          UPSTOX_USERNAME: ${{ secrets.UPSTOX_USERNAME }}
+          UPSTOX_PIN_CODE: ${{ secrets.UPSTOX_PIN_CODE }}
+          UPSTOX_TOTP_SECRET: ${{ secrets.UPSTOX_TOTP_SECRET }}
+          SHOONYA_USER_ID: ${{ secrets.SHOONYA_USER_ID }}
+          SHOONYA_PASSWORD: ${{ secrets.SHOONYA_PASSWORD }}
+          SHOONYA_VENDOR_CODE: ${{ secrets.SHOONYA_VENDOR_CODE }}
+          SHOONYA_API_KEY: ${{ secrets.SHOONYA_API_KEY }}
+          SHOONYA_TOTP_SECRET: ${{ secrets.SHOONYA_TOTP_SECRET }}
+          SHOONYA_IMEI: ${{ vars.SHOONYA_IMEI || 'abc1234' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
         run: |
-          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.SERVER_HOST }} 'bash -s' <<'EOF'
-            set -e
+          BASE="${PUBLIC_BASE_URL:-http://$SERVER_HOST:8000}"
+          umask 077
+          # Values are piped through the environment, never interpolated into a
+          # shell line, so nothing lands in a command that `ps` could read.
+          {
+            echo "# rendered by .github/workflows/deploy.yml — do not edit on the server"
+            for k in UPSTOX_API_KEY UPSTOX_API_SECRET UPSTOX_USERNAME UPSTOX_PIN_CODE \
+                     UPSTOX_TOTP_SECRET SHOONYA_USER_ID SHOONYA_PASSWORD SHOONYA_VENDOR_CODE \
+                     SHOONYA_API_KEY SHOONYA_TOTP_SECRET SHOONYA_IMEI GEMINI_API_KEY \
+                     AUTH_SECRET MOCK_MODE; do
+              printf '%s=%s\n' "$k" "${!k}"
+            done
+            printf 'UPSTOX_REDIRECT_URI=%s/api/upstox/callback\n' "$BASE"
+          } > env.rendered
+          echo "rendered $(grep -c '=' env.rendered) settings; MOCK_MODE=$MOCK_MODE"
 
-            # ── 1. Pull latest code ────────────────────────────────────────
-            if [ ! -d ~/trading ]; then
-              git clone https://github.com/Immanueldavidckp/trading.git ~/trading
-              echo "Cloned trading repo"
-            else
-              cd ~/trading
-              git pull origin main
-              echo "Pulled latest code"
-            fi
+      - name: Stage deploy scripts and .env on the server
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ vars.SERVER_USER || 'ubuntu' }}
+          SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT $SERVER_USER@$SERVER_HOST"
+          $SSH 'mkdir -p ~/.trading-deploy && chmod 700 ~/.trading-deploy'
+          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" \
+            deploy/deploy.sh deploy/healthcheck.sh \
+            "$SERVER_USER@$SERVER_HOST:~/.trading-deploy/"
+          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" \
+            env.rendered "$SERVER_USER@$SERVER_HOST:~/.trading-deploy/env"
+          $SSH 'chmod 600 ~/.trading-deploy/env && chmod +x ~/.trading-deploy/*.sh'
+          rm -f env.rendered
 
-            cd ~/trading/backend
+      - name: Deploy ${{ steps.target.outputs.ref }}
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ vars.SERVER_USER || 'ubuntu' }}
+          SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+          REF: ${{ steps.target.outputs.ref }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "bash ~/.trading-deploy/deploy.sh '$REF'"
 
-            # ── 2. Install / upgrade Python dependencies ───────────────────
-            pip3 install -r requirements.txt --quiet --upgrade
+      - name: Remove the staged .env from the server
+        if: always()
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ vars.SERVER_USER || 'ubuntu' }}
+          SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SERVER_USER@$SERVER_HOST" \
+            'rm -f ~/.trading-deploy/env' || true
 
-            # ── 3. Create data directory (ignored by git) ──────────────────
-            mkdir -p local_data
-
-            # ── 4. Write .env from GitHub secrets (overwrites on every deploy)
-            cat > .env <<'ENVEOF'
-UPSTOX_API_KEY=${{ secrets.UPSTOX_API_KEY }}
-UPSTOX_API_SECRET=${{ secrets.UPSTOX_API_SECRET }}
-UPSTOX_REDIRECT_URI=http://${{ secrets.SERVER_HOST }}:8000/api/upstox/callback
-SHOONYA_USER_ID=${{ secrets.SHOONYA_USER_ID }}
-SHOONYA_PASSWORD=${{ secrets.SHOONYA_PASSWORD }}
-SHOONYA_VENDOR_CODE=${{ secrets.SHOONYA_VENDOR_CODE }}
-SHOONYA_API_KEY=${{ secrets.SHOONYA_API_KEY }}
-SHOONYA_TOTP_SECRET=${{ secrets.SHOONYA_TOTP_SECRET }}
-SHOONYA_IMEI=abc1234
-GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
-MOCK_MODE=true
-ENVEOF
-
-            # ── 5. Start (first time) or restart (subsequent deploys) ──────
-            if pm2 list | grep -q 'trading-backend'; then
-              pm2 restart trading-backend
-              echo "Restarted trading-backend"
-            else
-              pm2 start ecosystem.config.js
-              echo "Started trading-backend for first time"
-            fi
-
-            pm2 save
-            echo "Deploy complete"
-          EOF
+      - name: Summary
+        if: always()
+        env:
+          REF: ${{ steps.target.outputs.ref }}
+        run: |
+          {
+            echo "### Deploy ${{ job.status }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| ref | \`$REF\` |"
+            echo "| mode | MOCK_MODE=${{ vars.MOCK_MODE || 'true' }} |"
+            echo "| health | \`/api/health\` polled for this commit; a failure rolls back to the previous one |"
+          } >> "$GITHUB_STEP_SUMMARY"

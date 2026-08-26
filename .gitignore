@@ -6,6 +6,10 @@ shoonya_app.py
 
 # Captured market data (large, regenerable)
 backend/local_data/
+
+# pm2 logs and the deploy venv (created on the server by deploy/deploy.sh)
+backend/logs/
+backend/.venv/
 backend/static/.DS_Store
 
 # Python
