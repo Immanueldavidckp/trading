@@ -52,7 +52,7 @@ function App() {
         try {
           const msg = JSON.parse(ev.data)
           if (msg.rows && msg.rows.length) addRows(msg.rows)
-        } catch (e) { /* ignore */ }
+        } catch { /* ignore */ }
       }
     }
 
@@ -70,7 +70,7 @@ function App() {
       try {
         const r = await fetch(`${API}/api/yahoo/status`)
         setStatus(await r.json())
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
     }
     tick()
     const id = setInterval(tick, 3000)

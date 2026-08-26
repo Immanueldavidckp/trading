@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import sqlite3
+import time
 from fastapi import FastAPI, HTTPException, Body, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +31,9 @@ app = FastAPI(title="Upstox Trading Backend")
 _AUTH_EXEMPT = (
     "/login.html",
     "/api/auth/login",
+    # Deploy pipeline + uptime monitors poll this without a cookie. It
+    # returns release/uptime info only, never user or account data.
+    "/api/health",
     "/api/upstox/callback",
     "/api/upstox/autologin",
     # PWA install assets. The browser fetches the manifest and the service
@@ -1322,6 +1326,46 @@ def root(request: Request):
 def mobile_short():
     """Short URL that's easy to type on a phone."""
     return RedirectResponse(url="/m.html", status_code=302)
+
+
+# ── Health / release probe ───────────────────────────────────────────────────
+# deploy/healthcheck.sh polls this after every pm2 reload and compares
+# "commit" against the SHA it just deployed, so a container that comes up on
+# the old code (or not at all) fails the deploy instead of passing silently.
+_RELEASE_FILE = os.path.join(_BACKEND_DIR, "local_data", "RELEASE")
+_STARTED_AT = time.time()
+
+
+def _release_info() -> dict:
+    """Read the key=value RELEASE file written by deploy/deploy.sh."""
+    info = {}
+    try:
+        with open(_RELEASE_FILE) as f:
+            for line in f:
+                key, sep, val = line.partition("=")
+                if sep:
+                    info[key.strip()] = val.strip()
+    except OSError:
+        pass
+    return info
+
+
+# Snapshotted at import, not per request: a stale worker that somehow survives
+# a reload then still reports the commit it actually started on, so the deploy
+# health check can catch it instead of reading the fresh file and passing.
+_RELEASE = _release_info()
+
+
+@app.get("/api/health")
+def health():
+    rel = _RELEASE
+    return {
+        "ok": True,
+        "commit": rel.get("commit", ""),
+        "deployed_at": rel.get("deployed_at", ""),
+        "uptime_s": round(time.time() - _STARTED_AT, 1),
+        "mock_mode": os.getenv("MOCK_MODE", "true").strip().lower() in ("true", "1", "yes"),
+    }
 
 
 # Serve static dashboard files (live.html etc.)

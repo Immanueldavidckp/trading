@@ -1,0 +1,106 @@
+name: CI
+
+# Runs on every push/PR, and is called by the deploy workflow as its gate —
+# nothing reaches Lightsail without these checks passing.
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (python 3.12)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.12+ is a hard floor: upstox-totp publishes no wheel below it.
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile every module
+        run: python -m compileall -q .
+
+      - name: Import the app and check its routes
+        env:
+          MOCK_MODE: 'true'
+        run: |
+          python - <<'PY'
+          import main
+          paths = {getattr(r, "path", None) for r in main.app.routes}
+          assert "/api/health" in paths, "the deploy health probe is missing"
+          assert "/api/health" in main._AUTH_EXEMPT, "/api/health must stay outside the login wall"
+          print(f"{len(main.app.routes)} routes registered")
+          PY
+
+      - name: Paper-trade smoke tests
+        env:
+          MOCK_MODE: 'true'
+        run: |
+          python test_trades.py
+          python test_fo_trades.py
+
+      - name: Unused/undefined name check (advisory)
+        continue-on-error: true
+        run: |
+          pip install pyflakes
+          pyflakes . || true
+
+  frontend:
+    name: Frontend (vite build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  guard:
+    name: Repo hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No secrets committed
+        run: |
+          leaked=$(git ls-files | grep -E '(^|/)\.env$|(^|/)config\.json$' || true)
+          if [ -n "$leaked" ]; then
+            echo "::error::secret files are tracked in git: $leaked"
+            exit 1
+          fi
+
+      - name: Deploy scripts parse and are executable
+        run: |
+          for s in deploy/*.sh; do
+            bash -n "$s"
+            [ -x "$s" ] || { echo "::error::$s is not executable (git update-index --chmod=+x $s)"; exit 1; }
+          done
+
+      - name: pm2 config is valid JS
+        run: node -e "const c=require('./backend/ecosystem.config.js'); if(!c.apps?.[0]?.name) throw new Error('no app defined')"

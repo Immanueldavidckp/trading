@@ -61,6 +61,15 @@ frontend/                React/Vite app (alternative UI — needs npm install)
 PROJECT_LOG.txt          Full session build log
 ```
 
+## Deploy
+
+Push to `main` and GitHub Actions ships it: CI (`.github/workflows/ci.yml`)
+then a health-checked, auto-rolling-back deploy to the Lightsail box under pm2
+(`.github/workflows/deploy.yml` + `deploy/`).
+
+- Setup, secrets and rollback: **[docs/CICD.md](./docs/CICD.md)**
+- Live release check: `curl http://<host>:8000/api/health`
+
 ## Known limits
 
 - Yahoo data is **~15 min delayed** during live market hours
