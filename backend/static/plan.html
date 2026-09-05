@@ -55,6 +55,25 @@
   .dlbtn:hover{border-color:var(--blue);color:var(--blue)}
   .chip.lowr{color:var(--red);background:var(--red-bg)}
 
+  /* sector groups — the 200-name universe folded into openable sectors */
+  .sec{border:1px solid var(--border);border-radius:12px;margin-bottom:10px;background:var(--panel2);overflow:hidden}
+  .sechead{display:grid;grid-template-columns:18px 1fr auto;gap:12px;align-items:center;
+    padding:11px 16px;cursor:pointer;user-select:none}
+  .sechead:hover{background:var(--panel)}
+  .sec.open .sechead{background:var(--panel);border-bottom:1px solid var(--border)}
+  .secarrow{font-family:var(--mono);color:var(--faint);transition:transform .12s}
+  .sec.open .secarrow{transform:rotate(90deg)}
+  .secname{font-weight:800;font-size:14.5px;letter-spacing:-.2px}
+  .secname .n{color:var(--faint);font-weight:500;font-size:12px;margin-left:8px;font-family:var(--mono)}
+  .secbody{display:none;padding:12px}
+  .sec.open .secbody{display:block}
+  .secbody .card{background:var(--panel)}
+  .chip.entry{color:#0b0f17;background:var(--green);border-color:var(--green)}
+  .chip.noentry{color:var(--faint)}
+  .chip.sector{color:var(--violet);background:rgba(168,128,255,.10);border-color:rgba(168,128,255,.3)}
+  .card.hasentry{border-color:rgba(47,208,140,.45)}
+  .card.hasentry .chead{box-shadow:inset 3px 0 0 var(--green)}
+
   /* scorecard: plan (left) vs actual (right) */
   .sc-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
   @media(max-width:900px){.sc-grid{grid-template-columns:1fr}}
@@ -117,7 +136,12 @@
     <button class="tab on" id="tabPlan" onclick="showTab('plan')">Plan</button>
     <button class="tab" id="tabScore" onclick="showTab('score')">Scorecard</button>
   </div>
+  <div class="tabs" id="viewTabs" title="Group the universe by sector, or show one flat ranked list">
+    <button class="tab on" id="viewSector" onclick="setView('sector')">Sectors</button>
+    <button class="tab" id="viewFlat" onclick="setView('flat')">All</button>
+  </div>
   <div class="spacer"></div>
+  <button class="act" id="expandBtn" onclick="toggleAllSectors()" title="Open or close every sector">⇕ Expand all</button>
   <button class="act" id="dlAllBtn" onclick="downloadAll()" title="Download the WHOLE day's plan as a text file">⬇ TXT</button>
   <select id="dateSel" onchange="reload()"></select>
   <button class="act" id="buildBtn" onclick="runBuild()" title="Build the plan for the next session (heavy)">⚙ Build next</button>
@@ -146,7 +170,9 @@
 const $=id=>document.getElementById(id);
 let TAB='plan';
 let MODE='day';               // 'day' = intraday plan · 'swing' = 2–15 day delivery plan
-let PLANS=[], PLAN_DATE='';   // last-rendered plan list (for the TXT downloads)
+let VIEW='sector';            // 'sector' = grouped, openable sectors · 'flat' = one ranked list
+let PLANS=[], PLAN_DATE='';   // last-rendered plan list, already in priority order
+const SEC_OPEN={};            // sector name -> open?  (survives re-renders)
 const fmt=(v,d=2)=>(v==null||v===''||isNaN(v))?'—':Number(v).toFixed(d);
 const pct=v=>(v==null||isNaN(v))?'—':(v>=0?'+':'')+Number(v).toFixed(2)+'%';
 const todayIST=()=>new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});   // YYYY-MM-DD
@@ -161,6 +187,45 @@ const api={
 };
 function openChart(t){location.href='/live.html?tsym='+encodeURIComponent(t);}
 
+// ---------- priority ordering ----------
+// The rule, in one place: a stock with an actual entry outranks one without,
+// and inside each of those two blocks the higher confluence score comes first
+// (universe turnover rank breaks ties). Used for the flat list, for the order
+// of stocks inside a sector, AND for the order of the sectors themselves.
+const hasEntry=p=>((p.num_setups!=null?p.num_setups:(p.setups||[]).length)>0);
+function byPriority(a,b){
+  const ea=hasEntry(a)?0:1, eb=hasEntry(b)?0:1;
+  if(ea!==eb) return ea-eb;                                  // entries first
+  const sa=(a.score==null?-1:a.score), sb=(b.score==null?-1:b.score);
+  if(sb!==sa) return sb-sa;                                  // then ranking (score)
+  return (a.universe_rank||9999)-(b.universe_rank||9999);    // then turnover rank
+}
+const sectorOf=p=>p.sector||'Unclassified';
+
+function setView(v){
+  if(VIEW===v) return;
+  VIEW=v;
+  $('viewSector').classList.toggle('on',v==='sector');
+  $('viewFlat').classList.toggle('on',v==='flat');
+  $('expandBtn').style.display = v==='sector' ? '' : 'none';
+  if(TAB==='plan') renderCards();
+}
+
+function toggleSector(name){
+  SEC_OPEN[name]=!SEC_OPEN[name];
+  const el=document.getElementById('sec_'+cssId(name));
+  if(el) el.classList.toggle('open',SEC_OPEN[name]);
+}
+function toggleAllSectors(){
+  const names=[...new Set(PLANS.map(sectorOf))];
+  const anyClosed=names.some(n=>!SEC_OPEN[n]);
+  names.forEach(n=>{SEC_OPEN[n]=anyClosed;});
+  $('expandBtn').textContent = anyClosed ? '⇕ Collapse all' : '⇕ Expand all';
+  renderCards();
+}
+const cssId=n=>n.replace(/[^A-Za-z0-9]/g,'_');
+const esc=n=>String(n).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
 function setMode(m){
   if(MODE===m) return;
   MODE=m;
@@ -168,13 +233,17 @@ function setMode(m){
   $('buildBtn').title = m==='day' ? 'Build the plan for the next session (heavy)'
                                   : 'Build the next-session SWING plan (2–15 day holds)';
   PLANS=[]; PLAN_DATE='';
+  clearTimeout(_buildPoll);
   reload(true);   // re-pick the right default date from that mode's own dates
+  resumeBuildIfRunning();
 }
 
 function showTab(t){
   const prevTab=TAB; TAB=t;
   $('tabPlan').classList.toggle('on',t==='plan');$('tabScore').classList.toggle('on',t==='score');
   $('planView').style.display=t==='plan'?'':'none';$('scoreView').style.display=t==='score'?'':'none';
+  $('viewTabs').style.display=t==='plan'?'':'none';
+  $('expandBtn').style.display=(t==='plan'&&VIEW==='sector')?'':'none';
   $('dlAllBtn').title = t==='score' ? "Download this date's SCORECARD (plan-vs-actual analysis) as a text file"
                                     : "Download the WHOLE day's plan as a text file";
   reload(prevTab!==t);   // switching tabs re-picks the sensible default date for that tab
@@ -214,15 +283,88 @@ async function reload(forceDefault){
 // ---------- PLAN ----------
 async function renderPlan(date){
   const cards=$('cards'); const ubar=$('ubar');
-  if(!date){ ubar.innerHTML=''; cards.innerHTML='<div class="empty">No '+(MODE==='swing'?'swing':'day')+' plan built yet. Click <b>⚙ Build next</b> to generate it for the top-50 stocks under ₹300.</div>'; return; }
+  $('expandBtn').style.display = VIEW==='sector' ? '' : 'none';
+  if(!date){ ubar.innerHTML=''; cards.innerHTML='<div class="empty">No '+(MODE==='swing'?'swing':'day')+' plan built yet. Click <b>⚙ Build next</b> to generate it for the top-200 stocks under ₹300.</div>'; return; }
   cards.innerHTML='<div class="empty">loading…</div>';
   const j=await fetch(api.report(date)).then(r=>r.json());
   if(!j.ok||!j.plans.length){ cards.innerHTML='<div class="empty">No '+(MODE==='swing'?'swing ':'')+'plans for '+date+'.</div>'; ubar.innerHTML=''; PLANS=[]; return; }
-  PLANS=j.plans; PLAN_DATE=date;
-  ubar.innerHTML = MODE==='swing'
-    ? `Swing plan live from <b>${date}</b> · <b>${j.count}</b> stocks · 2–15 session holds · sorted by confluence score`
-    : `Plan for <b>${date}</b> · <b>${j.count}</b> stocks · sorted by confluence score`;
-  cards.innerHTML=j.plans.map((p,i)=>MODE==='swing'?swingCard(p,i):planCard(p,i)).join('');
+  // Sort ONCE here: PLANS is the priority order everywhere after this — the
+  // cards, the sector groups and the TXT exports all index into it.
+  PLANS=(j.plans||[]).slice().sort(byPriority); PLAN_DATE=date;
+
+  // First load of a date opens the top-priority sector so the page isn't a
+  // wall of closed rows; everything else stays closed until clicked.
+  const secs=[...new Set(PLANS.map(sectorOf))];
+  if(!secs.some(n=>SEC_OPEN[n])){
+    const first=sectorGroups()[0];
+    if(first) SEC_OPEN[first.name]=true;
+  }
+
+  const nEntry=PLANS.filter(hasEntry).length;
+  const nSec=secs.length;
+  ubar.innerHTML = (MODE==='swing'
+      ? `Swing plan live from <b>${date}</b> · <b>${j.count}</b> stocks · 2–15 session holds`
+      : `Plan for <b>${date}</b> · <b>${j.count}</b> stocks`)
+    + ` · <b>${nEntry}</b> with an entry · <b>${nSec}</b> sectors`
+    + ` · entries first, then confluence score`;
+  renderCards();
+}
+
+const cardFor=(p,i)=>MODE==='swing'?swingCard(p,i):planCard(p,i);
+
+function renderCards(){
+  const cards=$('cards');
+  if(!PLANS.length){ cards.innerHTML='<div class="empty">Nothing to show.</div>'; return; }
+  cards.innerHTML = VIEW==='sector'
+    ? sectorGroups().map(g=>sectorBlock(g)).join('')
+    : PLANS.map((p,i)=>cardFor(p,i)).join('');
+}
+
+// Group the (already priority-sorted) plans by sector. Sector order follows the
+// same rule as the stocks: sectors holding entries come first (more entries
+// first), then by their best confluence score. "Unclassified" always last.
+function sectorGroups(){
+  const map=new Map();
+  PLANS.forEach((p,i)=>{
+    const k=sectorOf(p);
+    if(!map.has(k)) map.set(k,[]);
+    map.get(k).push(i);
+  });
+  const groups=[...map.entries()].map(([name,idx])=>({
+    name, idx,
+    entries: idx.filter(i=>hasEntry(PLANS[i])).length,
+    best: Math.max(...idx.map(i=>PLANS[i].score==null?-1:PLANS[i].score)),
+    bestRank: Math.min(...idx.map(i=>PLANS[i].universe_rank||9999)),
+  }));
+  groups.sort((a,b)=>
+    (b.entries>0?1:0)-(a.entries>0?1:0) ||                                  // entry sectors first
+    (a.name==='Unclassified'?1:0)-(b.name==='Unclassified'?1:0) ||          // …then the catch-all last
+    b.entries-a.entries ||
+    b.best-a.best ||
+    a.bestRank-b.bestRank);
+  return groups;
+}
+
+function sectorBlock(g){
+  const open=!!SEC_OPEN[g.name];
+  const entryChip = g.entries
+    ? `<span class="chip entry">${g.entries} entr${g.entries===1?'y':'ies'}</span>`
+    : `<span class="chip noentry">no entry</span>`;
+  return `<div class="sec${open?' open':''}" id="sec_${cssId(g.name)}">
+    <div class="sechead" onclick="toggleSector('${g.name.replace(/'/g,"\\'")}')">
+      <div class="secarrow">▸</div>
+      <div class="secname">${esc(g.name)}<span class="n">${g.idx.length} stock${g.idx.length===1?'':'s'}</span></div>
+      <div class="chips">${entryChip}<span class="chip score">best ${g.best<0?'—':g.best}</span></div>
+    </div>
+    <div class="secbody">${g.idx.map(i=>cardFor(PLANS[i],i)).join('')}</div>
+  </div>`;
+}
+
+// the sector + "has an entry" chips both card types share. Inside a sector
+// group the sector name is already the heading, so only the flat list repeats it.
+function metaChips(p){
+  return (VIEW==='flat' ? `<span class="chip sector">${esc(sectorOf(p))}</span>` : '')
+    + (hasEntry(p) ? `<span class="chip entry">entry</span>` : '');
 }
 
 function biasChip(b){const c=b==='bullish'?'bull':b==='bearish'?'bear':'neut';return `<span class="chip ${c}">${b}</span>`;}
@@ -245,13 +387,13 @@ function planCard(p,i){
       <div>▸ ${s.do}<div class="whenno">✗ ${s.avoid}</div></div></div>`).join('');
   const zline=arr=>(arr||[]).map(x=>`${x.kind} ${fmt(x.bottom)}–${fmt(x.top)}`).join(' · ')||'—';
   const sw=p.swing_outlook||{};
-  return `<div class="card" id="card${i}">
+  return `<div class="card${hasEntry(p)?' hasentry':''}" id="card${i}">
     <div class="chead" onclick="document.getElementById('card${i}').classList.toggle('open')">
       <div class="rankn">${p.universe_rank||i+1}</div>
       <div><div class="sym">${p.tsym} <span class="csub">₹${fmt(p.last_close)} · ${p.day_type_hint?'':''}</span></div>
         <div class="csub">${h.read||''}</div>
         <div class="csub">${p.num_setups} setups · take max ${p.max_trades} · ${p.turnover_cr?('₹'+p.turnover_cr+'cr turnover'):''}</div></div>
-      <div class="chips"><button class="dlbtn" onclick="event.stopPropagation();openChart('${p.tsym}')" title="Open ${p.tsym} on the chart">📈 Chart</button><button class="dlbtn" onclick="event.stopPropagation();downloadOne(${i})" title="Save ${p.tsym}'s plan as a text file">⬇ TXT</button>${biasChip(p.bias)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
+      <div class="chips">${metaChips(p)}<button class="dlbtn" onclick="event.stopPropagation();openChart('${p.tsym}')" title="Open ${p.tsym} on the chart">📈 Chart</button><button class="dlbtn" onclick="event.stopPropagation();downloadOne(${i})" title="Save ${p.tsym}'s plan as a text file">⬇ TXT</button>${biasChip(p.bias)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
     </div>
     <div class="cbody">
       <div class="headline">
@@ -308,13 +450,13 @@ function swingCard(p,i){
     </tr>`).join('');
   const scoreParts=Object.entries(sp).map(([k,v])=>`${k.replace(/_/g,' ')} ${v}`).join(' · ');
   const flags=[pr.nr7?'NR7':null,pr.inside_nr4?'inside+NR4':null,pr.bbw_126_low?'BB-squeeze':null,pr.atr_contracting?'ATR↓':null].filter(Boolean).join(' · ')||'none';
-  return `<div class="card" id="card${i}">
+  return `<div class="card${hasEntry(p)?' hasentry':''}" id="card${i}">
     <div class="chead" onclick="document.getElementById('card${i}').classList.toggle('open')">
       <div class="rankn">${p.universe_rank||i+1}</div>
       <div><div class="sym">${p.tsym} <span class="csub">₹${fmt(p.last_close)}</span></div>
         <div class="csub">${p.headline||''}</div>
         <div class="csub">${p.num_setups} setup(s) · RS ${T.momentum_percentile!=null?T.momentum_percentile+' pctile':'—'} · template ${T.template_passes??'—'}/7 · ATR ${fmt(pr.atr_pct)}%/d${p.turnover_cr?(' · ₹'+p.turnover_cr+'cr turnover'):''}</div></div>
-      <div class="chips"><button class="dlbtn" onclick="event.stopPropagation();openChart('${p.tsym}')" title="Open ${p.tsym} on the chart">📈 Chart</button><button class="dlbtn" onclick="event.stopPropagation();downloadOne(${i})" title="Save ${p.tsym}'s swing plan as a text file">⬇ TXT</button>${biasChip(p.bias)}${stageChip(p.stage)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
+      <div class="chips">${metaChips(p)}<button class="dlbtn" onclick="event.stopPropagation();openChart('${p.tsym}')" title="Open ${p.tsym} on the chart">📈 Chart</button><button class="dlbtn" onclick="event.stopPropagation();downloadOne(${i})" title="Save ${p.tsym}'s swing plan as a text file">⬇ TXT</button>${biasChip(p.bias)}${stageChip(p.stage)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
     </div>
     <div class="cbody">
       <div class="headline">
@@ -560,6 +702,7 @@ function planToText(p){
   out.push(LINE);
   out.push(` ${p.tsym} — ₹${fmt(p.last_close)} · plan for ${p.plan_date||PLAN_DATE}`);
   out.push(` ${String(p.bias||'').toUpperCase()} bias · ${p.conviction} conviction · score ${p.score} · rank ${p.universe_rank||'—'}${p.turnover_cr?` · ₹${p.turnover_cr}cr turnover`:''}`);
+  out.push(` Sector: ${sectorOf(p)}${hasEntry(p)?'   [ENTRY TONIGHT]':'   [no entry — watch only]'}`);
   out.push(LINE);
   if(h.read){ out.push('', "TODAY'S READ", `  ${h.read}`); }
   if(h.primary_play){ out.push('', 'PRIMARY PLAY', `  ${h.primary_play}`); }
@@ -621,14 +764,35 @@ async function downloadAll(){
   if(!plans.length || d!==date){
     const j=await fetch(api.report(date)).then(r=>r.json());
     if(!j.ok||!j.plans.length){ setStatus('No plans stored for '+date+'.'); return; }
-    plans=j.plans; d=date;
+    plans=(j.plans||[]).slice().sort(byPriority); d=date;
   }
   const label=MODE==='swing'?'SWING PLAN (2–15 day delivery holds)':'DAILY PLAN';
   const toText = MODE==='swing' ? swingToText : planToText;
+  const nEntry=plans.filter(hasEntry).length;
+
+  // Same shape as the page: sector sections, entries first inside each.
+  const bySector=new Map();
+  plans.forEach(p=>{const k=sectorOf(p); if(!bySector.has(k)) bySector.set(k,[]); bySector.get(k).push(p);});
+  const secOrder=[...bySector.entries()].map(([name,ps])=>({name,ps,
+      entries:ps.filter(hasEntry).length,
+      best:Math.max(...ps.map(p=>p.score==null?-1:p.score))}))
+    .sort((a,b)=>(b.entries>0?1:0)-(a.entries>0?1:0) ||
+                 (a.name==='Unclassified'?1:0)-(b.name==='Unclassified'?1:0) ||
+                 b.entries-a.entries || b.best-a.best);
+
   const head=[LINE,` ${label} — ${d} · ${plans.length} stocks (top volume leaders ≤ ₹300)`,
-    ' Sorted by confluence score · Generated by trade.scratchforge backend',
-    ' Analysis only — no orders are placed and no profit is promised.',LINE,'',''].join('\n');
-  downloadText(`${MODE==='swing'?'swing':'plan'}_ALL_${d}.txt`, head + plans.map(toText).join('\n\n'));
+    ` ${nEntry} with an entry · ${secOrder.length} sectors`,
+    ' Entries first, then confluence score · Generated by trade.scratchforge backend',
+    ' Analysis only — no orders are placed and no profit is promised.',LINE,'',
+    ' SECTOR SUMMARY',THIN,
+    ...secOrder.map(g=>`  ${g.name.padEnd(34)} ${String(g.ps.length).padStart(3)} stock${g.ps.length===1?' ':'s'} · ${g.entries} entr${g.entries===1?'y  ':'ies'} · best score ${g.best<0?'—':g.best}`),
+    '',''].join('\n');
+
+  const body=secOrder.map(g=>[
+    '', LINE, ` SECTOR: ${g.name.toUpperCase()} — ${g.ps.length} stock(s), ${g.entries} with an entry`, LINE, '',
+    g.ps.map(toText).join('\n\n')].join('\n')).join('\n');
+
+  downloadText(`${MODE==='swing'?'swing':'plan'}_ALL_${d}.txt`, head + body);
 }
 
 function swingToText(p){
@@ -637,6 +801,7 @@ function swingToText(p){
   out.push(LINE);
   out.push(` ${p.tsym} — ₹${fmt(p.last_close)} · SWING plan live from ${p.plan_date||PLAN_DATE}`);
   out.push(` ${String(p.bias||'').toUpperCase()} · stage: ${p.stage} (template ${T.template_passes??'—'}/7) · ${p.conviction} conviction · score ${p.score} · rank ${p.universe_rank||'—'}${p.turnover_cr?` · ₹${p.turnover_cr}cr turnover`:''}`);
+  out.push(` Sector: ${sectorOf(p)}${hasEntry(p)?'   [ENTRY TONIGHT]':'   [no entry — watch only]'}`);
   out.push(LINE);
   out.push('', 'THE READ', `  ${p.headline||'—'}`);
   if(mr.breadth_above_sma200!=null) out.push(`  Market breadth: ${(mr.breadth_above_sma200*100).toFixed(0)}% of universe above 200-SMA — regime ${mr.on?'ON':'OFF'}`);
@@ -756,14 +921,60 @@ async function downloadScorecardTxt(){
 }
 
 // ---------- actions ----------
+// A 200-stock build fetches candles for 200 symbols and takes minutes, so it
+// runs server-side in a background thread and we poll it for progress —
+// holding the request open would just 504.
+const UNIVERSE_N=200;
+let _buildPoll=null;
+const buildStatusUrl=()=>MODE==='day'?'/api/plan/build_status':'/api/swing/build_status';
+
 async function runBuild(){
   const b=$('buildBtn'); b.disabled=true; b.textContent='building…';
-  setStatus('Building the next-session '+(MODE==='swing'?'SWING':'day')+' plan for the top-50 (fetching candles — can take ~1–2 min)…');
-  try{ const j=await fetch(api.build()).then(r=>r.json());
-    setStatus(`Built ${j.built} ${MODE==='swing'?'swing ':''}plans for ${j.plan_date} (source: ${j.universe_source}, ${j.skipped} skipped).`);
-    await reload();
-  }catch(e){ setStatus('Build failed: '+e); }
+  setStatus('Starting the next-session '+(MODE==='swing'?'SWING':'day')+` plan build for the top-${UNIVERSE_N} ≤₹300 names…`);
+  try{
+    const j=await fetch(api.build()+`?background=1&top_n=${UNIVERSE_N}`).then(r=>r.json());
+    if(j&&j.job){ pollBuild(); return; }
+    // older backend without background builds — it already ran to completion
+    setStatus(j.ok===false ? 'Build failed: '+(j.error||'unknown')
+      : `Built ${j.built} ${MODE==='swing'?'swing ':''}plans for ${j.plan_date} (source: ${j.universe_source}, ${j.skipped} skipped).`);
+    b.disabled=false; b.textContent='⚙ Build next';
+    await reload(true);
+  }catch(e){
+    setStatus('Build failed: '+e);
+    b.disabled=false; b.textContent='⚙ Build next';
+  }
+}
+
+async function pollBuild(){
+  clearTimeout(_buildPoll);
+  let j;
+  try{ j=await fetch(buildStatusUrl()).then(r=>r.json()); }
+  catch(e){ _buildPoll=setTimeout(pollBuild,3000); return; }
+  const b=$('buildBtn');
+  if(j.running){
+    b.disabled=true; b.textContent=`building ${j.done}/${j.total||'…'}`;
+    setStatus(`Building the ${MODE==='swing'?'swing':'day'} plan — ${j.done}/${j.total||'?'} stocks`
+      +`${j.current?' · '+j.current:''} (${j.percent}%). Safe to leave this page; the build keeps running.`);
+    _buildPoll=setTimeout(pollBuild,2000);
+    return;
+  }
   b.disabled=false; b.textContent='⚙ Build next';
+  if(j.state==='error'){ setStatus('Build failed: '+(j.error||'unknown')); return; }
+  if(j.state==='idle'){ return; }
+  const r=j.result||{};
+  setStatus(r.plan_date
+    ? `Built ${r.built} ${MODE==='swing'?'swing ':''}plans for ${r.plan_date} — universe ${r.universe_size||UNIVERSE_N} names, ${r.skipped} skipped (source: ${r.universe_source}).`
+    : 'Build finished.');
+  await reload(true);
+}
+
+// A build started in an earlier page view is still running server-side — pick
+// its progress back up instead of showing a stale idle button.
+async function resumeBuildIfRunning(){
+  try{
+    const j=await fetch(buildStatusUrl()).then(r=>r.json());
+    if(j&&j.running) pollBuild();
+  }catch(e){}
 }
 async function runScore(){
   const date=$('dateSel').value; if(!date){setStatus('Pick a date first.');return;}
@@ -781,8 +992,11 @@ $('foot').innerHTML='<b>Day trade</b>: prev-day levels, CPR, Camarilla, ORB, SMC
   +'<b>Swing trade</b>: George-Hwang 52-week-high momentum + Minervini/Weinstein Stage-2 gate, Landry pullback resumption, '
   +'Crabel/Bollinger volatility-compression breakouts, vol-normalized cross-sectional momentum rank, market-breadth regime gate — '
   +'long-only (retail can\'t short delivery in India), scored net of ~0.65% delivery costs (STT+brokerage+DP+slippage). '
-  +'Universe = today\'s volume leaders ≤₹300. Score weights are priors; the scorecard measures them. Educational engineering reference; not investment advice.';
+  +'Universe = today\'s top-200 volume leaders ≤₹300, grouped by NSE macro sector — open a sector to see its stocks. '
+  +'Order is entries first, then confluence score (a stock with a live entry always outranks a higher-scoring one without). '
+  +'Score weights are priors; the scorecard measures them. Educational engineering reference; not investment advice.';
 reload();
+resumeBuildIfRunning();
 </script>
 </body>
 </html>

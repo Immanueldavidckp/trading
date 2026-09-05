@@ -16,6 +16,7 @@ import db as _db
 import plan_engine
 import plan_score
 import universe as _universe
+import sectors as _sectors
 
 IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
 
@@ -141,14 +142,18 @@ def _intraday_for_day(tsym: str, day: _dt.date,
 
 # ── build ───────────────────────────────────────────────────────────────────
 
-def build_daily_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
+def build_daily_plans(for_date: Optional[str] = None, top_n: int = _universe.TOP_N,
+                      progress=None) -> Dict:
     """Build plans for a target session. `for_date` (YYYY-MM-DD) overrides the
     target; default = next trading day after today (IST).
 
     Point-in-time discipline (§27.2): the plan uses only candles up to `as_of` =
     the session BEFORE the target. For the live case (target = tomorrow) that is
     today's close; for a backtest (target in the past) history is truncated to the
-    prior session so there is NO look-ahead."""
+    prior session so there is NO look-ahead.
+
+    `progress(done, total, sym)` is called after every stock so a background build
+    (200 names takes minutes) can report live progress to the UI."""
     ensure_tables()
     today_ist = _dt.datetime.now(IST).date()
     target = (_dt.date.fromisoformat(for_date) if for_date
@@ -164,8 +169,11 @@ def build_daily_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
         # Clear this session's prior plans first, so the report reflects EXACTLY the
         # fresh universe — no ETFs or stale names left over from an earlier build.
         cur.execute(f"DELETE FROM daily_plans WHERE plan_date={PH}", [target.isoformat()])
-        for row in uni["rows"]:
+        total = len(uni["rows"])
+        for i, row in enumerate(uni["rows"]):
             sym = row["sym"]
+            if progress:
+                progress(i, total, sym)
             try:
                 daily = _truncate(_ensure_candles(sym, "1d", 20, fresh_until=as_of), as_of)
                 if len(daily) < 20:
@@ -182,6 +190,7 @@ def build_daily_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
                     skipped.append({"sym": sym, "why": plan.get("error")}); continue
                 plan["universe_rank"] = row.get("rank")
                 plan["turnover_cr"] = row.get("turnover_cr")
+                plan["sector"] = row.get("sector") or _sectors.UNCLASSIFIED
                 plan["plan_date"] = target.isoformat()
                 cur.execute(
                     f"""INSERT INTO daily_plans
@@ -199,6 +208,8 @@ def build_daily_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
                 built.append(sym)
             except Exception as e:
                 skipped.append({"sym": sym, "why": str(e)[:120]})
+        if progress:
+            progress(total, total, None)
         conn.commit(); cur.close()
     finally:
         conn.close()
@@ -210,6 +221,7 @@ def build_daily_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
         recording = _register_tick_recording(built)
 
     return {"ok": True, "plan_date": target.isoformat(), "universe_source": uni["source"],
+            "universe_size": len(uni["rows"]), "sectors": uni.get("sectors"),
             "built": len(built), "skipped": len(skipped),
             "tick_recording": recording,
             "symbols": built, "skipped_detail": skipped[:20]}
@@ -305,7 +317,28 @@ def get_plan_report(plan_date: str) -> Dict:
         cur.close()
     finally:
         conn.close()
-    return {"ok": True, "plan_date": plan_date, "count": len(plans), "plans": plans}
+    _backfill_sectors(plans)
+    return {"ok": True, "plan_date": plan_date, "count": len(plans),
+            "sectors": _sector_counts(plans), "plans": plans}
+
+
+def _backfill_sectors(plans: List[Dict]) -> None:
+    """Stamp `sector` onto plans stored before sector tagging existed, so the
+    sector-grouped UI works on old plan dates without a rebuild."""
+    for p in plans:
+        if not p.get("sector"):
+            try:
+                p["sector"] = _sectors.sector_for(p.get("tsym", ""))
+            except Exception:
+                p["sector"] = _sectors.UNCLASSIFIED
+
+
+def _sector_counts(plans: List[Dict]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for p in plans:
+        out[p.get("sector") or _sectors.UNCLASSIFIED] = \
+            out.get(p.get("sector") or _sectors.UNCLASSIFIED, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
 
 
 def get_scorecard(plan_date: str) -> Dict:

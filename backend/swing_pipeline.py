@@ -20,6 +20,7 @@ import db as _db
 import swing_engine
 import swing_score
 import universe as _universe
+import sectors as _sectors
 from plan_pipeline import (_ensure_candles, _truncate, _ist_date,
                            next_trading_day, prev_trading_day)
 
@@ -145,10 +146,14 @@ def _apply_cross_sectional(plans: List[Dict]) -> None:
 
 # ── build ───────────────────────────────────────────────────────────────────
 
-def build_swing_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
+def build_swing_plans(for_date: Optional[str] = None, top_n: int = _universe.TOP_N,
+                      progress=None) -> Dict:
     """Build swing plans targeting a session. `for_date` (YYYY-MM-DD) overrides;
     default = next trading day after today (IST). Point-in-time: only candles up
-    to `as_of` (the session before the target) are used — no look-ahead."""
+    to `as_of` (the session before the target) are used — no look-ahead.
+
+    `progress(done, total, sym)` is called after every stock so a background
+    build (200 names takes minutes) can report live progress to the UI."""
     ensure_tables()
     today_ist = _dt.datetime.now(IST).date()
     target = (_dt.date.fromisoformat(for_date) if for_date
@@ -158,8 +163,11 @@ def build_swing_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
     uni = _universe.select_universe(as_of, top_n=top_n)
     built, skipped = [], []
     plans: List[Dict] = []
-    for row in uni["rows"]:
+    total = len(uni["rows"])
+    for i, row in enumerate(uni["rows"]):
         sym = row["sym"]
+        if progress:
+            progress(i, total, sym)
         try:
             daily = _truncate(_ensure_candles(sym, "1d", 252, fresh_until=as_of), as_of)
             if len(daily) < 60:
@@ -172,9 +180,12 @@ def build_swing_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
                 skipped.append({"sym": sym, "why": plan.get("error")}); continue
             plan["universe_rank"] = row.get("rank")
             plan["turnover_cr"] = row.get("turnover_cr")
+            plan["sector"] = row.get("sector") or _sectors.UNCLASSIFIED
             plans.append(plan)
         except Exception as e:
             skipped.append({"sym": sym, "why": str(e)[:120]})
+    if progress:
+        progress(total, total, None)
 
     _apply_cross_sectional(plans)
 
@@ -206,6 +217,7 @@ def build_swing_plans(for_date: Optional[str] = None, top_n: int = 50) -> Dict:
         conn.close()
 
     return {"ok": True, "plan_date": target.isoformat(), "universe_source": uni["source"],
+            "universe_size": total, "sectors": uni.get("sectors"),
             "built": len(built), "skipped": len(skipped),
             "symbols": built, "skipped_detail": skipped[:20]}
 
@@ -298,7 +310,10 @@ def get_swing_report(plan_date: str) -> Dict:
         cur.close()
     finally:
         conn.close()
-    return {"ok": True, "plan_date": plan_date, "count": len(plans), "plans": plans}
+    from plan_pipeline import _backfill_sectors, _sector_counts
+    _backfill_sectors(plans)
+    return {"ok": True, "plan_date": plan_date, "count": len(plans),
+            "sectors": _sector_counts(plans), "plans": plans}
 
 
 def get_swing_scorecard(plan_date: str) -> Dict:

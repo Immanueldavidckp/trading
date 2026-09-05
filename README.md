@@ -35,6 +35,15 @@ Then open:
 - Millisecond-precision capture timestamps
 - Live WebSocket stream to the browser (`/ws/prices?tsym=…`)
 - 1-min historical backfill (1d / 5d / 1mo)
+- Nightly day + swing plans over the **top 200 NSE names ≤₹300** by turnover
+  (`/api/plan/build`, `/api/swing/build` — pass `background=1` and poll
+  `…/build_status`, since a 200-symbol build takes minutes)
+- Plans are grouped by **NSE macro sector** on the plan pages: sectors collapse
+  to one row each, open one to list its stocks. Order is **entries first, then
+  confluence score** — a stock with a live entry always outranks a
+  higher-scoring one without. Sector tags come from NSE's index constituent
+  lists (cached weekly in `local_data/sector_map.json`, `sectors.py`), with a
+  bundled static map as the offline fallback
 - AI trade recommendations via Gemini, with rule-based fallback (RSI/MACD/SMA/EMA)
 - Paper trading mode (default) and live Shoonya mode
 
@@ -53,6 +62,9 @@ backend/
   tick_recorder.py      Shoonya WebSocket tick + 5-level depth capture
   shoonya_client.py     Shoonya REST trading client
   ai_agent.py           Gemini + rule-based analyzer
+  universe.py           Nightly top-200 <=Rs.300 universe by turnover, sector-tagged
+  sectors.py            Symbol -> NSE macro sector (live NSE lists + static fallback)
+  build_jobs.py         Background runner for the long 200-symbol plan builds
   static/
     index.html          Original full trading dashboard
     live.html           Live price-change page (this is what you want)
