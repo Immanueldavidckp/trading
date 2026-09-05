@@ -966,11 +966,29 @@ def upstox_intervals():
 # Implements the compendium framework layer. Analysis only — no orders are placed.
 
 @app.get("/api/plan/build")
-def plan_build(for_date: Optional[str] = None, top_n: int = 50):
+def plan_build(for_date: Optional[str] = None, top_n: int = 200,
+               background: bool = False):
     """Build tomorrow's plan for the top-N <=Rs.300 volume leaders. Heavy
-    (fetches candles for N symbols) — run nightly post-close via cron."""
+    (fetches candles for N symbols) — run nightly post-close via cron.
+
+    `background=true` starts the build in a thread and returns immediately;
+    poll /api/plan/build_status for progress. The UI uses this because a
+    200-symbol build takes minutes and would otherwise time the request out."""
     import plan_pipeline
+    top_n = max(1, min(int(top_n), 500))
+    if background:
+        import build_jobs
+        return {"ok": True, "started": True,
+                "job": build_jobs.start("day", plan_pipeline.build_daily_plans,
+                                        for_date=for_date, top_n=top_n)}
     return plan_pipeline.build_daily_plans(for_date=for_date, top_n=top_n)
+
+
+@app.get("/api/plan/build_status")
+def plan_build_status():
+    """Progress of the background day-plan build (see /api/plan/build)."""
+    import build_jobs
+    return build_jobs.status("day")
 
 
 @app.get("/api/plan/score")
@@ -1031,11 +1049,28 @@ def plan_setup_status(tsym: str):
 # ---------- Swing plan system (2–15 day delivery swings, evening build) ----------
 
 @app.get("/api/swing/build")
-def swing_build(for_date: Optional[str] = None, top_n: int = 50):
+def swing_build(for_date: Optional[str] = None, top_n: int = 200,
+                background: bool = False):
     """Build the next-session SWING plan for the top-N ≤₹300 volume leaders.
-    Run every evening after the close (same cadence as /api/plan/build)."""
+    Run every evening after the close (same cadence as /api/plan/build).
+
+    `background=true` starts the build in a thread and returns immediately;
+    poll /api/swing/build_status for progress."""
     import swing_pipeline
+    top_n = max(1, min(int(top_n), 500))
+    if background:
+        import build_jobs
+        return {"ok": True, "started": True,
+                "job": build_jobs.start("swing", swing_pipeline.build_swing_plans,
+                                        for_date=for_date, top_n=top_n)}
     return swing_pipeline.build_swing_plans(for_date=for_date, top_n=top_n)
+
+
+@app.get("/api/swing/build_status")
+def swing_build_status():
+    """Progress of the background swing-plan build (see /api/swing/build)."""
+    import build_jobs
+    return build_jobs.status("swing")
 
 
 @app.get("/api/swing/score")
@@ -1075,6 +1110,41 @@ def swing_dates():
     """Available swing plan + scored dates (for the report date-picker)."""
     import swing_pipeline
     return swing_pipeline.list_swing_dates()
+
+
+# ---------- Sector classification (groups the 200-name universe on the plan page) ----------
+
+@app.get("/api/sectors/map")
+def sectors_map(syms: Optional[str] = None):
+    """NSE macro sector per symbol. `syms=A,B,C` maps just those; omit it for
+    the whole cached map plus a per-sector symbol count."""
+    import sectors
+    if syms:
+        wanted = [s.strip().upper() for s in syms.split(",") if s.strip()]
+        return {"ok": True, "count": len(wanted),
+                "map": {s: sectors.sector_for(s) for s in wanted}}
+    m = sectors.load_map()
+    counts: dict = {}
+    for sec in m.values():
+        counts[sec] = counts.get(sec, 0) + 1
+    return {"ok": True, "count": len(m),
+            "sectors": dict(sorted(counts.items(), key=lambda kv: -kv[1]))}
+
+
+@app.get("/api/sectors/refresh")
+def sectors_refresh(force: bool = True):
+    """Re-pull NSE's index constituent lists to refresh the sector map cache."""
+    import sectors
+    res = sectors.refresh(force=force)
+    sectors.invalidate()
+    return res
+
+
+@app.get("/api/universe/today")
+def universe_today(top_n: int = 200):
+    """Tonight's tradeable universe (top-N ≤₹300 by turnover), sector-tagged."""
+    import universe
+    return universe.select_universe(top_n=max(1, min(int(top_n), 500)))
 
 
 # ---------- Trading execution endpoints (mock + live Upstox) ----------

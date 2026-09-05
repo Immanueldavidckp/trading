@@ -5,6 +5,9 @@ choice). Primary source is the NSE EOD bhavcopy (one download for the whole
 market, compendium §28); a curated liquid-seed list fetched via Upstox is the
 fallback when the bhavcopy can't be reached.
 
+Every row also carries its NSE macro `sector` (see sectors.py), which is what
+the plan pages group the 200-name universe by.
+
 Compendium §27 hygiene applied where we can: EQ series only, price floor Rs.30
 (below that tick-size % cost + operator risk), price cap Rs.300 (user), and a
 liquidity sort. ASM/GSM exclusion is a TODO (needs the daily surveillance lists).
@@ -17,9 +20,11 @@ import datetime as _dt
 
 import requests
 
+import sectors as _sectors
+
 MAX_PRICE = 300.0
 MIN_PRICE = 30.0
-TOP_N = 50
+TOP_N = 200
 
 # ETFs / mutual-fund units / debt instruments trade on the EQ series but are NOT
 # stocks — exclude them (compendium §27: the universe is cash equities only).
@@ -34,15 +39,58 @@ def _is_etf(sym: str) -> bool:
 # The price cap is still enforced on live data, so entries that drift above 300
 # simply drop out. Not exhaustive; the bhavcopy path covers the whole market.
 SEED = [
-    "IDEA", "YESBANK", "SUZLON", "IDFCFIRSTB", "PNB", "IOB", "BANKBARODA", "SAIL",
-    "NHPC", "IRFC", "RVNL", "IREDA", "NBCC", "GAIL", "ONGC", "TATAPOWER", "TATASTEEL",
-    "ASHOKLEY", "FEDERALBNK", "BANDHANBNK", "UNIONBANK", "CANBK", "IOC", "BPCL",
-    "NMDC", "VEDL", "MOTHERSON", "ZOMATO", "INDUSTOWER", "GMRAIRPORT", "JPPOWER",
-    "TRIDENT", "SJVN", "IDBI", "UCOBANK", "CENTRALBK", "MAHABANK", "PFC", "RECLTD",
-    "HUDCO", "IRB", "RPOWER", "OLECTRA", "EXIDEIND", "ASTERDM", "NATIONALUM",
-    "HINDCOPPER", "GSFC", "CHAMBLFERT", "MANAPPURAM", "IFCI", "SOUTHBANK", "TV18BRDCST",
-    "COALINDIA", "PAYTM", "ITC", "WIPRO", "TATAMOTORS", "OLAELEC", "MEESHO", "BHEL",
-    "TMPV", "APOLLO", "DABUR",
+    # ── financials
+    "IDEA", "YESBANK", "IDFCFIRSTB", "PNB", "IOB", "BANKBARODA", "UNIONBANK", "CANBK",
+    "BANDHANBNK", "FEDERALBNK", "IDBI", "UCOBANK", "CENTRALBK", "MAHABANK", "PSB",
+    "J&KBANK", "SOUTHBANK", "DCBBANK", "EQUITASBNK", "UJJIVANSFB", "SURYODAY", "FINOPB",
+    "PFC", "RECLTD", "HUDCO", "IRFC", "IFCI", "MANAPPURAM", "PAYTM", "EDELWEISS",
+    "PAISALO", "CGCL", "SPANDANA", "SATIN", "UGROCAP", "POONAWALLA", "NIACL", "GICRE",
+    "IIFL", "GEOJITFSL", "5PAISA", "JIOFIN", "TFCILTD",
+    # ── power / energy
+    "NHPC", "SJVN", "TATAPOWER", "JPPOWER", "RPOWER", "IREDA", "NLCINDIA", "SUZLON",
+    "INOXWIND", "ORIENTGREEN", "PTC", "GIPCL", "RTNPOWER", "GAIL", "ONGC", "IOC",
+    "BPCL", "HINDPETRO", "OIL", "COALINDIA", "MRPL", "CHENNPETRO", "ATGL", "DEEPINDS",
+    # ── metals & mining
+    "SAIL", "TATASTEEL", "NMDC", "VEDL", "NATIONALUM", "HINDCOPPER", "MOIL", "GMDCLTD",
+    "KIOCL", "SHYAMMETL", "JTLIND", "SURYAROSNI", "GPIL", "WELCORP",
+    # ── capital goods / infra / defence
+    "BHEL", "RVNL", "NBCC", "IRB", "IRCON", "ITDCEM", "NCC", "ASHOKA", "GPTINFRA",
+    "RPPINFRA", "PATELENG", "TITAGARH", "TEXRAIL", "JWL", "GENUSPOWER", "SALASAR",
+    "APOLLO", "JINDWORLD", "OLECTRA", "TRIL", "ELECON", "KIRLOSBROS", "HBLENGINE",
+    "ITI", "HFCL", "STLTECH", "RAILTEL", "MTNL", "GTLINFRA", "TEJASNET",
+    # ── autos & components
+    "ASHOKLEY", "MOTHERSON", "EXIDEIND", "OLAELEC", "TATAMOTORS", "TMPV", "MSUMI",
+    "JAMNAAUTO", "GABRIEL", "SUBROS", "LUMAXTECH", "FIEMIND", "SETCO", "GREAVESCOT",
+    "ATULAUTO", "RACLGEAR", "MINDACORP",
+    # ── healthcare / pharma
+    "MOREPENLAB", "ASTERDM", "GRANULES", "LAURUSLABS", "MARKSANS", "SEQUENT",
+    "AARTIDRUGS", "INDOCO", "BLISSGVS", "PANACEABIO", "KOPRAN", "LINCOLN", "SMSPHARMA",
+    "ORCHPHARMA", "SHILPAMED", "WOCKPHARMA",
+    # ── chemicals / fertilisers
+    "GSFC", "CHAMBLFERT", "GNFC", "RCF", "NFL", "MADRASFERT", "PARADEEP", "DCW",
+    "NOCIL", "IGPL", "TANFACIND", "BHAGCHEM", "GHCL", "TATACHEM",
+    # ── FMCG / consumer
+    "ITC", "DABUR", "PATANJALI", "KRBL", "LTFOODS", "HERITGFOOD", "PARAGMILK",
+    "AVANTIFEED", "VENKEYS", "BAJAJCON", "ZYDUSWELL",
+    # ── consumer services / retail / hospitality
+    "ZOMATO", "MEESHO", "ABFRL", "SHOPERSTOP", "VMART", "LEMONTREE", "MAHINDHOL",
+    "THOMASCOOK", "SPECIALITY", "BARBEQUE", "RESTAURANT", "DELHIVERY", "REDINGTON",
+    # ── textiles
+    "TRIDENT", "WELSPUNLIV", "CUPID", "GOKEX", "NITINSPIN", "SUTLEJTEX", "FILATEX",
+    "SPTL", "INDOCOUNT", "SIYSIL", "RSWM", "ARVIND", "RAYMOND",
+    # ── it / media / telecom
+    "WIPRO", "MOSCHIP", "SAGILITY", "63MOONS", "RSYSTEMS", "NUCLEUS", "SASKEN",
+    "ZENSARTECH", "FIRSTSOURCE", "TANLA", "TV18BRDCST", "ZEEL", "NETWORK18", "DISHTV",
+    "SAREGAMA", "HTMEDIA", "DBCORP", "JAGRAN", "NDTV", "BALAJITELE", "UFO",
+    "INDUSTOWER", "ONMOBILE",
+    # ── realty / cement / building materials
+    "ANANTRAJ", "HUBTOWN", "ARVSMART", "KOLTEPATIL", "ASHIANA", "INDIACEM",
+    "KESORAMIND", "STARCEMENT", "SAGCEM", "PRISMJOHNS", "ORIENTCEM", "HINDWAREAP",
+    "SOMANYCERA", "GREENPLY", "CENTURYPLY",
+    # ── logistics / misc
+    "GMRAIRPORT", "GATI", "TCI", "VRLLOG", "SNOWMAN", "SHREYAS", "ESSARSHPNG",
+    "SCI", "MMTC", "STCINDIA", "JKPAPER", "WSTCSTPAPR", "ANDHRAPAP", "ORIENTPPR",
+    "KUANTUM", "SATIA", "SAFARI", "KHADIM", "BALMLAWRIE",
 ]
 
 
@@ -140,8 +188,9 @@ def _fallback_from_upstox(max_price: float) -> List[Dict]:
 
 def select_universe(d: Optional[_dt.date] = None, max_price: float = MAX_PRICE,
                     top_n: int = TOP_N) -> Dict:
-    """Return {source, date, rows:[{sym,close,volume,turnover,rank}]} — the top_n
-    <= max_price names by today's turnover."""
+    """Return {source, date, sectors, rows:[{sym,close,volume,turnover,rank,sector}]}
+    — the top_n <= max_price names by today's turnover, each tagged with its NSE
+    macro sector."""
     d = d or _dt.date.today()
     source = "bhavcopy"
     rows = fetch_bhavcopy(d)
@@ -160,4 +209,11 @@ def select_universe(d: Optional[_dt.date] = None, max_price: float = MAX_PRICE,
     for i, r in enumerate(top):
         r["rank"] = i + 1
         r["turnover_cr"] = round(r["turnover"] / 1e7, 2)
-    return {"source": source, "date": d.isoformat(), "count": len(top), "rows": top}
+    _sectors.attach(top)                                # stamp {sector} on each row
+
+    by_sector: Dict[str, int] = {}
+    for r in top:
+        by_sector[r["sector"]] = by_sector.get(r["sector"], 0) + 1
+    return {"source": source, "date": d.isoformat(), "count": len(top),
+            "sectors": dict(sorted(by_sector.items(), key=lambda kv: -kv[1])),
+            "rows": top}

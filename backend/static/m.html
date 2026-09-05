@@ -312,6 +312,16 @@ canvas.cv{width:100%;display:block;border-radius:var(--r-sm);touch-action:pan-y}
 
 /* ── PLAN CARDS ────────────────────────────────────────────────────────── */
 .pc{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);margin-bottom:9px;overflow:hidden}
+.pc.entry{border-color:rgba(47,208,140,.45);box-shadow:inset 3px 0 0 var(--green)}
+.psec{background:var(--panel-2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:8px;overflow:hidden}
+.psec-h{padding:11px 12px;display:flex;align-items:center;gap:9px;min-height:var(--tap)}
+.psec-h .arw{font-size:var(--fs-xs);color:var(--text-3);transition:transform .12s;width:11px}
+.psec.open>.psec-h .arw{transform:rotate(90deg)}
+.psec-nm{font-weight:800;font-size:var(--fs-sm);flex:1;min-width:0}
+.psec-nm i{font-style:normal;font-weight:500;color:var(--text-3);font-size:var(--fs-micro);margin-left:6px}
+.psec-b{padding:9px;display:none;border-top:1px solid var(--border)}
+.psec.open>.psec-b{display:block}
+.psec-b .pc{background:var(--panel)}
 .pc-h{padding:11px 12px;display:flex;align-items:flex-start;gap:9px;min-height:var(--tap)}
 .pc-rank{font-size:var(--fs-xs);font-weight:800;color:var(--text-3);min-width:17px;padding-top:2px}
 .pc-b{padding:0 12px 12px;border-top:1px solid var(--border);display:none}
@@ -1643,12 +1653,44 @@ const P = {
       ? {dates:'/api/swing/dates',report:'/api/swing/report',score:'/api/swing/score',build:'/api/swing/build',card:'/api/swing/scorecard'}
       : {dates:'/api/plan/dates', report:'/api/plan/report', score:'/api/plan/score', build:'/api/plan/build', card:'/api/plan/scorecard'};
   },
-  data:null, scored:null, autoScored:{},
+  data:null, scored:null, autoScored:{}, secOpen:{}, view:'sector',
 };
+
+/* Priority order, identical to the desktop plan page: a stock with a live
+   entry outranks one without, then higher confluence score, then turnover
+   rank. Sectors inherit the same rule. */
+const pHasEntry = p => ((p.num_setups!=null?p.num_setups:(p.setups||[]).length) > 0);
+function pByPriority(a,b){
+  const ea=pHasEntry(a)?0:1, eb=pHasEntry(b)?0:1;
+  if(ea!==eb) return ea-eb;
+  const sa=(a.score==null?-1:a.score), sb=(b.score==null?-1:b.score);
+  if(sb!==sa) return sb-sa;
+  return (a.universe_rank||9999)-(b.universe_rank||9999);
+}
+const pSectorOf = p => p.sector || 'Unclassified';
+
+function pSectorGroups(plans){
+  const m=new Map();
+  plans.forEach((p,i)=>{ const k=pSectorOf(p); if(!m.has(k)) m.set(k,[]); m.get(k).push(i); });
+  return [...m.entries()].map(([name,idx])=>({
+    name, idx,
+    entries: idx.filter(i=>pHasEntry(plans[i])).length,
+    best: Math.max(...idx.map(i=>plans[i].score==null?-1:plans[i].score)),
+    bestRank: Math.min(...idx.map(i=>plans[i].universe_rank||9999)),
+  })).sort((a,b)=>
+    (b.entries>0?1:0)-(a.entries>0?1:0) ||
+    (a.name==='Unclassified'?1:0)-(b.name==='Unclassified'?1:0) ||
+    b.entries-a.entries || b.best-a.best || a.bestRank-b.bestRank);
+}
 seg('#planSeg',s=>{ S.planSub=s; Poll.clearAll(); startPlanTab(); });
 function startPlanTab(){
   if(S.planSub==='live'){ loadLive(); Poll.set('lpm',loadLive,6000,false); }
-  else renderPlanShell();
+  else { renderPlanShell(); resumeBuildIfRunning(); }
+}
+/* A build kicked off earlier is still running server-side — pick its progress
+   back up instead of showing a stale idle button. */
+async function resumeBuildIfRunning(){
+  try{ const j=await api(buildStatusUrl()); if(j&&j.running) pollBuild(); }catch(e){}
 }
 function planCtl(){
   return `<div class="card" style="padding:10px">
@@ -1679,7 +1721,9 @@ function wirePlanCtl(){
 function setPlanMode(m){
   if(S.planMode===m) return;
   S.planMode=m; S.planDate=null; P.data=null; P.scored=null; S.planDates=[];
+  clearTimeout(_mBuildPoll);
   renderPlanShell();
+  resumeBuildIfRunning();
 }
 function pStatus(t,kind){ const n=$('#pStatus'); if(n){ n.innerHTML=t?`<span class="${kind==='err'?'r':kind==='ok'?'g':'m'}">${esc(t)}</span>`:''; } }
 async function renderPlanShell(){
@@ -1710,13 +1754,25 @@ async function loadPlanData(){
   try{
     if(S.planSub==='plan'){
       const d=await api(`${P.api().report}?date=${S.planDate}`);
+      // sort once — this order drives the cards, the sector groups and the TXT
+      d.plans=(d.plans||[]).slice().sort(pByPriority);
       P.data=d;
-      if(!d.ok||!(d.plans||[]).length){ out.innerHTML=`<div class="empty">${esc(d.error||'No plans for '+S.planDate)}</div>`; return; }
+      if(!d.ok||!d.plans.length){ out.innerHTML=`<div class="empty">${esc(d.error||'No plans for '+S.planDate)}</div>`; return; }
+      const groups=pSectorGroups(d.plans);
+      if(!groups.some(g=>P.secOpen[g.name]) && groups[0]) P.secOpen[groups[0].name]=true;
+      const nEntry=d.plans.filter(pHasEntry).length;
       out.innerHTML =
-        `<div class="hint" style="margin:0 0 10px 2px">${S.planMode==='swing'
+        `<div class="hint" style="margin:0 0 8px 2px">${S.planMode==='swing'
           ?`Swing plan live from ${esc(d.plan_date)} · ${d.count} stocks · 2–15 session holds`
-          :`Plan for ${esc(d.plan_date)} · ${d.count} stocks · sorted by confluence`}</div>`
-        + d.plans.map((p,i)=>S.planMode==='swing'?swingCard(p,i):dayCard(p,i)).join('');
+          :`Plan for ${esc(d.plan_date)} · ${d.count} stocks`}<br>${nEntry} with an entry · ${groups.length} sectors · entries first, then score</div>`
+        + `<div class="row" style="gap:6px;margin-bottom:9px">
+             <button class="chip sm${P.view==='sector'?' on':''}" id="pvSec" style="flex:1">Sectors</button>
+             <button class="chip sm${P.view==='flat'?' on':''}" id="pvFlat" style="flex:1">All ${d.count}</button>
+           </div>`
+        + (P.view==='sector' ? groups.map(g=>pSectorBlock(g,d.plans)).join('')
+                             : d.plans.map((p,i)=>planCardFor(p,i)).join(''));
+      wirePlanViewBtns();
+      wireSectors();
       wireCards();
     } else {
       let d=await api(`${P.api().card}?date=${S.planDate}`);
@@ -1739,6 +1795,33 @@ async function loadPlanData(){
   }catch(e){ out.innerHTML='<div class="empty">could not load</div>'; }
 }
 function wireCards(){ $$('.pc-h').forEach(h=>h.onclick=()=>h.parentElement.classList.toggle('open')); }
+
+const planCardFor=(p,i)=>S.planMode==='swing'?swingCard(p,i):dayCard(p,i);
+
+function pSectorBlock(g,plans){
+  const open=!!P.secOpen[g.name];
+  const chip=g.entries
+    ? `<span class="pill g">${g.entries} entr${g.entries===1?'y':'ies'}</span>`
+    : `<span class="pill n">no entry</span>`;
+  return `<div class="psec${open?' open':''}" data-sec="${esc(g.name)}">
+    <div class="psec-h"><span class="arw">▸</span>
+      <span class="psec-nm">${esc(g.name)}<i>${g.idx.length} stock${g.idx.length===1?'':'s'}</i></span>
+      ${chip}<span class="pill n">best ${g.best<0?'—':g.best}</span></div>
+    <div class="psec-b">${g.idx.map(i=>planCardFor(plans[i],i)).join('')}</div>
+  </div>`;
+}
+function wireSectors(){
+  $$('.psec-h').forEach(h=>h.onclick=()=>{
+    const sec=h.parentElement, name=sec.dataset.sec;
+    P.secOpen[name]=!P.secOpen[name];
+    sec.classList.toggle('open',P.secOpen[name]);
+  });
+}
+function wirePlanViewBtns(){
+  const a=$('#pvSec'), b=$('#pvFlat');
+  if(a) a.onclick=()=>{ if(P.view!=='sector'){ P.view='sector'; loadPlanData(); } };
+  if(b) b.onclick=()=>{ if(P.view!=='flat'){ P.view='flat'; loadPlanData(); } };
+}
 /* The engines aren't consistent: the plan engine says "bullish"/"bearish"
    while smc_engine says "bull"/"bear". Match on the prefix so both colour. */
 function chipFor(v){
@@ -1750,7 +1833,9 @@ function chipFor(v){
   return 'n';
 }
 function hdrChips(p){
-  return `<span class="pill ${chipFor(p.bias)}">${esc(p.bias||'—')}</span>
+  return (P.view==='flat'?`<span class="pill p">${esc(pSectorOf(p))}</span>`:'')
+       + (pHasEntry(p)?'<span class="pill g">entry</span>':'')
+       + `<span class="pill ${chipFor(p.bias)}">${esc(p.bias||'—')}</span>
           <span class="pill ${chipFor(p.conviction)}">${esc(p.conviction||'')}</span>
           <span class="pill n">score ${nf(p.score,0)}</span>`;
 }
@@ -1775,9 +1860,9 @@ const ul = (arr,c) => (arr&&arr.length)?`<ul class="bul${c?' '+c:''}">${arr.map(
 function dayCard(p,i){
   const L=p.levels||{}, pd=L.prev_day||{}, cp=L.cpr||{}, cam=L.camarilla||{}, pv=L.pivots||{}, sz=L.smc_zones||{};
   const h=p.headline||{}, so=p.swing_outlook||{};
-  return `<div class="pc" id="card${i}">
+  return `<div class="pc${pHasEntry(p)?' entry':''}" id="card${i}">
     <div class="pc-h">
-      <span class="pc-rank">${i+1}</span>
+      <span class="pc-rank">${p.universe_rank||i+1}</span>
       <div style="flex:1;min-width:0">
         <div class="between"><span style="font-weight:700">${esc(p.tsym)}</span><span class="mono d">${rs(p.last_close)}</span></div>
         <div class="hint" style="margin:3px 0">${esc(h.read||'')}</div>
@@ -1821,13 +1906,15 @@ function dayCard(p,i){
 function swingCard(p,i){
   const t=p.trend||{}, pr=p.profile||{}, h=p.headline||{}, ew=p.entry_window||{}, mr=p.market_regime||{};
   const flags=[pr.nr7&&'NR7',pr.inside_nr4&&'inside+NR4',pr.bbw_126_low&&'BB-squeeze',pr.atr_contracting&&'ATR↓'].filter(Boolean).join(', ')||'none';
-  return `<div class="pc" id="card${i}">
+  return `<div class="pc${pHasEntry(p)?' entry':''}" id="card${i}">
     <div class="pc-h">
-      <span class="pc-rank">${i+1}</span>
+      <span class="pc-rank">${p.universe_rank||i+1}</span>
       <div style="flex:1;min-width:0">
         <div class="between"><span style="font-weight:700">${esc(p.tsym)}</span><span class="mono d">${rs(p.last_close)}</span></div>
         <div class="hint" style="margin:3px 0">${esc(h.read||'')}</div>
         <div class="row wrap" style="gap:4px;margin-top:5px">
+          ${P.view==='flat'?`<span class="pill p">${esc(pSectorOf(p))}</span>`:''}
+          ${pHasEntry(p)?'<span class="pill g">entry</span>':''}
           <span class="pill ${chipFor(p.bias)}">${esc(p.bias||'—')}</span>
           <span class="pill p">${esc(p.stage||'')}</span>
           <span class="pill ${chipFor(p.conviction)}">${esc(p.conviction||'')}</span>
@@ -1943,15 +2030,41 @@ function scoreCard(r,i){
     </div></div>`;
 }
 function openChart(tsym){ pickSymbol(tsym,''); nav('chart'); }
+/* A 200-stock build takes minutes, so it runs server-side in a background
+   thread and we poll it — holding the request open would just time out. */
+const PLAN_UNIVERSE_N=200;
+let _mBuildPoll=null;
+const buildStatusUrl=()=>S.planMode==='swing'?'/api/swing/build_status':'/api/plan/build_status';
+
 async function runBuild(){
   const b=$('#pBuild'); b.disabled=true; b.textContent='building…';
-  pStatus(`Building the next-session ${S.planMode==='swing'?'SWING ':''}plan (can take 1–2 min)…`);
+  pStatus(`Starting the next-session ${S.planMode==='swing'?'SWING ':''}plan build (top ${PLAN_UNIVERSE_N} ≤₹300)…`);
   try{
-    const r=await api(P.api().build);
-    pStatus(r.ok?`Built ${r.built} plans for ${r.plan_date} (${r.skipped} skipped).`:'Build failed: '+(r.error||''),r.ok?'ok':'err');
+    const r=await api(`${P.api().build}?background=1&top_n=${PLAN_UNIVERSE_N}`);
+    if(r&&r.job) return pollBuild();
+    pStatus(r.ok===false?'Build failed: '+(r.error||''):`Built ${r.built} plans for ${r.plan_date} (${r.skipped} skipped).`, r.ok===false?'err':'ok');
     if(r.ok){ S.planDate=r.plan_date; renderPlanShell(); }
   }catch(e){ pStatus('Build failed: '+e.message,'err'); }
   b.disabled=false; b.textContent='⚙ Build next';
+}
+
+async function pollBuild(){
+  clearTimeout(_mBuildPoll);
+  let j;
+  try{ j=await api(buildStatusUrl()); }catch(e){ _mBuildPoll=setTimeout(pollBuild,3000); return; }
+  const b=$('#pBuild');
+  if(j.running){
+    if(b){ b.disabled=true; b.textContent=`${j.done}/${j.total||'…'}`; }
+    pStatus(`Building — ${j.done}/${j.total||'?'} stocks${j.current?' · '+j.current:''} (${j.percent}%). Safe to leave this tab.`);
+    _mBuildPoll=setTimeout(pollBuild,2000);
+    return;
+  }
+  if(b){ b.disabled=false; b.textContent='⚙ Build next'; }
+  if(j.state==='error') return pStatus('Build failed: '+(j.error||'unknown'),'err');
+  if(j.state==='idle') return;
+  const r=j.result||{};
+  pStatus(r.plan_date?`Built ${r.built} plans for ${r.plan_date} — ${r.skipped} skipped.`:'Build finished.','ok');
+  if(r.plan_date){ S.planDate=r.plan_date; renderPlanShell(); }
 }
 async function runScore(){
   if(!S.planDate) return pStatus('Pick a date first.','err');

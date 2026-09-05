@@ -260,9 +260,11 @@ class UpstoxQuoteFeed:
         # resolve watchlist + plan-universe tsyms -> instrument keys (deduped;
         # one Upstox call covers up to 500 instruments, so extras are free)
         key_to_sym = {}
+        seen = set()                      # O(1) dedupe — this runs every poll
         for tsym in [w["tsym"] for w in self._watch] + list(self._extra):
-            if tsym in key_to_sym.values():
+            if tsym in seen:
                 continue
+            seen.add(tsym)
             k = self.ux.instrument_key(tsym)
             if k:
                 key_to_sym[k] = tsym
