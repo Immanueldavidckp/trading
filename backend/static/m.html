@@ -1763,7 +1763,7 @@ async function loadPlanData(){
       const nEntry=d.plans.filter(pHasEntry).length;
       out.innerHTML =
         `<div class="hint" style="margin:0 0 8px 2px">${S.planMode==='swing'
-          ?`Swing plan live from ${esc(d.plan_date)} · ${d.count} stocks · 2–15 session holds`
+          ?`Swing plan live from ${esc(d.plan_date)} · ${d.count} stocks · 2–22 session holds (up to ~1 month)`
           :`Plan for ${esc(d.plan_date)} · ${d.count} stocks`}<br>${nEntry} with an entry · ${groups.length} sectors · entries first, then score</div>`
         + `<div class="row" style="gap:6px;margin-bottom:9px">
              <button class="chip sm${P.view==='sector'?' on':''}" id="pvSec" style="flex:1">Sectors</button>
@@ -1832,6 +1832,47 @@ function chipFor(v){
   if(s==='medium') return 'y';
   return 'n';
 }
+// ---------- SMC / volume-profile panels (mobile swing) ----------
+function mZone(z,label){
+  return `<div class="tile"><span>${label}</span><b class="mono">${nf(z.bottom)}–${nf(z.top)}</b>
+    <span class="hint">${z.ce?('CE '+nf(z.ce)+' · '):''}${z.dist_pct==null?'':(z.dist_pct>=0?nf(z.dist_pct,1)+'% below':nf(Math.abs(z.dist_pct),1)+'% above')}</span></div>`;
+}
+function mSmcPanel(p){
+  const m=p.smc||{}, H=p.htf||{};
+  if(!m.ok) return `<div class="scen">No daily structure read.</div>`;
+  const dr=m.dealing_range||{};
+  const zc = m.price_zone==='discount' ? '<span class="pill g">DISCOUNT — buy half</span>'
+           : m.price_zone==='premium'  ? '<span class="pill r">PREMIUM — don\'t buy</span>'
+                                       : '<span class="pill n">EQUILIBRIUM</span>';
+  const dem=(m.refined||[]).map(z=>mZone(z,'⭐ Refined OB∩FVG'))
+    .concat((m.demand_ob||[]).map(z=>mZone(z,'Demand OB')))
+    .concat((m.bull_fvg||[]).map(z=>mZone(z,'Bullish FVG')))
+    .concat((m.breakers||[]).map(z=>mZone(z,'Breaker (support)'))).join('');
+  const sup=(m.supply_ob||[]).map(z=>mZone(z,'Supply OB (target)'))
+    .concat((m.bear_fvg||[]).map(z=>mZone(z,'Bearish FVG (target)'))).join('');
+  return `<div class="row wrap" style="gap:4px;margin-bottom:7px">${zc}
+      ${m.in_ote?'<span class="pill p">in OTE</span>':''}
+      ${m.fresh_ssl_sweep?`<span class="pill g">sweep @ ${nf(m.fresh_ssl_sweep.price)}</span>`:''}
+      ${H.stage?`<span class="pill ${H.aligned_for_long?'g':'r'}">wk ${esc(H.stage.replace(/_/g,' '))}</span>`:''}</div>
+    <div class="tiles">
+      <div class="tile"><span>Range low · EQ · high</span><b class="mono">${nf(dr.low)} · ${nf(dr.eq)}<br>${nf(dr.high)}</b></div>
+      <div class="tile"><span>OTE 0.618–0.79</span><b class="mono">${nf(dr.ote_bottom)}–${nf(dr.ote_top)}</b></div>
+    </div>
+    ${dem?`<div class="hint" style="margin:8px 0 5px">Demand below — limit entries rest here</div><div class="tiles">${dem}</div>`:'<div class="hint" style="margin-top:6px">No unmitigated demand within reach.</div>'}
+    ${sup?`<div class="hint" style="margin:8px 0 5px">Supply above — targets</div><div class="tiles">${sup}</div>`:''}`;
+}
+function mVpPanel(p){
+  const v=p.volume_profile||{};
+  if(!v.ok) return `<div class="scen">No volume profile.</div>`;
+  return `<div class="tiles">
+    <div class="tile"><span>POC · VAH · VAL</span><b class="mono">${nf(v.poc)}<br>${nf(v.vah)} · ${nf(v.val)}</b></div>
+    <div class="tile"><span>Price vs value</span><b>${esc((v.position||'').replace(/_/g,' '))}</b></div>
+    <div class="tile"><span>Naked POC</span><b class="mono">${(v.naked_poc||[]).map(n=>nf(n.price)).join(' · ')||'—'}</b></div>
+    <div class="tile"><span>HVN shelves</span><b class="mono">${(v.hvn||[]).map(h=>nf(h.price)).join(' · ')||'—'}</b></div>
+    <div class="tile"><span>LVN (fast travel)</span><b class="mono">${(v.lvn||[]).map(l=>nf(l.price)).join(' · ')||'—'}</b></div>
+  </div>`;
+}
+
 function hdrChips(p){
   return (P.view==='flat'?`<span class="pill p">${esc(pSectorOf(p))}</span>`:'')
        + (pHasEntry(p)?'<span class="pill g">entry</span>':'')
@@ -1937,6 +1978,10 @@ function swingCard(p,i){
         <div class="tile"><span>Momentum rank</span><b class="mono">${nf(t.momentum_percentile,0)} pctile</b></div>
         <div class="tile"><span>Compression</span><b>${esc(flags)}</b></div>
       </div>
+      <h4>Structure — order blocks · FVG · dealing range</h4>
+      ${mSmcPanel(p)}
+      <h4>Volume profile</h4>
+      ${mVpPanel(p)}
       <h4>Risk profile</h4>
       <div class="tiles">
         <div class="tile"><span>ATR14 · ATR%</span><b class="mono">${nf(pr.atr14)} · ${nf(pr.atr_pct,1)}%</b></div>

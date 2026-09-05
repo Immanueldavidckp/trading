@@ -190,8 +190,13 @@ def build_swing_plans(for_date: Optional[str] = None, top_n: int = _universe.TOP
     _apply_cross_sectional(plans)
 
     for p in plans:
+        # Re-score with the cross-sectional rank now known. The SMC context must
+        # be passed back in — without it the smc_confluence bucket would silently
+        # zero out and every score would drop by up to 10.
+        ctx = {"smc": p.get("smc"), "volume_profile": p.get("volume_profile"),
+               "htf": p.get("htf")}
         sc = swing_engine.confluence_score(p["trend"], p["profile"], p["setups"],
-                                           p.get("xsec"))
+                                           p.get("xsec"), ctx)
         p["score"], p["conviction"], p["score_parts"] = sc["score"], sc["label"], sc["parts"]
 
     conn = _db.connect()
