@@ -64,17 +64,35 @@ def _now_iso():
 
 
 def next_trading_day(d: _dt.date) -> _dt.date:
-    nd = d + _dt.timedelta(days=1)
-    while nd.weekday() >= 5:            # Sat/Sun → Monday (holidays handled by empty data)
-        nd += _dt.timedelta(days=1)
-    return nd
+    """The next session the NSE is actually open — weekends AND holidays skipped.
+
+    This used to skip weekends only, on the theory that holidays were "handled
+    by empty data". They were not: a plan built on the eve of a holiday targeted
+    the holiday, found no candles for it, and produced a day of nothing. The
+    calendar knows the real holiday list; fall back to the weekend rule only if
+    it cannot be loaded."""
+    try:
+        import trading_calendar as _cal
+        return _cal.next_trading_day(d)
+    except Exception:
+        nd = d + _dt.timedelta(days=1)
+        while nd.weekday() >= 5:
+            nd += _dt.timedelta(days=1)
+        return nd
 
 
 def prev_trading_day(d: _dt.date) -> _dt.date:
-    pd = d - _dt.timedelta(days=1)
-    while pd.weekday() >= 5:
-        pd -= _dt.timedelta(days=1)
-    return pd
+    """The previous session the NSE was open. Same holiday-awareness as above —
+    this one decides `as_of`, so getting it wrong means the plan is computed from
+    the wrong session's close."""
+    try:
+        import trading_calendar as _cal
+        return _cal.prev_trading_day(d)
+    except Exception:
+        pd = d - _dt.timedelta(days=1)
+        while pd.weekday() >= 5:
+            pd -= _dt.timedelta(days=1)
+        return pd
 
 
 def _ist_date(ms: int) -> str:

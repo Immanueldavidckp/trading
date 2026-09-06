@@ -53,6 +53,7 @@ from typing import List, Dict, Optional
 import datetime as _dt
 
 from plan_engine import _ema, _atr, _fmt
+import swing_smc
 
 _IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
 
@@ -63,6 +64,10 @@ MIN_POSITION_RUPEES = 15000         # below this the flat DP fee alone is >0.12%
 MIN_DAILY_CANDLES = 252             # 52-week levels need a full year of history
 MIN_TURNOVER_CR_20D = 10.0          # median 20d turnover (₹cr) to swing delivery safely
 ENTRY_WINDOW_SESSIONS = 2           # armed buy-stops live T+1 & T+2, then stale
+ZONE_WINDOW_SESSIONS = 5            # a resting LIMIT at a zone waits longer than a buy-stop
+MAX_HOLD_SESSIONS = 22              # ~1 calendar month — the outer time stop
+SCALE_OUT_PCT = 50                  # % of the position taken off at T1
+TRAIL_ATR_MULT = 2.5                # chandelier trail once T1 prints
 MIN_T1_GAIN_PCT = 3.0               # first target must clear ≈5–6× round-trip cost
 MIN_STOP_PCT = 1.2                  # tighter stops make fixed costs + gaps huge in R terms
 MAX_STOP_PCT = 8.0                  # wider than 8% = wrong candidate for a swing
@@ -102,13 +107,24 @@ def _rsi(closes: List[float], n: int = 14) -> Optional[float]:
 
 
 def add_trading_days(d: _dt.date, n: int) -> _dt.date:
-    """d + n trading days (weekends skipped; holidays approximated away)."""
+    """d + n trading days, weekends AND NSE holidays skipped.
+
+    These dates are printed as hard instructions — "enter by", "hard exit by" —
+    so counting a holiday as a session quietly shortens the real window. Falls
+    back to the weekend-only count if the calendar can't be loaded."""
+    try:
+        import trading_calendar as _cal
+        _open = lambda x: _cal.is_trading_day(x)["open"]          # noqa: E731
+    except Exception:
+        _open = lambda x: x.weekday() < 5                         # noqa: E731
     cur = d
     step = 1 if n >= 0 else -1
     left = abs(n)
-    while left > 0:
+    guard = 0
+    while left > 0 and guard < 400:
         cur += _dt.timedelta(days=step)
-        if cur.weekday() < 5:
+        guard += 1
+        if _open(cur):
             left -= 1
     return cur
 
@@ -320,7 +336,150 @@ def _expected_hold(entry: float, target: float, atr: float, time_stop: int) -> i
     return int(max(2, min(time_stop, round(days))))
 
 
-def build_setups(daily: List[dict], trend: Dict, prof: Dict) -> List[Dict]:
+def _exit_plan(entry: float, stop: float, targets: List[float], atr: float,
+               picked: List[Dict], vp: Dict) -> Dict:
+    """The exit half of the trade, stated up front. A swing is lost far more
+    often by managing the way out badly than by picking the wrong entry."""
+    R = entry - stop
+    lvns = swing_smc.lvn_between(vp, entry, targets[-1]) if targets else []
+    return {
+        "t1_action": (f"sell {SCALE_OUT_PCT}% at T1 {_fmt(targets[0])}, "
+                      f"move the stop on the rest to break-even {_fmt(entry)}") if targets else None,
+        "runner_action": (f"trail the remainder {TRAIL_ATR_MULT}×ATR "
+                          f"(≈{_fmt(TRAIL_ATR_MULT * atr)}) under the highest close, "
+                          "or under each new higher swing low — whichever is tighter"),
+        "target_basis": [f"{p['price']} — {p['why']}" for p in picked] or
+                        ["no overhead structure: targets are 2R/3R multiples"],
+        "lvn_ahead": lvns,
+        "lvn_note": ("low-volume nodes between entry and target — price travels through "
+                     "these fast, so a target set just BEYOND one fills more often than "
+                     "one set just short of it") if lvns else None,
+        "invalidation": (f"a daily CLOSE below {_fmt(stop)} ends the trade regardless of "
+                         "the intraday stop — the reason for the trade is gone"),
+        "r_per_share": _fmt(R),
+    }
+
+
+def build_smc_setups(daily: List[dict], trend: Dict, prof: Dict, ctx: Dict) -> List[Dict]:
+    """Order-block / FVG / volume-profile entries — the 'where exactly do I buy'
+    half that the momentum setups (S1–S3) do not answer.
+
+    These are LIMIT entries into a zone price has left behind, not buy-stops
+    above the high. They are only taken in the DISCOUNT half of the dealing
+    range: buying an order block at a premium is just chasing with extra steps."""
+    smc = ctx.get("smc") or {}
+    vp = ctx.get("volume_profile") or {}
+    if not smc.get("ok"):
+        return []
+
+    closes = [c["c"] for c in daily]
+    last = closes[-1]
+    atr = float(prof.get("atr14") or 0) or (last * 0.02)
+    S: List[Dict] = []
+
+    def _viable(entry, stop, t1):
+        risk_pct = (entry - stop) / entry * 100
+        gain_pct = (t1 - entry) / entry * 100
+        return (MIN_STOP_PCT <= risk_pct <= MAX_STOP_PCT
+                and gain_pct >= MIN_T1_GAIN_PCT)
+
+    # ── S4: demand-zone limit entry (refined OB+FVG > OB > FVG > breaker) ──
+    # Rank by quality: the refined pocket (order block overlapping the imbalance)
+    # is the highest-probability zone and gives the tightest stop.
+    cands = ([(z, "refined OB+FVG pocket", "high") for z in (smc.get("refined") or [])]
+             + [(z, "demand order block", "high") for z in (smc.get("demand_ob") or [])]
+             + [(z, "bullish FVG rebalance", "medium") for z in (smc.get("bull_fvg") or [])]
+             + [(z, "bullish breaker (flipped supply)", "medium") for z in (smc.get("breakers") or [])])
+
+    for z, label, qual in cands:
+        top, bot = z.get("top"), z.get("bottom")
+        if not top or not bot:
+            continue
+        dist_atr = (last - top) / atr if atr else 99
+        if dist_atr > swing_smc.ZONE_MAX_DIST_ATR or top >= last:
+            continue                      # too far below, or price is already in it
+        # Enter at the zone's proximal edge; for an FVG use CE (consequent
+        # encroachment) — a swing pullback usually rebalances to the 50% line,
+        # not the whole gap.
+        entry = z.get("ce") if (z.get("kind") == "FVG" and z.get("ce")) else top
+        sup = swing_smc.support_ladder(smc, vp, entry)
+        struct_stop = sup[0]["price"] if sup else None
+        stop = min(bot - 0.25 * atr,
+                   struct_stop - 0.1 * atr if struct_stop else bot - 0.25 * atr)
+        if (entry - stop) / entry * 100 > MAX_STOP_PCT:
+            stop = entry * (1 - MAX_STOP_PCT / 100)
+        ladder = swing_smc.resistance_ladder(smc, vp, trend, entry)
+        tgts, picked = swing_smc.pick_targets(ladder, entry, stop, MIN_T1_GAIN_PCT)
+        if not tgts or not _viable(entry, stop, tgts[0]):
+            continue
+
+        disc = smc.get("in_discount")
+        ote = smc.get("in_ote")
+        S.append(_mk_setup(
+            f"Demand-zone limit entry — {label} (S4)", "smc_zone",
+            f"resting BUY LIMIT at {_fmt(entry)} — {label} {_fmt(bot)}–{_fmt(top)}, "
+            f"unmitigated, {_fmt(z.get('dist_pct'))}% below spot"
+            + (" · price is in DISCOUNT" if disc else "")
+            + (" · inside the OTE 0.618–0.79 band" if ote else ""),
+            entry, entry, _fmt(top + 0.15 * atr), stop, tgts,
+            [trend.get("week52_high")],
+            "high" if (qual == "high" and disc) else "medium",
+            "SMC order block / fair value gap + composite volume profile",
+            time_stop=MAX_HOLD_SESSIONS, atr=atr,
+            valid_when=("zone still unmitigated when price arrives · daily close stays above "
+                        f"{_fmt(stop)} · weekly stage not declining"),
+            skip_when=("price closes THROUGH the zone (it is broken, not support) · "
+                       "the zone is touched a second time (a mitigated block is spent) · "
+                       f"limit unfilled after {ZONE_WINDOW_SESSIONS} sessions"),
+            no_progress={"after_sessions": 10, "min_gain_pct": 2.0}))
+        S[-1]["entry_window_sessions"] = ZONE_WINDOW_SESSIONS
+        S[-1]["entry_type"] = "LIMIT (resting at the zone)"
+        S[-1]["zone"] = {"top": top, "bottom": bot, "kind": z.get("kind"),
+                         "source": z.get("source"), "ce": z.get("ce")}
+        S[-1]["exit_plan"] = _exit_plan(entry, stop, tgts, atr, picked, vp)
+        break                                   # one zone entry per stock
+
+    # ── S5: liquidity sweep reclaim (turtle soup) ──
+    # Price took out a prior swing low (stop hunt below sell-side liquidity),
+    # then closed back above it. Buy the reclaim, stop under the sweep wick.
+    sweep = smc.get("fresh_ssl_sweep")
+    if sweep and trend["template_passes"] >= 4:
+        swept = sweep.get("price")
+        lows = [c["l"] for c in daily[-SWEEP_LOOKBACK:]]
+        wick = min(lows) if lows else None
+        if swept and wick and last > swept:
+            entry = max(daily[-1]["h"], daily[-2]["h"]) + 0.05 * atr
+            stop = wick - 0.25 * atr
+            if (entry - stop) / entry * 100 > MAX_STOP_PCT:
+                stop = entry * (1 - MAX_STOP_PCT / 100)
+            ladder = swing_smc.resistance_ladder(smc, vp, trend, entry)
+            tgts, picked = swing_smc.pick_targets(ladder, entry, stop, MIN_T1_GAIN_PCT)
+            if tgts and _viable(entry, stop, tgts[0]):
+                S.append(_mk_setup(
+                    "Liquidity sweep reclaim (S5)", "sweep",
+                    f"sell-side liquidity below {_fmt(swept)} was swept to {_fmt(wick)} and "
+                    f"reclaimed — buy-stop the continuation over {_fmt(entry)}",
+                    entry, entry, _fmt(entry + 0.5 * atr), stop, tgts,
+                    [trend.get("week52_high")],
+                    "medium", "SMC liquidity sweep / stop-hunt reversal",
+                    time_stop=MAX_HOLD_SESSIONS, atr=atr,
+                    valid_when="price holds back above the swept low · sweep is <5 sessions old",
+                    skip_when="a daily close back BELOW the swept low (the sweep was real "
+                              "distribution, not a hunt) · trigger unfilled in 2 sessions",
+                    no_progress={"after_sessions": 8, "min_gain_pct": 2.0}))
+                S[-1]["exit_plan"] = _exit_plan(entry, stop, tgts, atr, picked, vp)
+                S[-1]["swept_level"] = _fmt(swept)
+    return S
+
+
+SWEEP_LOOKBACK = 10
+
+
+def build_setups(daily: List[dict], trend: Dict, prof: Dict,
+                 ctx: Optional[Dict] = None) -> List[Dict]:
+    ctx = ctx or {}
+    _smc = ctx.get("smc") or {}
+    _vp = ctx.get("volume_profile") or {}
     closes = [c["c"] for c in daily]
     last = closes[-1]
     atr = float(prof.get("atr14") or 0) or (last * 0.02)
@@ -362,7 +521,7 @@ def build_setups(daily: List[dict], trend: Dict, prof: Dict) -> List[Dict]:
                 f"buy-stop the continuation",
                 trigger, trigger, limit, stop, [t1, t2], [hi52],
                 "high", "George-Hwang 52w-high + Minervini gate",
-                time_stop=15, atr=atr,
+                time_stop=MAX_HOLD_SESSIONS, atr=atr,
                 valid_when="strict Stage-2 template · within 10% of the 52w high · RS leader · volume ≥1.5×",
                 skip_when=f"opens beyond the limit cap {_fmt(limit)} (no chasing) · trigger not hit in 2 sessions",
                 no_progress={"after_sessions": 8, "min_gain_pct": 2.0}))
@@ -402,7 +561,7 @@ def build_setups(daily: List[dict], trend: Dict, prof: Dict) -> List[Dict]:
                         trigger, trigger, limit, stop, [t1, t2], [hi52],
                         "high" if depth <= 5 else "medium",
                         "Landry pullback / continuation in liquid NSE momentum",
-                        time_stop=10, atr=atr,
+                        time_stop=18, atr=atr,
                         valid_when="Stage-2 intact · pullback quiet (vol <0.8×) · RSI held ≥40 · near EMA20",
                         skip_when="pullback deepens past 8% (it's a reversal, not a dip) · gap over the limit cap"))
 
@@ -426,20 +585,49 @@ def build_setups(daily: List[dict], trend: Dict, prof: Dict) -> List[Dict]:
                 f"buy-stop the expansion over {_fmt(trigger)}",
                 trigger, trigger, limit, stop, [t1, t2], [_fmt(hi52)],
                 "medium", "Crabel NR7/inside-day + BB-squeeze (direction from the Stage-2 gate)",
-                time_stop=5, atr=atr,
+                time_stop=12, atr=atr,
                 valid_when="≥2 compression flags · Stage-2 · within 15% of 52w high",
                 skip_when="gap beyond the limit cap · no expansion within 2 sessions (stale)"))
 
+    # Momentum setups keep their R-multiple targets as a FLOOR, but if the chart
+    # offers real overhead structure inside that distance, take the structural
+    # level instead — a target at a supply block fills; a target at 3R for no
+    # reason does not. Every setup also gets its exit half stated.
+    for st in S:
+        try:
+            e, sp = st["entry"], st["stop"]
+            if not (e and sp) or not _smc.get("ok"):
+                st["exit_plan"] = _exit_plan(e, sp, st.get("targets") or [], atr, [], _vp)
+                continue
+            ladder = swing_smc.resistance_ladder(_smc, _vp, trend, e)
+            tg, picked = swing_smc.pick_targets(ladder, e, sp, MIN_T1_GAIN_PCT)
+            if tg and picked:
+                st["targets"] = [_fmt(t) for t in tg]
+                R = abs(e - sp) or 1e-9
+                st["rr_t1"] = round(abs(tg[0] - e) / R, 2)
+                st["rr_final"] = round(abs(tg[-1] - e) / R, 2)
+                st["expected_hold_sessions"] = _expected_hold(
+                    e, tg[0], atr, st["time_stop_sessions"])
+            st["exit_plan"] = _exit_plan(e, sp, st.get("targets") or [], atr, picked, _vp)
+        except Exception:                                    # noqa: BLE001
+            pass
     return S
 
 
 # ── confluence score (0–100; weights are priors, measured by the scorecard) ─
 
 def confluence_score(trend: Dict, prof: Dict, setups: List[Dict],
-                     xsec: Optional[Dict] = None) -> Dict:
+                     xsec: Optional[Dict] = None, ctx: Optional[Dict] = None) -> Dict:
     """xsec = cross-sectional stats injected by the pipeline after all plans are
     built tonight: {momentum_percentile: 0..100, ret63_gt_median: bool,
-    ret21_gt_median: bool}. Without it, momentum falls back to absolute checks."""
+    ret21_gt_median: bool}. Without it, momentum falls back to absolute checks.
+
+    ctx = the swing_smc context (SMC zones, volume profile, weekly stage). The
+    weights below were rebalanced when it was added: 52-week nearness dropped
+    15→10 and compression 10→5 to fund the 10-point SMC bucket, because for a
+    zone entry "how close to the high" matters less than "am I buying at a
+    discount into unmitigated demand". Weights remain priors — the scorecard is
+    what actually measures them."""
     parts = {}
     x = xsec or {}
 
@@ -450,12 +638,12 @@ def confluence_score(trend: Dict, prof: Dict, setups: List[Dict],
     else:
         parts["momentum_rank"] = 12 if (trend.get("ret_63d") or 0) > 0 else 4
 
-    # 2) 52-week-high proximity — 15 (linear ramp 0.75 → 1.00)
+    # 2) 52-week-high proximity — 10 (linear ramp 0.75 → 1.00)
     nearness = trend.get("nearness_52w")
     if nearness is None or nearness < 0.75:
         parts["nearness_52w"] = 0
     else:
-        parts["nearness_52w"] = round(min(15, 15 * (nearness - 0.75) / 0.25))
+        parts["nearness_52w"] = round(min(10, 10 * (nearness - 0.75) / 0.25))
 
     # 3) Stage-2 template — 15 (pass fraction of the 7 checks)
     parts["trend_template"] = round(15 * trend["template_passes"] / 7)
@@ -477,10 +665,10 @@ def confluence_score(trend: Dict, prof: Dict, setups: List[Dict],
         v += round(min(5, max(0, (udr - 1.0) * 5)))              # 1.0 → 0 … 2.0 → 5
     parts["volume"] = min(10, v)
 
-    # 6) Volatility compression — 10 (one credit per LEVEL, not per flag)
+    # 6) Volatility compression — 5 (one credit per LEVEL, not per flag)
     bar_level = prof.get("nr7") or prof.get("inside_nr4")
     win_level = prof.get("bbw_126_low") or prof.get("atr_contracting")
-    parts["compression"] = (5 if bar_level else 0) + (5 if win_level else 0)
+    parts["compression"] = (3 if bar_level else 0) + (2 if win_level else 0)
 
     # 7) Risk geometry of the best setup — 10
     g = 0
@@ -497,6 +685,25 @@ def confluence_score(trend: Dict, prof: Dict, setups: List[Dict],
     l += 2 if (prof.get("locked_circuit_60d") or 0) == 0 else 0
     l += 1 if (prof.get("gap3_count_20d") or 0) == 0 else 0
     parts["liquidity"] = min(5, l)
+
+    # 9) SMC / volume-profile confluence — 10
+    c = ctx or {}
+    smc, vp, htf = c.get("smc") or {}, c.get("volume_profile") or {}, c.get("htf") or {}
+    sc = 0
+    if smc.get("ok"):
+        if smc.get("in_discount"):
+            sc += 3                                  # buying the discount half
+        if smc.get("in_ote"):
+            sc += 2                                  # inside the 0.618–0.79 band
+        if smc.get("refined"):
+            sc += 3                                  # OB overlapping an FVG
+        elif smc.get("demand_ob") or smc.get("bull_fvg"):
+            sc += 2                                  # unmitigated demand below
+    if htf.get("aligned_for_long"):
+        sc += 1                                      # weekly stage not fighting it
+    if vp.get("ok") and vp.get("position") in ("inside_value", "above_value"):
+        sc += 1                                      # accepted at/above value
+    parts["smc_confluence"] = min(10, sc)
 
     total = int(sum(parts.values()))
     if trend["template_passes"] < 5:      # stage gate: no counter-trend longs
@@ -521,8 +728,13 @@ def build_swing_plan(tsym: str, daily: List[dict], plan_date: _dt.date,
     gates = hard_gates(trend, prof, len(daily))
     last = daily[-1]["c"]
 
-    setups = [] if gates else build_setups(daily, trend, prof)
-    score = confluence_score(trend, prof, setups)
+    # daily-timeframe SMC zones + composite volume profile + weekly alignment
+    ctx = swing_smc.context(daily)
+    smc, vp, htf = ctx.get("smc") or {}, ctx.get("volume_profile") or {}, ctx.get("htf") or {}
+
+    setups = [] if gates else (build_setups(daily, trend, prof, ctx)
+                               + build_smc_setups(daily, trend, prof, ctx))
+    score = confluence_score(trend, prof, setups, None, ctx)
 
     for s in setups:
         dist = abs(s["entry"] - s["stop"]) if (s.get("entry") and s.get("stop")) else 0
@@ -534,7 +746,16 @@ def build_swing_plan(tsym: str, daily: List[dict], plan_date: _dt.date,
         s["exit_by_date"] = add_trading_days(plan_date, s["time_stop_sessions"]).isoformat()
 
     qorder = {"high": 0, "medium": 1, "low": 2}
-    primary = sorted(setups, key=lambda s: qorder.get(s["quality"], 3))[0] if setups else None
+    # On equal quality prefer the zone entry: a limit AT support risks less per
+    # share than a stop above the high, so the same rupee risk buys more size.
+    primary = sorted(setups, key=lambda s: (qorder.get(s["quality"], 3),
+                                            0 if s["type"] in ("smc_zone", "sweep") else 1)
+                     )[0] if setups else None
+
+    # the entry window follows the PRIMARY setup: a limit resting at a zone is
+    # given longer to fill than a buy-stop chasing a breakout
+    _win = (primary or {}).get("entry_window_sessions", ENTRY_WINDOW_SESSIONS)
+    _otype = "LIMIT" if (primary or {}).get("entry_type", "").startswith("LIMIT") else "STOP"
 
     bias = ("bullish" if trend["stage"] == "uptrend"
             else "bearish" if trend["stage"] == "downtrend" else "neutral")
@@ -547,7 +768,8 @@ def build_swing_plan(tsym: str, daily: List[dict], plan_date: _dt.date,
                     "sideways": "No trend edge — basing/undecided. Wait for a real breakout."}[trend["stage"]]
     else:
         p = primary
-        headline = (f"{p['name']}: buy-stop {p['trigger_price']} (cap {p['limit_price']}), "
+        verb = ("buy-limit" if p.get("entry_type", "").startswith("LIMIT") else "buy-stop")
+        headline = (f"{p['name']}: {verb} {p['trigger_price']} (cap {p['limit_price']}), "
                     f"stop {p['stop']}, T1 {p['targets'][0] if p['targets'] else '—'} · "
                     f"~{p['expected_hold_sessions']} sessions (heuristic) · "
                     f"hard exit by {p['exit_by_date']}")
@@ -559,13 +781,19 @@ def build_swing_plan(tsym: str, daily: List[dict], plan_date: _dt.date,
         "bias": bias, "stage": trend["stage"],
         "conviction": score["label"], "score": score["score"], "score_parts": score["parts"],
         "trend": trend, "profile": prof,
+        "smc": smc, "volume_profile": vp, "htf": htf,
         "headline": headline,
         "primary": primary["name"] if primary else None,
         "setups": setups, "num_setups": len(setups),
         "entry_window": {
             "first_session": plan_date.isoformat(),
-            "last_session": add_trading_days(plan_date, ENTRY_WINDOW_SESSIONS - 1).isoformat(),
-            "note": f"buy-stops live {ENTRY_WINDOW_SESSIONS} sessions, then the plan is STALE — rebuild, never chase",
+            "last_session": add_trading_days(plan_date, _win - 1).isoformat(),
+            "sessions": _win,
+            "order_type": _otype,
+            "note": (f"the resting BUY LIMIT at the zone stays live {_win} sessions — if price "
+                     "never comes back to the zone there is simply no trade, which is the point"
+                     if _otype == "LIMIT" else
+                     f"buy-stops live {_win} sessions, then the plan is STALE — rebuild, never chase"),
         },
         "gates_failed": gates,
         "no_trade": _no_trade_rules(trend, prof, gates),

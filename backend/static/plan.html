@@ -128,7 +128,7 @@
 <body>
 <header>
   <div class="brand">trade.scratchforge <span>· daily plan</span></div>
-  <div class="tabs" title="Day trade = tomorrow's intraday plan · Swing trade = 2–15 day delivery plan">
+  <div class="tabs" title="Day trade = tomorrow's intraday plan · Swing trade = 2–22 session delivery plan (up to ~1 month)">
     <button class="tab on" id="modeDay" onclick="setMode('day')">Day trade</button>
     <button class="tab swing" id="modeSwing" onclick="setMode('swing')">Swing trade</button>
   </div>
@@ -154,6 +154,7 @@
 
   <div id="planView">
     <div class="ubar" id="ubar"></div>
+    <div class="ubar" id="autobar" style="display:none"></div>
     <div id="cards"></div>
   </div>
 
@@ -274,6 +275,25 @@ async function loadDates(forceDefault){
   return dates;
 }
 
+// The plan rebuilds itself every evening the market traded. Show that state so
+// a stale-looking date reads as "not a session yet", not "the build is broken".
+async function loadAutoStatus(){
+  const bar=$('autobar'); if(!bar) return;
+  try{
+    const j=await fetch('/api/autobuild/status').then(r=>r.json());
+    const c=j.calendar||{}, d=j.decision_now||{};
+    if(!j.enabled){ bar.style.display=''; bar.innerHTML='⏸ Auto-build is <b>off</b> (AUTO_BUILD=0) — use ⚙ Build next.'; return; }
+    const dot = j.last_status==='ok' ? '🟢' : j.last_status==='error' ? '🔴' : '⚪';
+    const bits=[`${dot} Auto-build <b>${j.running?'armed':'not running'}</b> · ${j.build_time_ist} IST daily`];
+    if(j.last_built_for) bits.push(`last built <b>${j.last_built_for}</b>${j.last_run_at?` (${j.last_run_at.replace('T',' ').slice(0,16)})`:''}`);
+    if((c.today_status||{}).open===false) bits.push(`today: ${c.today_status.why}`);
+    if(c.next_trading_day) bits.push(`next session <b>${c.next_trading_day}</b>`);
+    if(d.reason) bits.push(`<span class="q">${d.reason}</span>`);
+    if(j.last_status==='error'&&j.last_error) bits.push(`<span style="color:var(--red)">last error: ${j.last_error.slice(0,120)}</span>`);
+    bar.style.display=''; bar.innerHTML=bits.join(' · ');
+  }catch(e){ bar.style.display='none'; }
+}
+
 async function reload(forceDefault){
   const dates=await loadDates(forceDefault);
   const date=$('dateSel').value;
@@ -303,7 +323,7 @@ async function renderPlan(date){
   const nEntry=PLANS.filter(hasEntry).length;
   const nSec=secs.length;
   ubar.innerHTML = (MODE==='swing'
-      ? `Swing plan live from <b>${date}</b> · <b>${j.count}</b> stocks · 2–15 session holds`
+      ? `Swing plan live from <b>${date}</b> · <b>${j.count}</b> stocks · 2–22 session holds (up to ~1 month)`
       : `Plan for <b>${date}</b> · <b>${j.count}</b> stocks`)
     + ` · <b>${nEntry}</b> with an entry · <b>${nSec}</b> sectors`
     + ` · entries first, then confluence score`;
@@ -430,13 +450,61 @@ function planCard(p,i){
 
 // ---------- SWING PLAN CARDS ----------
 function stageChip(st){return `<span class="chip stage">${st||'—'}</span>`;}
+
+// ---------- SMC / volume-profile panels (swing) ----------
+// dist_pct is signed from spot: positive = below price, negative = above it.
+const zoneDist=d=>d==null?'':(d>=0?fmt(d)+'% below spot':fmt(Math.abs(d))+'% above spot');
+const zoneRow=(z,label)=>`<div class="lv"><div class="t">${label}</div>
+  <div class="v">${fmt(z.bottom)} – ${fmt(z.top)}
+    <span class="q">${z.ce?('CE '+fmt(z.ce)+' · '):''}${zoneDist(z.dist_pct)}${z.width_atr?(' · '+z.width_atr+'×ATR wide'):''}</span></div></div>`;
+
+function smcPanel(p){
+  const m=p.smc||{};
+  if(!m.ok) return `<div class="daytype">No daily structure read${m.error?(' — '+m.error):''}.</div>`;
+  const dr=m.dealing_range||{};
+  const zoneChip = m.price_zone==='discount'
+      ? '<span class="chip bull">DISCOUNT — the half you buy</span>'
+      : m.price_zone==='premium'
+      ? '<span class="chip bear">PREMIUM — do not buy here</span>'
+      : '<span class="chip neut">EQUILIBRIUM</span>';
+  const demand=(m.refined||[]).map(z=>zoneRow(z,'⭐ Refined pocket (OB ∩ FVG)'))
+    .concat((m.demand_ob||[]).map(z=>zoneRow(z,'Demand order block')))
+    .concat((m.bull_fvg||[]).map(z=>zoneRow(z,'Bullish FVG (unmitigated)')))
+    .concat((m.breakers||[]).map(z=>zoneRow(z,'Bullish breaker (flipped supply)'))).join('');
+  const supply=(m.supply_ob||[]).map(z=>zoneRow(z,'Supply order block (target)'))
+    .concat((m.bear_fvg||[]).map(z=>zoneRow(z,'Bearish FVG (target)'))).join('');
+  return `<div style="margin-bottom:8px">${zoneChip}
+    ${m.in_ote?'<span class="chip stage">inside OTE 0.618–0.79</span>':''}
+    ${m.fresh_ssl_sweep?`<span class="chip bull">fresh liquidity sweep @ ${fmt(m.fresh_ssl_sweep.price)}</span>`:''}
+    ${(p.htf||{}).stage?`<span class="chip ${(p.htf||{}).aligned_for_long?'bull':'bear'}">weekly ${(p.htf||{}).stage.replace(/_/g,' ')}</span>`:''}</div>
+  <div class="lvls">
+    <div class="lv"><div class="t">Dealing range (low · EQ · high)</div><div class="v">${fmt(dr.low)} · ${fmt(dr.eq)} · ${fmt(dr.high)}</div></div>
+    <div class="lv"><div class="t">OTE band (0.618–0.79)</div><div class="v">${fmt(dr.ote_bottom)} – ${fmt(dr.ote_top)}</div></div>
+    <div class="lv"><div class="t">Weekly SMA 10 / 30</div><div class="v">${fmt((p.htf||{}).sma10w)} / ${fmt((p.htf||{}).sma30w)}</div></div>
+  </div>
+  ${demand?`<div class="csub" style="margin:10px 0 6px">Demand below price — where a limit entry rests</div><div class="lvls">${demand}</div>`:'<div class="csub" style="margin-top:8px">No unmitigated demand within reach.</div>'}
+  ${supply?`<div class="csub" style="margin:10px 0 6px">Supply above price — where targets go</div><div class="lvls">${supply}</div>`:''}`;
+}
+
+function vpPanel(p){
+  const v=p.volume_profile||{};
+  if(!v.ok) return `<div class="daytype">No volume profile${v.error?(' — '+v.error):''}.</div>`;
+  const npoc=(v.naked_poc||[]).map(n=>`${fmt(n.price)} <span class="q">(${n.side}, ${n.sessions_ago} sessions ago)</span>`).join(' · ')||'—';
+  return `<div class="lvls">
+    <div class="lv"><div class="t">POC · VAH · VAL</div><div class="v">${fmt(v.poc)} · ${fmt(v.vah)} · ${fmt(v.val)}</div></div>
+    <div class="lv"><div class="t">Price vs value</div><div class="v">${(v.position||'').replace(/_/g,' ')} <span class="q">${v.sessions} sessions</span></div></div>
+    <div class="lv"><div class="t">Naked POC <span class="q">(never traded back)</span></div><div class="v">${npoc}</div></div>
+    <div class="lv"><div class="t">HVN shelves <span class="q">(support/resistance)</span></div><div class="v">${(v.hvn||[]).map(h=>fmt(h.price)).join(' · ')||'—'}</div></div>
+    <div class="lv"><div class="t">LVN <span class="q">(price travels through fast)</span></div><div class="v">${(v.lvn||[]).map(l=>fmt(l.price)).join(' · ')||'—'}</div></div>
+  </div>`;
+}
 function swingCard(p,i){
   const T=p.trend||{}, pr=p.profile||{}, sp=p.score_parts||{}, ew=p.entry_window||{}, mr=p.market_regime||{};
   const setups=(p.setups||[]).map(s=>`
     <tr>
       <td><span class="side ${s.side}">${s.side}</span></td>
       <td><b>${s.name}</b><div class="q">${s.source}</div></td>
-      <td class="mono">▲ ${fmt(s.trigger_price)}<div class="q">${s.trigger}</div><div class="q">cap ${fmt(s.limit_price)} — never chase past this</div></td>
+      <td class="mono">${s.entry_type?'⊙ LIMIT':'▲'} ${fmt(s.trigger_price)}<div class="q">${s.trigger}</div><div class="q">cap ${fmt(s.limit_price)} — never chase past this</div>${s.zone?`<div class="q">zone ${fmt(s.zone.bottom)}–${fmt(s.zone.top)} · ${s.zone.kind}</div>`:''}</td>
       <td class="mono">${fmt(s.entry)}</td>
       <td class="mono neg">${fmt(s.stop)}</td>
       <td class="tgt mono"><b>${(s.targets||[]).map(fmt).join(' · ')}</b>${(s.context_targets||[]).length?`<div class="q">near ${s.context_targets.map(fmt).join(', ')}</div>`:''}</td>
@@ -446,7 +514,11 @@ function swingCard(p,i){
         <div class="q">~${s.expected_hold_sessions} sessions → exit ≈ ${s.expected_exit_date||'—'} (heuristic)</div>
         <div class="q"><b>hard exit by ${s.exit_by_date||'—'}</b> (${s.time_stop_sessions}-session time stop)</div>
         ${s.no_progress?`<div class="q">exit if < +${s.no_progress.min_gain_pct}% after ${s.no_progress.after_sessions} sessions</div>`:''}</td>
-      <td><div class="whenok">✓ ${s.valid_when}</div><div class="whenno">✗ ${s.skip_when}</div></td>
+      <td><div class="whenok">✓ ${s.valid_when}</div><div class="whenno">✗ ${s.skip_when}</div>
+        ${s.exit_plan?`<div class="q" style="margin-top:5px;color:var(--green)">▸ ${s.exit_plan.t1_action||''}</div>
+        <div class="q">▸ ${s.exit_plan.runner_action||''}</div>
+        ${(s.exit_plan.target_basis||[]).map(b=>`<div class="q">◦ ${b}</div>`).join('')}
+        ${s.exit_plan.lvn_ahead&&s.exit_plan.lvn_ahead.length?`<div class="q">◦ LVN ahead at ${s.exit_plan.lvn_ahead.map(fmt).join(', ')} — price travels through fast</div>`:''}`:''}</td>
     </tr>`).join('');
   const scoreParts=Object.entries(sp).map(([k,v])=>`${k.replace(/_/g,' ')} ${v}`).join(' · ');
   const flags=[pr.nr7?'NR7':null,pr.inside_nr4?'inside+NR4':null,pr.bbw_126_low?'BB-squeeze':null,pr.atr_contracting?'ATR↓':null].filter(Boolean).join(' · ')||'none';
@@ -474,6 +546,10 @@ function swingCard(p,i){
         <div class="lv"><div class="t">Momentum rank (universe)</div><div class="v">${T.momentum_percentile!=null?T.momentum_percentile+' pctile':'—'} <span class="q">vol-normalized 21/63/126d blend</span></div></div>
         <div class="lv"><div class="t">Compression flags</div><div class="v">${flags}</div></div>
       </div>
+      <h4>Structure — order blocks · fair value gaps · dealing range</h4>
+      ${smcPanel(p)}
+      <h4>Volume profile (composite, daily candles)</h4>
+      ${vpPanel(p)}
       <h4>Risk profile</h4>
       <div class="lvls">
         <div class="lv"><div class="t">ATR14 · ATR%</div><div class="v">${fmt(pr.atr14)} · ${fmt(pr.atr_pct)}%/day</div></div>
@@ -766,7 +842,7 @@ async function downloadAll(){
     if(!j.ok||!j.plans.length){ setStatus('No plans stored for '+date+'.'); return; }
     plans=(j.plans||[]).slice().sort(byPriority); d=date;
   }
-  const label=MODE==='swing'?'SWING PLAN (2–15 day delivery holds)':'DAILY PLAN';
+  const label=MODE==='swing'?'SWING PLAN (2–22 session delivery holds, up to ~1 month)':'DAILY PLAN';
   const toText = MODE==='swing' ? swingToText : planToText;
   const nEntry=plans.filter(hasEntry).length;
 
@@ -813,17 +889,51 @@ function swingToText(p){
   out.push('', 'RISK PROFILE', THIN);
   out.push(`  ATR14 ${fmt(pr.atr14)} (${fmt(pr.atr_pct)}%/day) · RVOL ${fmt(pr.rvol)}x · median turnover ₹${fmt(pr.med_turnover_cr_20d)}cr/d`);
   out.push(`  Gaps>3% in 20d: ${pr.gap3_count_20d??'—'} · locked-circuit closes 60d: ${pr.locked_circuit_60d??'—'} · up/down vol 20d: ${fmt(pr.updown_vol_ratio_20d)}`);
-  out.push('', `SETUPS`, THIN);
+  const M=p.smc||{}, V=p.volume_profile||{}, H=p.htf||{};
+  if(M.ok){
+    const dr=M.dealing_range||{};
+    out.push('', 'STRUCTURE — ORDER BLOCKS / FVG / DEALING RANGE', THIN);
+    out.push(`  Price zone     : ${String(M.price_zone||'—').toUpperCase()}${M.in_ote?' (inside OTE 0.618-0.79)':''}`);
+    out.push(`  Dealing range  : ${fmt(dr.low)} .. EQ ${fmt(dr.eq)} .. ${fmt(dr.high)}`);
+    out.push(`  OTE band       : ${fmt(dr.ote_bottom)} - ${fmt(dr.ote_top)}`);
+    if(M.fresh_ssl_sweep) out.push(`  Liquidity sweep: SSL grabbed at ${fmt(M.fresh_ssl_sweep.price)} and reclaimed`);
+    (M.refined||[]).forEach(z=>out.push(`  * REFINED OB+FVG : ${fmt(z.bottom)} - ${fmt(z.top)}  (${z.width_atr}xATR wide, ${fmt(z.dist_pct)}% below)`));
+    (M.demand_ob||[]).forEach(z=>out.push(`    demand OB      : ${fmt(z.bottom)} - ${fmt(z.top)}  (${fmt(z.dist_pct)}% below)`));
+    (M.bull_fvg||[]).forEach(z=>out.push(`    bullish FVG    : ${fmt(z.bottom)} - ${fmt(z.top)}  CE ${fmt(z.ce)}`));
+    (M.breakers||[]).forEach(z=>out.push(`    breaker (supp) : ${fmt(z.bottom)} - ${fmt(z.top)}`));
+    (M.supply_ob||[]).forEach(z=>out.push(`    supply OB (tgt): ${fmt(z.bottom)} - ${fmt(z.top)}`));
+    (M.bear_fvg||[]).forEach(z=>out.push(`    bearish FVG(tgt): ${fmt(z.bottom)} - ${fmt(z.top)}`));
+  }
+  if(V.ok){
+    out.push('', `VOLUME PROFILE (composite, ${V.sessions} daily sessions)`, THIN);
+    out.push(`  POC ${fmt(V.poc)} · VAH ${fmt(V.vah)} · VAL ${fmt(V.val)}   [price ${String(V.position||'').replace(/_/g,' ')}]`);
+    out.push(`  Naked POC : ${(V.naked_poc||[]).map(n=>`${fmt(n.price)} (${n.side}, ${n.sessions_ago}s ago)`).join(' · ')||'—'}`);
+    out.push(`  HVN       : ${(V.hvn||[]).map(h=>fmt(h.price)).join(' · ')||'—'}`);
+    out.push(`  LVN       : ${(V.lvn||[]).map(l=>fmt(l.price)).join(' · ')||'—'}`);
+  }
+  if(H.stage) out.push('', `WEEKLY (HTF): ${H.stage.replace(/_/g,' ')} · 10w ${fmt(H.sma10w)} · 30w ${fmt(H.sma30w)} · aligned for long: ${H.aligned_for_long?'YES':'NO'}`);
+  out.push('', 'SETUPS', THIN);
   if(!(p.setups||[]).length) out.push('  NO ENTRY TONIGHT — '+(p.headline||''));
   (p.setups||[]).forEach((s,i)=>{
     out.push(`  ${i+1}. [${s.side} · ${s.quality}] ${s.name}   (${s.source})`);
-    out.push(`     Trigger : buy-stop ${fmt(s.trigger_price)}, limit cap ${fmt(s.limit_price)} (never chase past the cap) — ${s.trigger}`);
+    const _ot = s.entry_type ? 'BUY LIMIT' : 'buy-stop';
+    out.push(`     Trigger : ${_ot} ${fmt(s.trigger_price)}, limit cap ${fmt(s.limit_price)} (never chase past the cap) — ${s.trigger}`);
     out.push(`     Entry ${fmt(s.entry)} · Stop ${fmt(s.stop)} · Targets ${(s.targets||[]).map(fmt).join(' / ')} (${s.rr_t1}R->${s.rr_final}R)`);
     out.push(`     Size    : ${s.shares_for_risk??'—'} shares @ ₹${s.risk_rupees||1000} risk`);
     out.push(`     Timing  : enter by ${s.entry_by||'—'} · ~${s.expected_hold_sessions} sessions to target (~ ${s.expected_exit_date||'—'}, heuristic) · HARD EXIT BY ${s.exit_by_date||'—'}`);
     if(s.no_progress) out.push(`     No-progress: exit if < +${s.no_progress.min_gain_pct}% after ${s.no_progress.after_sessions} sessions`);
     out.push(`     Valid   : ${s.valid_when}`);
     out.push(`     Skip if : ${s.skip_when}`, '');
+  });
+  (p.setups||[]).forEach(s=>{
+    const e=s.exit_plan; if(!e) return;
+    out.push(`  EXIT PLAN — ${s.name}`);
+    if(e.t1_action)     out.push(`     T1     : ${e.t1_action}`);
+    if(e.runner_action) out.push(`     Runner : ${e.runner_action}`);
+    (e.target_basis||[]).forEach(b=>out.push(`     Target : ${b}`));
+    if(e.lvn_ahead&&e.lvn_ahead.length) out.push(`     LVN    : ${e.lvn_ahead.map(fmt).join(', ')} — ${e.lvn_note||''}`);
+    if(e.invalidation)  out.push(`     Invalid: ${e.invalidation}`);
+    out.push('');
   });
   if((p.setups||[]).length) out.push(`  ${p.estimate_note||''}`,'');
   out.push('DO NOT TRADE WHEN', THIN);
@@ -966,6 +1076,7 @@ async function pollBuild(){
     ? `Built ${r.built} ${MODE==='swing'?'swing ':''}plans for ${r.plan_date} — universe ${r.universe_size||UNIVERSE_N} names, ${r.skipped} skipped (source: ${r.universe_source}).`
     : 'Build finished.');
   await reload(true);
+  loadAutoStatus();
 }
 
 // A build started in an earlier page view is still running server-side — pick
@@ -990,13 +1101,18 @@ function setStatus(t){const s=$('status');s.style.display='';s.textContent=t;}
 
 $('foot').innerHTML='<b>Day trade</b>: prev-day levels, CPR, Camarilla, ORB, SMC/FVG confluence — scored net of ~0.25% intraday costs. '
   +'<b>Swing trade</b>: George-Hwang 52-week-high momentum + Minervini/Weinstein Stage-2 gate, Landry pullback resumption, '
-  +'Crabel/Bollinger volatility-compression breakouts, vol-normalized cross-sectional momentum rank, market-breadth regime gate — '
+  +'Crabel/Bollinger volatility-compression breakouts, plus SMC zone entries — order blocks, fair value gaps (with CE), '
+  +'refined OB∩FVG pockets, bullish breakers and liquidity-sweep reclaims, taken only at a discount to the dealing range — '
+  +'with targets and stops placed at real structure (supply blocks, unmitigated FVGs, naked POC, value-area edges) '
+  +'from a composite daily volume profile. Vol-normalized cross-sectional momentum rank, market-breadth regime gate — '
   +'long-only (retail can\'t short delivery in India), scored net of ~0.65% delivery costs (STT+brokerage+DP+slippage). '
   +'Universe = today\'s top-200 volume leaders ≤₹300, grouped by NSE macro sector — open a sector to see its stocks. '
   +'Order is entries first, then confluence score (a stock with a live entry always outranks a higher-scoring one without). '
   +'Score weights are priors; the scorecard measures them. Educational engineering reference; not investment advice.';
 reload();
 resumeBuildIfRunning();
+loadAutoStatus();
+setInterval(loadAutoStatus, 120000);
 </script>
 </body>
 </html>
