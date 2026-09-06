@@ -299,6 +299,21 @@
         <span class="ind-sep"></span>
         <button class="ind-chip ctrl" onclick="resetZoom()">⤢ Reset zoom</button>
         <button class="ind-chip ctrl" id="logBtn" onclick="toggleLogScale()">Log scale: off</button>
+        <span class="ind-sep"></span>
+        <span class="ind-label">Draw:</span>
+        <button class="ind-chip" id="drawLineBtn" onclick="setDrawMode('line')"
+                title="Trendline — drag from one point to another. Anchored to time+price, so it stays put when you zoom or change timeframe.">╱ Line</button>
+        <button class="ind-chip" id="drawRectBtn" onclick="setDrawMode('rect')"
+                title="Rectangle — drag to box a zone (supply/demand, range).">▭ Rect</button>
+        <button class="ind-chip ctrl" id="drawDelBtn" onclick="deleteSelectedDrawing()"
+                title="Delete the selected drawing (or press Delete)">🗑 Delete</button>
+        <button class="ind-chip ctrl" onclick="clearDrawings()"
+                title="Remove every drawing on this symbol">Clear all</button>
+        <span class="ind-sep"></span>
+        <button class="ind-chip ctrl" id="chartRefreshBtn" onclick="refreshChart()"
+                title="Re-fetch this symbol's candles and redraw">↻ Refresh chart</button>
+        <button class="ind-chip" id="autoRefreshBtn" onclick="toggleAutoRefresh()"
+                title="Re-fetch the chart automatically every 60s">Auto: off</button>
         <span class="ind-hint">scroll = zoom time · shift+scroll = zoom price · drag chart = pan · drag bottom axis = stretch time · drag right axis = stretch price · dbl-click right axis = auto-fit</span>
       </div>
       <div class="ohlc-readout" id="ohlcReadout"><span class="dim">hover the chart…</span></div>
@@ -663,6 +678,18 @@ let smc=null;              // single-TF result for the active interval (structur
 let smcMulti={};           // {tf: analyze-result} for all enabled MTF layers
 const seenSignals=new Set(); // de-dupe alert signal ids
 let logScale=false;
+// Drawing-tool state. Declared HERE, before attachAxisDrag() registers the
+// pointer handlers that read it — a `const` declared later sits in the temporal
+// dead zone and any pointer event arriving first throws.
+const DRAW = {
+  mode: null,      // null | 'line' | 'rect'   (armed tool)
+  items: [],       // [{id,type,t1,y1,t2,y2,color}]
+  sel: null,       // id of the selected shape
+  drag: null,      // {id, handle:'p1'|'p2'|'move', ...} while dragging
+  live: null,      // the shape being drawn right now
+};
+const DRAW_COLOR = '#f5c451';
+const DRAW_SEL   = '#5e8eff';
 let lastZoom={start:0,end:100};    // remember user's zoom window across data refreshes
 let zoomReset=false;               // when true, next render snaps zoom to full range
 
@@ -857,6 +884,9 @@ function _resetYAuto(){ chart.setOption({yAxis:[{gridIndex:0,min:null,max:null}]
   el.addEventListener('pointerdown',(e)=>{
     active.add(e.pointerId);
     if(active.size>1){ mode=null; setCursor(''); return; }   // 2 fingers → ECharts pinch
+    // Drawing owns the pointer while a tool is armed or a shape is being
+    // dragged — otherwise every drag would pan the chart underneath it.
+    if(DRAW.mode || DRAW.drag){ mode=null; return; }
     const h=hit(e); if(!h) return;
     mode=h; sx=e.clientX; sy=e.clientY;
     if(mode==='time'){ startSpan=Math.max(0.5,lastZoom.end-lastZoom.start); setCursor('ew-resize'); e.preventDefault(); }
@@ -870,6 +900,7 @@ function _resetYAuto(){ chart.setOption({yAxis:[{gridIndex:0,min:null,max:null}]
   });
 
   window.addEventListener('pointermove',(e)=>{
+    if(DRAW.mode || DRAW.drag) return;      // drawing has the pointer
     if(!mode){
       if(active.size===0){ const h=hit(e); setCursor(h==='price'?'ns-resize':h==='time'?'ew-resize':h==='body'?'grab':''); }
       return;
@@ -918,6 +949,276 @@ function _resetYAuto(){ chart.setOption({yAxis:[{gridIndex:0,min:null,max:null}]
     else if(h==='time'){ resetZoom(); }
   });
 })();
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DRAWING TOOLS — trendline + rectangle
+   ═══════════════════════════════════════════════════════════════════════════
+   Shapes are stored in DATA space as {t, price}, never in pixels, and never as
+   candle indices. Timestamps survive a timeframe switch (a line drawn on the
+   daily still sits on the same prices when you drop to 1h) and survive new
+   candles arriving; indices would not. At paint time each timestamp is mapped
+   to the nearest category slot and converted to pixels.
+
+   Persisted per symbol in localStorage, so drawings come back on reload.       */
+
+const drawKey = () => 'draw:' + (active || '_');
+
+function loadDrawings(){
+  try{ DRAW.items = JSON.parse(localStorage.getItem(drawKey()) || '[]') || []; }
+  catch(e){ DRAW.items = []; }
+  DRAW.sel = null; DRAW.live = null;
+  paintDrawings();
+}
+function saveDrawings(){
+  try{ localStorage.setItem(drawKey(), JSON.stringify(DRAW.items)); }catch(e){}
+}
+
+function setDrawMode(m){
+  DRAW.mode = (DRAW.mode === m) ? null : m;
+  for(const [id,mode] of [['drawLineBtn','line'],['drawRectBtn','rect']]){
+    const b=document.getElementById(id); if(b) b.classList.toggle('on', DRAW.mode===mode);
+  }
+  document.getElementById('proChart').style.cursor = DRAW.mode ? 'crosshair' : '';
+}
+function deleteSelectedDrawing(){
+  if(!DRAW.sel) return;
+  DRAW.items = DRAW.items.filter(d=>d.id!==DRAW.sel);
+  DRAW.sel=null; saveDrawings(); paintDrawings();
+}
+function clearDrawings(){
+  if(!DRAW.items.length) return;
+  if(!confirm(`Remove all ${DRAW.items.length} drawing(s) on ${active}?`)) return;
+  DRAW.items=[]; DRAW.sel=null; saveDrawings(); paintDrawings();
+}
+
+/* ---- data <-> pixel ---- */
+// The x-axis is a CATEGORY axis of timestamp strings, so a timestamp has to be
+// resolved to its slot. Nearest match, and the padded future slots count too —
+// that is what lets a line be drawn out to the right of the last candle.
+function _xCats(){
+  const o=chart.getOption(); const ax=o && o.xAxis && o.xAxis[0];
+  return (ax && ax.data) ? ax.data : [];
+}
+function tToIndex(t){
+  const cats=_xCats(); if(!cats.length) return null;
+  const first=+cats[0], last=+cats[cats.length-1];
+  if(cats.length>1 && t>=first && t<=last){
+    // uniform spacing → direct estimate, then nudge to the true nearest
+    const step=(last-first)/(cats.length-1);
+    let i=Math.round((t-first)/step);
+    i=Math.max(0,Math.min(cats.length-1,i));
+    let best=i, bd=Math.abs(+cats[i]-t);
+    for(let j=Math.max(0,i-3);j<=Math.min(cats.length-1,i+3);j++){
+      const d=Math.abs(+cats[j]-t); if(d<bd){bd=d;best=j;}
+    }
+    return best;
+  }
+  return t<first ? 0 : cats.length-1;
+}
+function indexToT(i){
+  const cats=_xCats(); if(!cats.length) return null;
+  i=Math.max(0,Math.min(cats.length-1,Math.round(i)));
+  return +cats[i];
+}
+function dataToPx(t, price){
+  const i=tToIndex(t); if(i==null) return null;
+  try{ return chart.convertToPixel({gridIndex:0},[i,price]); }catch(e){ return null; }
+}
+function pxToData(px, py){
+  try{
+    const v=chart.convertFromPixel({gridIndex:0},[px,py]);
+    if(!v) return null;
+    return {t:indexToT(v[0]), y:v[1]};
+  }catch(e){ return null; }
+}
+function inPlot(px,py){
+  try{
+    const r=chart.getModel().getComponent('grid',0).coordinateSystem.getRect();
+    return px>=r.x && px<=r.x+r.width && py>=r.y && py<=r.y+r.height;
+  }catch(e){ return false; }
+}
+
+/* ---- paint ---- */
+// Rendered through ECharts' `graphic` component rather than a second canvas, so
+// the shapes sit in the same stacking context and survive resize/redraw.
+function paintDrawings(){
+  const g=[];
+  const all=DRAW.items.concat(DRAW.live?[DRAW.live]:[]);
+  for(const d of all){
+    const a=dataToPx(d.t1,d.y1), b=dataToPx(d.t2,d.y2);
+    if(!a||!b) continue;
+    const selected=(d.id===DRAW.sel);
+    const col=selected?DRAW_SEL:(d.color||DRAW_COLOR);
+    if(d.type==='line'){
+      g.push({type:'line', id:d.id, z:60, silent:false,
+        shape:{x1:a[0],y1:a[1],x2:b[0],y2:b[1]},
+        style:{stroke:col,lineWidth:selected?2.5:1.8},
+        onclick:()=>selectDrawing(d.id)});
+      // a fat invisible hit-line: a 2px stroke is almost impossible to click
+      g.push({type:'line', z:59, invisible:false,
+        shape:{x1:a[0],y1:a[1],x2:b[0],y2:b[1]},
+        style:{stroke:'rgba(0,0,0,0)',lineWidth:12},
+        onclick:()=>selectDrawing(d.id)});
+    } else {
+      const x=Math.min(a[0],b[0]), y=Math.min(a[1],b[1]);
+      const w=Math.abs(b[0]-a[0]), h=Math.abs(b[1]-a[1]);
+      g.push({type:'rect', id:d.id, z:59,
+        shape:{x,y,width:w,height:h},
+        style:{fill:selected?'rgba(94,142,255,0.12)':'rgba(245,196,81,0.10)',
+               stroke:col,lineWidth:selected?2:1.5},
+        onclick:()=>selectDrawing(d.id)});
+    }
+    if(selected){
+      for(const p of [a,b]) g.push({type:'circle', z:61,
+        shape:{cx:p[0],cy:p[1],r:5},
+        style:{fill:'#0f131c',stroke:DRAW_SEL,lineWidth:2}});
+      // price tag on the second point — the number is the reason you drew it
+      g.push({type:'text', z:62, style:{
+        text:' '+(+d.y2).toFixed(2)+' ', x:b[0]+8, y:b[1]-7,
+        fill:'#0f131c', backgroundColor:DRAW_SEL, padding:[2,4], borderRadius:3,
+        font:'600 10px JetBrains Mono, monospace'}});
+    }
+  }
+  chart.setOption({graphic:{elements:g, $action:'replace'}});
+  const del=document.getElementById('drawDelBtn');
+  if(del) del.style.opacity = DRAW.sel ? '1' : '0.45';
+}
+function selectDrawing(id){ DRAW.sel=id; paintDrawings(); }
+
+/* ---- pointer handling ---- */
+(function attachDrawing(){
+  const el=document.getElementById('proChart');
+  const rel=e=>{ const r=el.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; };
+  const HIT=10;   // px
+
+  function hitTest(px,py){
+    // topmost first, so a shape drawn later wins an overlap
+    for(let i=DRAW.items.length-1;i>=0;i--){
+      const d=DRAW.items[i];
+      const a=dataToPx(d.t1,d.y1), b=dataToPx(d.t2,d.y2);
+      if(!a||!b) continue;
+      if(Math.hypot(px-a[0],py-a[1])<=HIT) return {d,handle:'p1'};
+      if(Math.hypot(px-b[0],py-b[1])<=HIT) return {d,handle:'p2'};
+      if(d.type==='line'){
+        if(distToSeg(px,py,a[0],a[1],b[0],b[1])<=HIT) return {d,handle:'move'};
+      }else{
+        const x1=Math.min(a[0],b[0]),x2=Math.max(a[0],b[0]);
+        const y1=Math.min(a[1],b[1]),y2=Math.max(a[1],b[1]);
+        const onEdge=(px>=x1-HIT&&px<=x2+HIT&&py>=y1-HIT&&py<=y2+HIT) &&
+          (Math.abs(px-x1)<=HIT||Math.abs(px-x2)<=HIT||Math.abs(py-y1)<=HIT||Math.abs(py-y2)<=HIT);
+        if(onEdge) return {d,handle:'move'};
+      }
+    }
+    return null;
+  }
+  function distToSeg(px,py,x1,y1,x2,y2){
+    const dx=x2-x1, dy=y2-y1, L=dx*dx+dy*dy;
+    if(!L) return Math.hypot(px-x1,py-y1);
+    let t=((px-x1)*dx+(py-y1)*dy)/L; t=Math.max(0,Math.min(1,t));
+    return Math.hypot(px-(x1+t*dx), py-(y1+t*dy));
+  }
+
+  el.addEventListener('pointerdown',(e)=>{
+    if(e.button!==0) return;
+    const [px,py]=rel(e);
+    if(!inPlot(px,py)) return;
+
+    if(DRAW.mode){                                   // start a new shape
+      const p=pxToData(px,py); if(!p) return;
+      DRAW.live={id:'d'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+                 type:DRAW.mode, t1:p.t, y1:p.y, t2:p.t, y2:p.y};
+      DRAW.drag={id:DRAW.live.id, handle:'p2', creating:true};
+      el.setPointerCapture(e.pointerId);
+      e.preventDefault(); e.stopPropagation();
+      return;
+    }
+    const h=hitTest(px,py);                           // grab an existing shape
+    if(h){
+      DRAW.sel=h.d.id;
+      const p=pxToData(px,py);
+      DRAW.drag={id:h.d.id, handle:h.handle, grab:p,
+                 orig:{t1:h.d.t1,y1:h.d.y1,t2:h.d.t2,y2:h.d.y2}};
+      el.setPointerCapture(e.pointerId);
+      paintDrawings();
+      e.preventDefault(); e.stopPropagation();
+    } else if(DRAW.sel){
+      DRAW.sel=null; paintDrawings();                 // click away = deselect
+    }
+  }, true);   // capture: run before the pan handler
+
+  el.addEventListener('pointermove',(e)=>{
+    const [px,py]=rel(e);
+    if(!DRAW.drag){
+      if(!DRAW.mode) el.style.cursor = hitTest(px,py) ? 'move' : '';
+      return;
+    }
+    const p=pxToData(px,py); if(!p) return;
+    const d=DRAW.live || DRAW.items.find(x=>x.id===DRAW.drag.id);
+    if(!d) return;
+    if(DRAW.drag.handle==='p1'){ d.t1=p.t; d.y1=p.y; }
+    else if(DRAW.drag.handle==='p2'){ d.t2=p.t; d.y2=p.y; }
+    else {                                            // move the whole shape
+      const o=DRAW.drag.orig, g=DRAW.drag.grab;
+      const dt=p.t-g.t, dy=p.y-g.y;
+      d.t1=o.t1+dt; d.y1=o.y1+dy; d.t2=o.t2+dt; d.y2=o.y2+dy;
+    }
+    paintDrawings();
+    e.preventDefault(); e.stopPropagation();
+  }, true);
+
+  function finish(e){
+    if(!DRAW.drag) return;
+    if(DRAW.live){
+      const d=DRAW.live;
+      const a=dataToPx(d.t1,d.y1), b=dataToPx(d.t2,d.y2);
+      // a click without a drag is not a shape — drop it instead of leaving a dot
+      if(a&&b&&Math.hypot(b[0]-a[0],b[1]-a[1])>=6){
+        DRAW.items.push(d); DRAW.sel=d.id; saveDrawings();
+      }
+      DRAW.live=null;
+      setDrawMode(null);                              // one shape per arm
+    } else {
+      saveDrawings();
+    }
+    DRAW.drag=null;
+    paintDrawings();
+  }
+  el.addEventListener('pointerup',finish,true);
+  el.addEventListener('pointercancel',finish,true);
+
+  window.addEventListener('keydown',(e)=>{
+    const t=e.target.tagName;
+    if(t==='INPUT'||t==='SELECT'||t==='TEXTAREA') return;
+    if((e.key==='Delete'||e.key==='Backspace') && DRAW.sel){ e.preventDefault(); deleteSelectedDrawing(); }
+    if(e.key==='Escape'){ if(DRAW.mode) setDrawMode(null); else if(DRAW.sel){DRAW.sel=null;paintDrawings();} }
+  });
+})();
+
+// Drawings are pinned to data, so every change of the view has to repaint them.
+chart.on('dataZoom', paintDrawings);
+chart.on('finished', paintDrawings);
+window.addEventListener('resize', ()=>setTimeout(paintDrawings,60));
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CHART REFRESH
+   ═══════════════════════════════════════════════════════════════════════════ */
+function refreshChart(){
+  const b=document.getElementById('chartRefreshBtn');
+  const old=b?b.textContent:'';
+  if(b){ b.textContent='↻ refreshing…'; b.disabled=true; }
+  return loadChart(true).finally(()=>{ if(b){ b.textContent=old; b.disabled=false; } });
+}
+let _autoRefreshT=null;
+function toggleAutoRefresh(){
+  const b=document.getElementById('autoRefreshBtn');
+  if(_autoRefreshT){
+    clearInterval(_autoRefreshT); _autoRefreshT=null;
+    b.textContent='Auto: off'; b.classList.remove('on');
+  }else{
+    _autoRefreshT=setInterval(()=>{ if(!document.hidden && active) loadChart(true); }, 60000);
+    b.textContent='Auto: 60s'; b.classList.add('on');
+  }
+}
 
 function rebuildChart(){ chart.setOption(buildChartOption(),true); renderChart(true); }
 function resetZoom(){ lastZoom={start:0,end:100}; chart.dispatchAction({type:'dataZoom',dataZoomIndex:[0,1],start:0,end:100}); _resetYAuto(); }
@@ -1746,6 +2047,7 @@ async function loadChart(refresh){
   zoomReset=true;            // show the full fetched range on a fresh load
   _resetYAuto();             // release any locked price scale for the new data
   renderChart(true);
+  loadDrawings();            // this symbol's saved lines/rectangles
   if(!candles.length){
     ro.innerHTML = fetchErr
       ? `<span class="dim">No Upstox data for ${active} ${interval}. ${String(fetchErr).includes('Not logged in')?'Upstox token expired — re-login at /api/upstox/login_url.':''}</span>`
