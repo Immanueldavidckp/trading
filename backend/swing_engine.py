@@ -107,13 +107,24 @@ def _rsi(closes: List[float], n: int = 14) -> Optional[float]:
 
 
 def add_trading_days(d: _dt.date, n: int) -> _dt.date:
-    """d + n trading days (weekends skipped; holidays approximated away)."""
+    """d + n trading days, weekends AND NSE holidays skipped.
+
+    These dates are printed as hard instructions — "enter by", "hard exit by" —
+    so counting a holiday as a session quietly shortens the real window. Falls
+    back to the weekend-only count if the calendar can't be loaded."""
+    try:
+        import trading_calendar as _cal
+        _open = lambda x: _cal.is_trading_day(x)["open"]          # noqa: E731
+    except Exception:
+        _open = lambda x: x.weekday() < 5                         # noqa: E731
     cur = d
     step = 1 if n >= 0 else -1
     left = abs(n)
-    while left > 0:
+    guard = 0
+    while left > 0 and guard < 400:
         cur += _dt.timedelta(days=step)
-        if cur.weekday() < 5:
+        guard += 1
+        if _open(cur):
             left -= 1
     return cur
 

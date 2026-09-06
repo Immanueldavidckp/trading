@@ -158,6 +158,15 @@ def startup_event():
     except Exception as e:
         print(f"Upstox feed auto-start failed: {e}")
 
+    # Nightly plan builder: every evening the market traded, build the next
+    # trading session's day + swing plans. Skips holidays on both ends — no
+    # build on a day the market was shut, and the target skips a shut tomorrow.
+    try:
+        import auto_build
+        print(f"Auto-build scheduler: {auto_build.start()}")
+    except Exception as e:
+        print(f"Auto-build scheduler failed to start: {e}")
+
 # ---------- Watchlist + live quotes (Upstox feed) ----------
 def _feed() -> UpstoxQuoteFeed:
     global feed
@@ -1138,6 +1147,61 @@ def sectors_refresh(force: bool = True):
     res = sectors.refresh(force=force)
     sectors.invalidate()
     return res
+
+
+# ---------- Nightly auto-build + NSE trading calendar ----------
+
+@app.get("/api/autobuild/status")
+def autobuild_status():
+    """Is the nightly builder armed, what did it last do, and what will it do
+    next? `decision_now` explains the current hold reason in words."""
+    import auto_build
+    return auto_build.status()
+
+
+@app.get("/api/autobuild/run_now")
+def autobuild_run_now(force: bool = False):
+    """Run tonight's build immediately instead of waiting for the timer.
+    `force=true` overrides the 'market was shut today' and 'already built'
+    guards — use it to backfill, not routinely."""
+    import auto_build, build_jobs
+    return {"ok": True, "started": True,
+            "job": build_jobs.start("auto", auto_build.run_once, force=force)}
+
+
+@app.get("/api/autobuild/enable")
+def autobuild_enable(on: bool = True):
+    """Start or stop the scheduler thread for this process (not persisted —
+    set AUTO_BUILD=0 in .env to disable it across restarts)."""
+    import auto_build
+    return auto_build.start() if on else auto_build.stop()
+
+
+@app.get("/api/calendar/status")
+def calendar_status():
+    """NSE trading calendar: is today a session, when is the next one, and which
+    holidays are coming up."""
+    import trading_calendar
+    return trading_calendar.status()
+
+
+@app.get("/api/calendar/refresh")
+def calendar_refresh(force: bool = True):
+    """Re-pull NSE's holiday master."""
+    import trading_calendar
+    res = trading_calendar.refresh(force=force)
+    trading_calendar.invalidate()
+    return res
+
+
+@app.get("/api/calendar/check")
+def calendar_check(date: Optional[str] = None):
+    """Is a given date (default today) a trading session?"""
+    import trading_calendar, datetime as _d
+    d = _d.date.fromisoformat(date) if date else trading_calendar.today_ist()
+    return {"date": d.isoformat(), **trading_calendar.is_trading_day(d),
+            "next_trading_day": trading_calendar.next_trading_day(d).isoformat(),
+            "prev_trading_day": trading_calendar.prev_trading_day(d).isoformat()}
 
 
 @app.get("/api/universe/today")

@@ -154,6 +154,7 @@
 
   <div id="planView">
     <div class="ubar" id="ubar"></div>
+    <div class="ubar" id="autobar" style="display:none"></div>
     <div id="cards"></div>
   </div>
 
@@ -272,6 +273,25 @@ async function loadDates(forceDefault){
     sel.value = dates[0];   // Plan tab: newest (tomorrow's) plan is the useful default
   }
   return dates;
+}
+
+// The plan rebuilds itself every evening the market traded. Show that state so
+// a stale-looking date reads as "not a session yet", not "the build is broken".
+async function loadAutoStatus(){
+  const bar=$('autobar'); if(!bar) return;
+  try{
+    const j=await fetch('/api/autobuild/status').then(r=>r.json());
+    const c=j.calendar||{}, d=j.decision_now||{};
+    if(!j.enabled){ bar.style.display=''; bar.innerHTML='⏸ Auto-build is <b>off</b> (AUTO_BUILD=0) — use ⚙ Build next.'; return; }
+    const dot = j.last_status==='ok' ? '🟢' : j.last_status==='error' ? '🔴' : '⚪';
+    const bits=[`${dot} Auto-build <b>${j.running?'armed':'not running'}</b> · ${j.build_time_ist} IST daily`];
+    if(j.last_built_for) bits.push(`last built <b>${j.last_built_for}</b>${j.last_run_at?` (${j.last_run_at.replace('T',' ').slice(0,16)})`:''}`);
+    if((c.today_status||{}).open===false) bits.push(`today: ${c.today_status.why}`);
+    if(c.next_trading_day) bits.push(`next session <b>${c.next_trading_day}</b>`);
+    if(d.reason) bits.push(`<span class="q">${d.reason}</span>`);
+    if(j.last_status==='error'&&j.last_error) bits.push(`<span style="color:var(--red)">last error: ${j.last_error.slice(0,120)}</span>`);
+    bar.style.display=''; bar.innerHTML=bits.join(' · ');
+  }catch(e){ bar.style.display='none'; }
 }
 
 async function reload(forceDefault){
@@ -1056,6 +1076,7 @@ async function pollBuild(){
     ? `Built ${r.built} ${MODE==='swing'?'swing ':''}plans for ${r.plan_date} — universe ${r.universe_size||UNIVERSE_N} names, ${r.skipped} skipped (source: ${r.universe_source}).`
     : 'Build finished.');
   await reload(true);
+  loadAutoStatus();
 }
 
 // A build started in an earlier page view is still running server-side — pick
@@ -1090,6 +1111,8 @@ $('foot').innerHTML='<b>Day trade</b>: prev-day levels, CPR, Camarilla, ORB, SMC
   +'Score weights are priors; the scorecard measures them. Educational engineering reference; not investment advice.';
 reload();
 resumeBuildIfRunning();
+loadAutoStatus();
+setInterval(loadAutoStatus, 120000);
 </script>
 </body>
 </html>
