@@ -2194,6 +2194,7 @@ function downloadPlanTxt(){
 async function loadLive(){
   const box=$('#planBody');
   if(!box.querySelector('#lpmList')) box.innerHTML='<div id="lpmHd" class="hint" style="margin:0 0 8px 2px">loading plan…</div><div id="lpmList"></div>';
+  if(S.planMode==='swing') return loadSwingMonitor();
   try{
     const d=await api('/api/plan/live');
     if(!d.ok){ $('#lpmList').innerHTML=`<div class="empty">${esc(d.error||'no plan built yet — build it from the Plan tab')}</div>`; $('#lpmHd').textContent=''; return; }
@@ -2228,6 +2229,38 @@ async function loadLive(){
     }).join('');
   }catch(e){ $('#lpmList').innerHTML='<div class="empty">error loading the plan monitor</div>'; }
 }
+/* Swing monitor — each setup's phase: MONITOR (window open) / ENTRY (filled) /
+   NO ENTRY (decided). Same data as the desktop Monitor tab. */
+const M_PH={ENTRY:['g','ENTRY — filled'],MONITOR:['b','MONITOR — watching'],NO_ENTRY:['n','NO ENTRY']};
+const M_ST={at_entry:'g',in_trade:'g',approaching:'y',watching:'b',closed:'n',broken:'r',ran_away:'r',expired:'n',superseded:'n'};
+async function loadSwingMonitor(){
+  try{
+    const j=await api('/api/swing/monitor');
+    if(!j.ok){ $('#lpmList').innerHTML=`<div class="empty">${esc(j.error||'no swing plan to monitor')}</div>`; $('#lpmHd').textContent=''; return; }
+    const c=j.counts||{};
+    $('#lpmHd').innerHTML=`Swing monitor · ${j.market_open?'<span class="g">● live</span>':'<span class="d">○ closed</span>'} · `
+      +`<span class="g">${c.ENTRY||0} entry</span> · <span class="b">${c.MONITOR||0} watching</span> · <span class="d">${c.NO_ENTRY||0} no entry</span> · ${ist(Date.now())}`;
+    const g={ENTRY:[],MONITOR:[],NO_ENTRY:[]}; (j.rows||[]).forEach(r=>(g[r.phase]||g.NO_ENTRY).push(r));
+    $('#lpmList').innerHTML=['ENTRY','MONITOR','NO_ENTRY'].map(ph=>{
+      const rows=g[ph]; if(!rows.length) return '';
+      return `<div class="hint" style="margin:10px 0 6px;font-weight:700"><span class="pill ${M_PH[ph][0]}">${M_PH[ph][1]}</span> <span class="d">${rows.length}</span></div>`
+        + rows.map(r=>{
+          const z=r.zone||{};
+          const line = r.phase==='MONITOR' ? `${nf(r.dist_pct,2)}% above entry · ${r.sessions_left!=null?r.sessions_left+' session(s) left':''}`
+                     : r.phase==='ENTRY'  ? `filled ${nf(r.fill_price)}${r.unrealized_pct!=null?` · <b class="${cls(r.unrealized_pct)}">${pct(r.unrealized_pct)}</b>`:''}${r.broke_zone?' · <span class="r">zone broke</span>':''}`
+                     : '';
+          return `<div class="lpm${(r.state==='at_entry'||r.state==='in_trade')?' prio':''}" onclick="openChart('${esc(r.tsym)}')">
+            <div class="between"><span style="font-weight:700">${esc(r.tsym)}</span>
+              <span><span class="mono">${r.ltp!=null?rs(r.ltp):'—'}</span> <span class="pill ${M_ST[r.state]||'n'}">${esc((r.state||'').replace('_',' '))}</span></span></div>
+            <div class="hint" style="margin-top:4px">${esc(r.setup_name||'')} · ${esc(r.entry_type||'')} ${nf(r.entry)} · stop ${nf(r.stop)} · T1 ${nf((r.targets||[])[0])}${z.top?` · zone ${nf(z.bottom)}–${nf(z.top)}`:''}</div>
+            ${line?`<div class="hint mono" style="margin-top:3px">${line}</div>`:''}
+            <div class="hint" style="margin-top:4px">${esc(r.reason||'')}</div>
+          </div>`;
+        }).join('');
+    }).join('') || '<div class="empty">no setups being tracked</div>';
+  }catch(e){ $('#lpmList').innerHTML='<div class="empty">error loading the swing monitor</div>'; }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    TRADE TAB — ticket · orders · positions · holdings · F&O · log
    ═══════════════════════════════════════════════════════════════════════════ */

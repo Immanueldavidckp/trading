@@ -167,6 +167,15 @@ def startup_event():
     except Exception as e:
         print(f"Auto-build scheduler failed to start: {e}")
 
+    # Swing setup monitor: walks every live setup through MONITOR → ENTRY /
+    # NO_ENTRY against live prices and completed bars, raising one alert per
+    # transition. Every minute during the session, every 15 min outside it.
+    try:
+        import swing_monitor
+        print(f"Swing monitor: {swing_monitor.start()}")
+    except Exception as e:
+        print(f"Swing monitor failed to start: {e}")
+
 # ---------- Watchlist + live quotes (Upstox feed) ----------
 def _feed() -> UpstoxQuoteFeed:
     global feed
@@ -1119,6 +1128,40 @@ def swing_dates():
     """Available swing plan + scored dates (for the report date-picker)."""
     import swing_pipeline
     return swing_pipeline.list_swing_dates()
+
+
+# ---------- Swing setup monitor (MONITOR → ENTRY / NO_ENTRY, with alerts) ----------
+
+@app.get("/api/swing/monitor")
+def swing_monitor_status(date: Optional[str] = None, refresh: bool = True):
+    """Every tracked swing setup with its phase (MONITOR / ENTRY / NO_ENTRY),
+    state, distance to entry, sessions left in the window, and why. Most urgent
+    first. `refresh=true` re-evaluates against live prices before answering."""
+    import swing_monitor
+    return swing_monitor.status(plan_date=date, refresh=refresh)
+
+
+@app.get("/api/swing/monitor/alerts")
+def swing_monitor_alerts(since_id: int = 0, limit: int = 50, unacked: bool = False):
+    """Transition alerts, newest first. Poll with `since_id` = the last id you
+    saw to get only new ones (drives browser popups)."""
+    import swing_monitor
+    return swing_monitor.alerts(since_id=since_id, limit=min(int(limit), 200), unacked_only=unacked)
+
+
+@app.post("/api/swing/monitor/ack")
+def swing_monitor_ack(ids: Optional[str] = None, all: bool = False):
+    """Mark alerts read. `ids=1,2,3` or `all=true`."""
+    import swing_monitor
+    id_list = [int(x) for x in (ids or "").split(",") if x.strip().isdigit()]
+    return swing_monitor.ack(ids=id_list, all_=all)
+
+
+@app.get("/api/swing/monitor/evaluate")
+def swing_monitor_evaluate(date: Optional[str] = None):
+    """Force one evaluation pass now (the background loop does this itself)."""
+    import swing_monitor
+    return swing_monitor.evaluate(plan_date=date)
 
 
 # ---------- Sector classification (groups the 200-name universe on the plan page) ----------
