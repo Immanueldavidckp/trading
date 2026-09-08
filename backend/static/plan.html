@@ -74,6 +74,35 @@
   .card.hasentry{border-color:rgba(47,208,140,.45)}
   .card.hasentry .chead{box-shadow:inset 3px 0 0 var(--green)}
 
+  /* monitor: three phase columns */
+  .phase{border:1px solid var(--border);border-radius:12px;margin-bottom:14px;overflow:hidden;background:var(--panel2)}
+  .phase-h{display:flex;align-items:center;gap:10px;padding:10px 16px;font-weight:800;border-bottom:1px solid var(--border)}
+  .phase-h .n{font-family:var(--mono);font-weight:500;color:var(--faint);font-size:12px}
+  .phase.ENTRY .phase-h{color:var(--green);background:rgba(47,208,140,.08)}
+  .phase.MONITOR .phase-h{color:var(--blue);background:rgba(94,142,255,.08)}
+  .phase.NO_ENTRY .phase-h{color:var(--faint)}
+  .mrow{display:grid;grid-template-columns:120px 1fr 150px 130px 130px;gap:12px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--panel)}
+  .mrow:last-child{border-bottom:none}
+  .mrow.at_entry,.mrow.in_trade{box-shadow:inset 3px 0 0 var(--green)}
+  .mrow.approaching{box-shadow:inset 3px 0 0 var(--amber)}
+  .mrow.broken,.mrow.ran_away{box-shadow:inset 3px 0 0 var(--red)}
+  .mrow .sym{font-size:15px}
+  .st{font-family:var(--mono);font-size:10.5px;font-weight:800;padding:3px 8px;border-radius:999px;border:1px solid var(--border);white-space:nowrap;text-transform:uppercase;letter-spacing:.04em}
+  .st.at_entry,.st.in_trade{color:#0b0f17;background:var(--green);border-color:var(--green)}
+  .st.approaching{color:var(--amber);background:var(--amber-bg);border-color:rgba(232,178,74,.5)}
+  .st.watching{color:var(--blue);background:var(--blue-bg)}
+  .st.closed{color:var(--muted)}
+  .st.broken,.st.ran_away{color:var(--red);background:var(--red-bg);border-color:rgba(255,93,108,.4)}
+  .st.expired,.st.superseded{color:var(--faint)}
+  .why{color:var(--muted);font-size:12px;margin-top:3px}
+  .hist{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:4px}
+  .arow{display:grid;grid-template-columns:150px 1fr;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border);font-size:12.5px}
+  .arow.unread{background:rgba(94,142,255,.06)}
+  .arow .lvl{font-family:var(--mono);font-size:10px;font-weight:800;padding:1px 6px;border-radius:5px;margin-right:6px}
+  .lvl.high{color:#0b0f17;background:var(--green)} .lvl.warn{color:var(--red);background:var(--red-bg)}
+  .lvl.info{color:var(--blue);background:var(--blue-bg)} .lvl.low{color:var(--faint);background:var(--panel2)}
+  @media(max-width:900px){.mrow{grid-template-columns:1fr 1fr}}
+
   /* scorecard: plan (left) vs actual (right) */
   .sc-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
   @media(max-width:900px){.sc-grid{grid-template-columns:1fr}}
@@ -134,6 +163,7 @@
   </div>
   <div class="tabs">
     <button class="tab on" id="tabPlan" onclick="showTab('plan')">Plan</button>
+    <button class="tab" id="tabMonitor" onclick="showTab('monitor')" title="Live: is each swing setup still worth watching, filled, or dead?">Monitor <span id="monBadge" class="chip entry" style="display:none;margin-left:4px;padding:1px 6px"></span></button>
     <button class="tab" id="tabScore" onclick="showTab('score')">Scorecard</button>
   </div>
   <div class="tabs" id="viewTabs" title="Group the universe by sector, or show one flat ranked list">
@@ -158,6 +188,15 @@
     <div id="cards"></div>
   </div>
 
+  <div id="monitorView" style="display:none">
+    <div class="ubar" id="monBar"></div>
+    <div class="tiles" id="monTiles"></div>
+    <div id="monPhases"></div>
+    <h4 style="margin-top:22px">Alerts <span class="q">— one per transition, newest first</span>
+      <button class="dlbtn" id="notifBtn" onclick="enableNotifs()" style="margin-left:10px">🔔 Enable popups</button>
+      <button class="dlbtn" onclick="ackAllAlerts()" style="margin-left:6px">✓ Mark all read</button></h4>
+    <div id="monAlerts" class="card" style="max-height:340px;overflow:auto"></div>
+  </div>
   <div id="scoreView" style="display:none">
     <div class="tiles" id="tiles"></div>
     <div class="disc" id="honesty" style="display:none"></div>
@@ -242,11 +281,15 @@ function setMode(m){
 function showTab(t){
   const prevTab=TAB; TAB=t;
   $('tabPlan').classList.toggle('on',t==='plan');$('tabScore').classList.toggle('on',t==='score');
+  $('tabMonitor').classList.toggle('on',t==='monitor');
   $('planView').style.display=t==='plan'?'':'none';$('scoreView').style.display=t==='score'?'':'none';
+  $('monitorView').style.display=t==='monitor'?'':'none';
   $('viewTabs').style.display=t==='plan'?'':'none';
   $('expandBtn').style.display=(t==='plan'&&VIEW==='sector')?'':'none';
   $('dlAllBtn').title = t==='score' ? "Download this date's SCORECARD (plan-vs-actual analysis) as a text file"
                                     : "Download the WHOLE day's plan as a text file";
+  clearInterval(_monT);
+  if(t==='monitor'){ renderMonitor(); _monT=setInterval(renderMonitor, 30000); return; }
   reload(prevTab!==t);   // switching tabs re-picks the sensible default date for that tab
 }
 
@@ -297,6 +340,7 @@ async function loadAutoStatus(){
 async function reload(forceDefault){
   const dates=await loadDates(forceDefault);
   const date=$('dateSel').value;
+  if(TAB==='monitor') return renderMonitor();
   if(TAB==='plan') renderPlan(date); else renderScore(date);
 }
 
@@ -575,6 +619,92 @@ function swingCard(p,i){
       <div class="csub" style="margin-top:10px">${p.cost_note||''}</div>
     </div></div>`;
 }
+
+// ---------- MONITOR (MONITOR → ENTRY / NO_ENTRY, live) ----------
+// The plan gives a 5-session window for a resting limit. This tab answers, for
+// every setup, which of three things is true right now: still worth watching
+// (and how close), filled (and how it is going), or dead (and exactly why).
+let _monT=null, _lastAlertId=0, _alertsSeen=false;
+const PHASE_LABEL={ENTRY:'ENTRY — filled, managing', MONITOR:'MONITOR — window open, watching', NO_ENTRY:'NO ENTRY — decided, do not chase'};
+const STATE_HELP={
+  watching:'window open, price still above the zone', approaching:'within 0.75 ATR of the entry — get the order in',
+  at_entry:'price is at the zone right now', in_trade:'filled — manage stop / T1 / trail', closed:'trade finished',
+  broken:'zone was run through before a fill — too late, it is not support', expired:'window ended, price never came back',
+  ran_away:'window ended with price 2+ ATR higher — missed, not wrong', superseded:'a newer plan replaced this one'};
+
+async function renderMonitor(){
+  const bar=$('monBar'), tiles=$('monTiles'), box=$('monPhases');
+  try{
+    const j=await fetch('/api/swing/monitor').then(r=>r.json());
+    if(!j.ok){ box.innerHTML=`<div class="empty">${j.error||'no swing plans to monitor'}</div>`; bar.innerHTML=''; return; }
+    const c=j.counts||{};
+    bar.innerHTML=`Swing setup monitor · ${j.market_open?'<b style="color:var(--green)">● market open — live prices</b>':'<span class="q">○ market closed — last close</span>'}`
+      +` · re-evaluates every minute on the server, this page refreshes every 30s · <span class="q">${(j.at||'').replace('T',' ').slice(0,19)}</span>`;
+    tiles.innerHTML=[['ENTRY',c.ENTRY||0,'filled / in trade','pos'],['MONITOR',c.MONITOR||0,'still watching',''],['NO_ENTRY',c.NO_ENTRY||0,'decided: no trade','']]
+      .map(([k,v,d,cl])=>`<div class="tile"><div class="t">${k.replace('_',' ')}</div><div class="v ${cl}">${v}</div><div class="d">${d}</div></div>`).join('');
+    const badge=$('monBadge'); const urgent=(j.rows||[]).filter(r=>r.state==='at_entry'||r.state==='approaching').length;
+    badge.style.display=urgent?'':'none'; badge.textContent=urgent;
+
+    const groups={ENTRY:[],MONITOR:[],NO_ENTRY:[]};
+    (j.rows||[]).forEach(r=>(groups[r.phase]||groups.NO_ENTRY).push(r));
+    box.innerHTML=['ENTRY','MONITOR','NO_ENTRY'].map(ph=>{
+      const rows=groups[ph];
+      return `<div class="phase ${ph}"><div class="phase-h">${PHASE_LABEL[ph]}<span class="n">${rows.length} setup${rows.length===1?'':'s'}</span></div>
+        ${rows.length?rows.map(monRow).join(''):`<div class="empty" style="padding:18px">none</div>`}</div>`;
+    }).join('');
+    await loadAlerts();
+  }catch(e){ box.innerHTML='<div class="empty">could not load the monitor</div>'; }
+}
+function monRow(r){
+  const z=r.zone||{};
+  const dist = r.dist_pct!=null ? `${fmt(r.dist_pct)}% · ${fmt(r.dist_atr)} ATR above entry` : (r.unrealized_pct!=null?`<b class="${r.unrealized_pct>=0?'pos':'neg'}">${pct(r.unrealized_pct)}</b> unrealized`:'—');
+  const win = r.phase==='MONITOR' ? `${r.sessions_left!=null?r.sessions_left+' session(s) left':'—'}<div class="q">window to ${r.entry_by||'—'}</div>`
+            : r.phase==='ENTRY'  ? `filled ${fmt(r.fill_price)}<div class="q">${r.fill_date||''}${r.broke_zone?' · <span style="color:var(--red)">zone broke</span>':''}</div>`
+            : `<div class="q">${r.updated_at?r.updated_at.replace('T',' ').slice(0,16):''}</div>`;
+  const hist=(r.history||[]).slice(-3).map(h=>`${(h.at||'').slice(5,16).replace('T',' ')} ${h.state}`).join(' → ');
+  return `<div class="mrow ${r.state}">
+    <div><div class="sym">${r.tsym}</div><div class="q">${r.sector||''} · score ${r.score??'—'}</div></div>
+    <div><div><b>${r.setup_name||''}</b> <span class="q">${r.entry_type||''} ${fmt(r.entry)} · stop ${fmt(r.stop)} · T1 ${fmt((r.targets||[])[0])}${z.top?` · zone ${fmt(z.bottom)}–${fmt(z.top)}`:''}</span></div>
+      <div class="why">${r.reason||STATE_HELP[r.state]||''}</div>
+      ${hist?`<div class="hist">${hist}</div>`:''}</div>
+    <div><span class="st ${r.state}">${(r.state||'').replace('_',' ')}</span></div>
+    <div class="mono">${r.ltp!=null?'₹'+fmt(r.ltp):'—'}<div class="q">${dist}</div></div>
+    <div class="mono">${win}</div>
+    <div style="grid-column:1/-1;display:flex;gap:6px;justify-content:flex-end;margin-top:-4px">
+      <button class="dlbtn" onclick="openChart('${r.tsym}')">📈 Chart</button></div>
+  </div>`;
+}
+async function loadAlerts(){
+  const box=$('monAlerts');
+  const j=await fetch('/api/swing/monitor/alerts?limit=60').then(r=>r.json());
+  const al=j.alerts||[];
+  if(!al.length){ box.innerHTML='<div class="empty">No alerts yet — the first fires when a setup moves state.</div>'; return; }
+  // pop a browser notification for anything new since last poll (not on first load)
+  if(_alertsSeen){
+    al.filter(a=>a.id>_lastAlertId && !a.acked).forEach(a=>{
+      if('Notification' in window && Notification.permission==='granted'){
+        try{ new Notification(a.title,{body:a.body,tag:'swing-'+a.id}); }catch(e){}
+      }
+    });
+  }
+  _alertsSeen=true; _lastAlertId=Math.max(_lastAlertId, j.max_id||0);
+  box.innerHTML=al.map(a=>`<div class="arow ${a.acked?'':'unread'}">
+    <div class="mono q">${(a.at||'').replace('T',' ').slice(0,16)}</div>
+    <div><span class="lvl ${a.level}">${a.level}</span><b>${a.title}</b><div class="why">${a.body||''}</div>
+      <div class="q">${a.setup_name||''} · plan ${a.plan_date||''}</div></div></div>`).join('');
+}
+async function ackAllAlerts(){ await fetch('/api/swing/monitor/ack?all=true',{method:'POST'}); loadAlerts(); }
+function enableNotifs(){
+  const b=$('notifBtn');
+  if(!('Notification' in window)){ b.textContent='✗ not supported'; return; }
+  Notification.requestPermission().then(p=>{ b.textContent=p==='granted'?'🔔 popups on':'🔕 blocked'; });
+}
+(function(){ const b=$('notifBtn'); if(b&&'Notification' in window&&Notification.permission==='granted') b.textContent='🔔 popups on'; })();
+// badge the tab even when you are not on it
+setInterval(async()=>{ if(TAB==='monitor') return;
+  try{ const j=await fetch('/api/swing/monitor?refresh=false').then(r=>r.json());
+    const n=(j.rows||[]).filter(r=>r.state==='at_entry'||r.state==='approaching').length;
+    const b=$('monBadge'); b.style.display=n?'':'none'; b.textContent=n; }catch(e){} }, 60000);
 
 // ---------- SCORECARD (plan-vs-actual review) ----------
 const _autoScored={};   // mode|date -> true, so a missing scorecard is auto-scored ONCE

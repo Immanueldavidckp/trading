@@ -3,9 +3,10 @@ swing_score.py — replays a swing_engine plan against the ACTUAL daily candles
 that followed it and scores it honestly, net of delivery costs.
 
 Fill rules (deliberately conservative; every rule an adversarial review forced):
-  • Every setup is a next-session BUY-STOP with a hard LIMIT CAP. The trigger
-    must fire within the entry window (2 sessions) or the plan is STALE = no
-    trade (not a loss).
+  • Momentum setups (S1–S3) are next-session BUY-STOPS with a hard LIMIT CAP;
+    the trigger must fire within the entry window or the plan is STALE = no
+    trade (not a loss). Zone setups (S4) are resting BUY LIMITS below spot and
+    fill when the session LOW reaches the entry (gap down → fills at the open).
   • Fill price = max(open, trigger) — a gap over the trigger fills WORSE, like
     reality. If the day OPENS beyond the limit cap the stop-limit cannot fill:
     no trade that day (and gap_skipped if it never fills in the window). No
@@ -50,9 +51,23 @@ def score_setup(setup: Dict, candles: List[dict]) -> Dict:
     if tp is None or stop is None or not candles:
         return res
 
-    # ── entry: stop-limit inside the window ──
+    # ── entry inside the window ──
+    # Two order types with OPPOSITE fill geometry. The S4 zone entry is a
+    # resting BUY LIMIT below spot: it fills when the session LOW comes down to
+    # it, at min(open, entry) — a gap DOWN through it fills at the open, better
+    # than asked. Treating it as a buy-stop (high >= trigger) would "fill" it on
+    # day one at the open, since spot is above the entry by construction, and
+    # score a trade that was never taken. The monitor uses the same rule.
+    is_limit = str(setup.get("entry_type") or "").upper().startswith("LIMIT")
+    entry = setup.get("entry") or tp
     fi = None; fill = None; gapped = False
     for i, c in enumerate(candles[:window]):
+        if is_limit:
+            if c["o"] <= entry:
+                fill = c["o"]; fi = i; break             # gapped down through the limit
+            if c["l"] <= entry:
+                fill = entry; fi = i; break
+            continue
         if c["o"] > limit:
             gapped = True          # opened beyond the cap — order can't fill today
             continue
@@ -67,6 +82,8 @@ def score_setup(setup: Dict, candles: List[dict]) -> Dict:
         res["status"] = "gap_skipped" if gapped else "stale"
         if gapped:
             res["reached"] = "opened beyond the limit cap — no chase, no trade"
+        elif is_limit:
+            res["reached"] = f"price never came back to the zone in {window} sessions — no fill"
         return res
 
     res["status"] = "filled"
