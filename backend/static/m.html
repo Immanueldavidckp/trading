@@ -2245,21 +2245,47 @@ async function loadSwingMonitor(){
       const rows=g[ph]; if(!rows.length) return '';
       return `<div class="hint" style="margin:10px 0 6px;font-weight:700"><span class="pill ${M_PH[ph][0]}">${M_PH[ph][1]}</span> <span class="d">${rows.length}</span></div>`
         + rows.map(r=>{
-          const z=r.zone||{};
-          const line = r.phase==='MONITOR' ? `${nf(r.dist_pct,2)}% above entry · ${r.sessions_left!=null?r.sessions_left+' session(s) left':''}`
-                     : r.phase==='ENTRY'  ? `filled ${nf(r.fill_price)}${r.unrealized_pct!=null?` · <b class="${cls(r.unrealized_pct)}">${pct(r.unrealized_pct)}</b>`:''}${r.broke_zone?' · <span class="r">zone broke</span>':''}`
+          const S=r.setup||{}, z=r.zone||S.zone||{}, T=S.targets||r.targets||[], ep=S.exit_plan||{};
+          const k=`${r.plan_date}|${r.tsym}|${r.setup_name}`, open=_mOpen.has(k);
+          const line = r.phase==='MONITOR' ? `${nf(r.dist_pct,2)}% · ${nf(r.dist_atr,2)} ATR above entry${r.sessions_left!=null?` · ${r.sessions_left} left`:''}`
+                     : r.phase==='ENTRY'  ? `filled ${nf(r.fill_price)}${r.unrealized_pct!=null?` · <b class="${cls(r.unrealized_pct)}">${pct(r.unrealized_pct)}</b>`:''}${r.r_now!=null?` (${r.r_now>=0?'+':''}${r.r_now}R)`:''}${r.broke_zone?' · <span class="r">zone broke</span>':''}`
                      : '';
-          return `<div class="lpm${(r.state==='at_entry'||r.state==='in_trade')?' prio':''}" onclick="openChart('${esc(r.tsym)}')">
-            <div class="between"><span style="font-weight:700">${esc(r.tsym)}</span>
-              <span><span class="mono">${r.ltp!=null?rs(r.ltp):'—'}</span> <span class="pill ${M_ST[r.state]||'n'}">${esc((r.state||'').replace('_',' '))}</span></span></div>
-            <div class="hint" style="margin-top:4px">${esc(r.setup_name||'')} · ${esc(r.entry_type||'')} ${nf(r.entry)} · stop ${nf(r.stop)} · T1 ${nf((r.targets||[])[0])}${z.top?` · zone ${nf(z.bottom)}–${nf(z.top)}`:''}</div>
-            ${line?`<div class="hint mono" style="margin-top:3px">${line}</div>`:''}
-            <div class="hint" style="margin-top:4px">${esc(r.reason||'')}</div>
+          const kv=(a,b)=>b==null||b===''?'':`<div class="tile"><span>${a}</span><b class="mono">${b}</b></div>`;
+          return `<div class="lpm${(r.state==='at_entry'||r.state==='in_trade')?' prio':''}" data-k="${esc(k)}">
+            <div onclick="mToggle('${esc(k)}')">
+              <div class="between"><span style="font-weight:700">${esc(r.tsym)} <span class="d" style="font-weight:400;font-size:var(--fs-micro)">${esc(r.sector||'')}</span></span>
+                <span><span class="mono">${r.ltp!=null?rs(r.ltp):'—'}</span> <span class="pill ${M_ST[r.state]||'n'}">${esc((r.state||'').replace('_',' '))}</span> <span class="d">${open?'▾':'▸'}</span></span></div>
+              <div class="hint" style="margin-top:4px">${esc(r.setup_name||'')} · ${esc(r.entry_type||'')} ${nf(r.entry)} → T1 ${nf(T[0])}</div>
+              ${line?`<div class="hint mono" style="margin-top:3px">${line}</div>`:''}
+            </div>
+            <div style="display:${open?'block':'none'};margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+              <div class="hint">${esc(r.reason||'')}</div>
+              ${S.trigger?`<div class="hint" style="margin-top:4px"><b>Trigger:</b> ${esc(S.trigger)}</div>`:''}
+              <div class="tiles" style="margin-top:8px">
+                ${kv('Entry',nf(S.entry??r.entry))}${kv('Stop',nf(S.stop??r.stop))}
+                ${kv('Target 1',T[0]!=null?nf(T[0])+(S.rr_t1?' · '+S.rr_t1+'R':''):null)}${kv('Target 2',T[1]!=null?nf(T[1])+(S.rr_final?' · '+S.rr_final+'R':''):null)}
+                ${kv('Size',S.shares_for_risk!=null?S.shares_for_risk+' sh @ ₹'+(S.risk_rupees||1000):null)}
+                ${z.top?kv('Zone',nf(z.bottom)+'–'+nf(z.top)):''}
+                ${kv('Window',(S.entry_window_sessions||r.window_sessions)+' sessions → '+(S.entry_by||r.entry_by||'—'))}
+                ${kv('Hard exit by',S.exit_by_date||r.exit_by)}
+                ${r.phase==='ENTRY'&&r.to_stop_pct!=null?kv('Room to stop'+(r.px_basis==='last_close'?' (vs close)':''),nf(r.to_stop_pct,2)+'%'):''}
+                ${r.phase==='ENTRY'&&r.to_t1_pct!=null?kv('To T1'+(r.px_basis==='last_close'?' (vs close)':''),nf(r.to_t1_pct,2)+'%'):''}
+              </div>
+              ${ep.t1_action?`<div class="hint" style="margin-top:6px">▸ ${esc(ep.t1_action)}</div>`:''}
+              ${ep.runner_action?`<div class="hint">▸ ${esc(ep.runner_action)}</div>`:''}
+              ${(ep.target_basis||[]).map(b=>`<div class="hint">◦ ${esc(b)}</div>`).join('')}
+              ${S.valid_when?`<div class="hint g" style="margin-top:6px">✓ ${esc(S.valid_when)}</div>`:''}
+              ${S.skip_when?`<div class="hint r">✗ ${esc(S.skip_when)}</div>`:''}
+              ${(r.history||[]).length?`<div class="hint mono d" style="margin-top:6px">${r.history.map(h=>(h.at||'').slice(5,16).replace('T',' ')+' '+h.state).join(' → ')}</div>`:''}
+              <button class="chip sm" style="margin-top:8px" onclick="openChart('${esc(r.tsym)}')">📈 Chart</button>
+            </div>
           </div>`;
         }).join('');
     }).join('') || '<div class="empty">no setups being tracked</div>';
   }catch(e){ $('#lpmList').innerHTML='<div class="empty">error loading the swing monitor</div>'; }
 }
+const _mOpen=new Set(JSON.parse(localStorage.getItem('mon:rows:m')||'[]'));
+function mToggle(k){ if(_mOpen.has(k)) _mOpen.delete(k); else _mOpen.add(k); try{localStorage.setItem('mon:rows:m',JSON.stringify([..._mOpen]));}catch(e){} loadSwingMonitor(); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    TRADE TAB — ticket · orders · positions · holdings · F&O · log

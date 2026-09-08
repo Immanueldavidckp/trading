@@ -438,11 +438,14 @@ def evaluate(plan_date: Optional[str] = None, now: Optional[_dt.datetime] = None
                         f"FROM swing_monitor WHERE plan_date={PH}", [pd_])
             prior = {(r[0], r[1]): {"phase": r[2], "state": r[3], "reason": r[4], "fill_price": r[5],
                                     "fill_date": r[6], "history": r[7]} for r in cur.fetchall()}
+            present = set()          # (tsym, setup_name) pairs the plan still carries
             for plan in _plans_for(pd_):
                 setups = plan.get("setups") or []
                 if not setups:
                     continue
                 tsym = plan["tsym"]
+                for s in setups:
+                    present.add((tsym, s.get("name")))
                 daily = _daily_since(tsym, pdate)
                 live = _live_snapshot(tsym)
                 for s in setups:
@@ -457,6 +460,18 @@ def evaluate(plan_date: Optional[str] = None, now: Optional[_dt.datetime] = None
                     rows.append({"plan_date": pd_, "tsym": tsym, "sector": plan.get("sector"),
                                  "score": plan.get("score"), "conviction": plan.get("conviction"),
                                  **res})
+            # A plan rebuilt for the same date (Build next clicked twice) can drop
+            # a setup. Its monitor row would otherwise dangle in MONITOR forever —
+            # retire it. Filled positions are real and are left alone.
+            for (t, nm), pr in prior.items():
+                if (t, nm) in present or pr.get("phase") != "MONITOR":
+                    continue
+                res = {"setup_name": nm, "phase": "NO_ENTRY", "state": "superseded",
+                       "reason": "this setup is no longer in the plan after a rebuild",
+                       "changed": True}
+                a = _record(cur, PH, pd_, t, res, pr)
+                if a:
+                    alerts.append(a)
         conn.commit(); cur.close()
     finally:
         conn.close()
@@ -531,14 +546,42 @@ def status(plan_date: Optional[str] = None, refresh: bool = True) -> Dict:
             cur.execute(f"SELECT plan_date,tsym,score,conviction,plan_json FROM swing_plans "
                         f"WHERE plan_date IN ({marks})", dates)
             for pd_, t, sc, cv, pj in cur.fetchall():
-                sec = None
+                sec, setups, last_close, atr = None, {}, None, None
                 try:
-                    sec = json.loads(pj).get("sector")
+                    pl = json.loads(pj)
+                    sec = pl.get("sector"); last_close = pl.get("last_close")
+                    atr = (pl.get("profile") or {}).get("atr14")
+                    setups = {x.get("name"): x for x in (pl.get("setups") or [])}
                 except Exception:
                     pass
-                meta[(pd_, t)] = {"score": sc, "conviction": cv, "sector": sec}
+                meta[(pd_, t)] = {"score": sc, "conviction": cv, "sector": sec,
+                                  "last_close": last_close, "atr14": atr, "_setups": setups}
+        # The monitor row only carries a thin snapshot. The plan's full setup —
+        # targets, R:R, size, window, exit plan, valid/skip rules — is what a
+        # trader needs to act, so attach it by name.
         for r in rows:
-            r.update(meta.get((r["plan_date"], r["tsym"]), {}))
+            m = meta.get((r["plan_date"], r["tsym"]), {})
+            r.update({k: v for k, v in m.items() if not k.startswith("_")})
+            st = (m.get("_setups") or {}).get(r["setup_name"])
+            if st:
+                r["setup"] = st
+                # live distances to stop / T1 for a filled position, in % and R
+                fp, stop = r.get("fill_price"), st.get("stop")
+                t1 = (st.get("targets") or [None])[0]
+                # Outside market hours there is no LTP; the plan's last close is
+                # the honest stand-in. Say which one the numbers are based on.
+                lp = r.get("ltp"); basis = "ltp"
+                if not lp and m.get("last_close"):
+                    lp = m["last_close"]; basis = "last_close"
+                if lp and fp and stop:
+                    R = abs(fp - stop) or 1e-9
+                    r["px_basis"] = basis
+                    r["r_now"] = round((lp - fp) / R, 2)
+                    r["to_stop_pct"] = round((lp - stop) / lp * 100, 2)
+                    if t1:
+                        r["to_t1_pct"] = round((t1 - lp) / lp * 100, 2)
+                    if r.get("unrealized_pct") is None and r.get("phase") == "ENTRY":
+                        r["unrealized_pct"] = round((lp - fp) / fp * 100, 2)
         cur.execute("SELECT COUNT(*) FROM swing_alerts WHERE acked=0")
         unacked = cur.fetchone()[0]
         cur.close()

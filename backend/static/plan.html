@@ -81,12 +81,32 @@
   .phase.ENTRY .phase-h{color:var(--green);background:rgba(47,208,140,.08)}
   .phase.MONITOR .phase-h{color:var(--blue);background:rgba(94,142,255,.08)}
   .phase.NO_ENTRY .phase-h{color:var(--faint)}
-  .mrow{display:grid;grid-template-columns:120px 1fr 150px 130px 130px;gap:12px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--panel)}
+  .phase-h{cursor:pointer;user-select:none}
+  .phase-h .arw{font-family:var(--mono);color:var(--faint);transition:transform .12s;width:12px;display:inline-block}
+  .phase.open .phase-h .arw{transform:rotate(90deg)}
+  .phase-b{display:none} .phase.open .phase-b{display:block}
+  .mrow{border-bottom:1px solid var(--border);background:var(--panel)}
   .mrow:last-child{border-bottom:none}
+  .mrow-h{display:grid;grid-template-columns:110px minmax(0,1fr) 120px 105px 150px 18px;gap:10px;align-items:center;padding:8px 14px;cursor:pointer}
+  .mrow-h:hover{background:var(--panel2)}
+  .mrow-h .short{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px}
+  .mrow-h .arw{font-family:var(--mono);color:var(--faint);transition:transform .12s}
+  .mrow.open .mrow-h .arw{transform:rotate(90deg)}
+  .mrow.open .mrow-h{background:var(--panel2)}
+  .mrow-b{display:none;padding:4px 14px 14px;border-top:1px solid var(--border)}
+  .mrow.open .mrow-b{display:block}
+  .mrow-b h5{margin:12px 0 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-family:var(--mono)}
+  .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px}
+  .kv .k{font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;font-family:var(--mono)}
+  .kv .v{font-family:var(--mono);font-size:12.5px;margin-top:2px}
+  .kv > div{background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:6px 9px}
+  .xp{font-size:12px;color:var(--muted);margin:3px 0} .xp b{color:var(--ink)}
+  .mtools{display:flex;gap:6px;margin:0 0 10px;justify-content:flex-end}
+  @media(max-width:900px){.mrow-h{grid-template-columns:1fr 1fr}}
   .mrow.at_entry,.mrow.in_trade{box-shadow:inset 3px 0 0 var(--green)}
   .mrow.approaching{box-shadow:inset 3px 0 0 var(--amber)}
   .mrow.broken,.mrow.ran_away{box-shadow:inset 3px 0 0 var(--red)}
-  .mrow .sym{font-size:15px}
+  .mrow .sym{font-size:14px}
   .st{font-family:var(--mono);font-size:10.5px;font-weight:800;padding:3px 8px;border-radius:999px;border:1px solid var(--border);white-space:nowrap;text-transform:uppercase;letter-spacing:.04em}
   .st.at_entry,.st.in_trade{color:#0b0f17;background:var(--green);border-color:var(--green)}
   .st.approaching{color:var(--amber);background:var(--amber-bg);border-color:rgba(232,178,74,.5)}
@@ -101,7 +121,6 @@
   .arow .lvl{font-family:var(--mono);font-size:10px;font-weight:800;padding:1px 6px;border-radius:5px;margin-right:6px}
   .lvl.high{color:#0b0f17;background:var(--green)} .lvl.warn{color:var(--red);background:var(--red-bg)}
   .lvl.info{color:var(--blue);background:var(--blue-bg)} .lvl.low{color:var(--faint);background:var(--panel2)}
-  @media(max-width:900px){.mrow{grid-template-columns:1fr 1fr}}
 
   /* scorecard: plan (left) vs actual (right) */
   .sc-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
@@ -191,6 +210,7 @@
   <div id="monitorView" style="display:none">
     <div class="ubar" id="monBar"></div>
     <div class="tiles" id="monTiles"></div>
+    <div class="mtools"><button class="dlbtn" onclick="monExpandAll(true)">⇕ Expand all rows</button><button class="dlbtn" onclick="monExpandAll(false)">Collapse all rows</button></div>
     <div id="monPhases"></div>
     <h4 style="margin-top:22px">Alerts <span class="q">— one per transition, newest first</span>
       <button class="dlbtn" id="notifBtn" onclick="enableNotifs()" style="margin-left:10px">🔔 Enable popups</button>
@@ -632,6 +652,19 @@ const STATE_HELP={
   broken:'zone was run through before a fill — too late, it is not support', expired:'window ended, price never came back',
   ran_away:'window ended with price 2+ ATR higher — missed, not wrong', superseded:'a newer plan replaced this one'};
 
+// Sections and rows both fold. Fold state lives in localStorage so the 30s
+// refresh never collapses what you opened. MONITOR comes first: at_entry and
+// approaching are the things you must act on in the next few minutes.
+const MON_ORDER=['MONITOR','ENTRY','NO_ENTRY'];
+const _monOpenRows=new Set(JSON.parse(localStorage.getItem('mon:rows')||'[]'));
+const _monOpenSec=Object.assign({MONITOR:true,ENTRY:true,NO_ENTRY:false}, JSON.parse(localStorage.getItem('mon:sec')||'{}'));
+const rowKey=r=>`${r.plan_date}|${r.tsym}|${r.setup_name}`;
+function saveMon(){ try{ localStorage.setItem('mon:rows',JSON.stringify([..._monOpenRows])); localStorage.setItem('mon:sec',JSON.stringify(_monOpenSec)); }catch(e){} }
+function toggleMonRow(k){ if(_monOpenRows.has(k)) _monOpenRows.delete(k); else _monOpenRows.add(k); saveMon(); const el=document.querySelector(`.mrow[data-k="${CSS.escape(k)}"]`); if(el) el.classList.toggle('open',_monOpenRows.has(k)); }
+function toggleMonSec(ph){ _monOpenSec[ph]=!_monOpenSec[ph]; saveMon(); const el=document.querySelector(`.phase.${ph}`); if(el) el.classList.toggle('open',_monOpenSec[ph]); }
+function monExpandAll(on){ document.querySelectorAll('.mrow').forEach(el=>{ const k=el.dataset.k; if(on) _monOpenRows.add(k); else _monOpenRows.delete(k); el.classList.toggle('open',on); }); saveMon(); }
+function jumpToPhase(ph){ _monOpenSec[ph]=true; saveMon(); const el=document.querySelector(`.phase.${ph}`); if(el){ el.classList.add('open'); el.scrollIntoView({behavior:'smooth',block:'start'}); } }
+
 async function renderMonitor(){
   const bar=$('monBar'), tiles=$('monTiles'), box=$('monPhases');
   try{
@@ -639,39 +672,96 @@ async function renderMonitor(){
     if(!j.ok){ box.innerHTML=`<div class="empty">${j.error||'no swing plans to monitor'}</div>`; bar.innerHTML=''; return; }
     const c=j.counts||{};
     bar.innerHTML=`Swing setup monitor · ${j.market_open?'<b style="color:var(--green)">● market open — live prices</b>':'<span class="q">○ market closed — last close</span>'}`
-      +` · re-evaluates every minute on the server, this page refreshes every 30s · <span class="q">${(j.at||'').replace('T',' ').slice(0,19)}</span>`;
-    tiles.innerHTML=[['ENTRY',c.ENTRY||0,'filled / in trade','pos'],['MONITOR',c.MONITOR||0,'still watching',''],['NO_ENTRY',c.NO_ENTRY||0,'decided: no trade','']]
-      .map(([k,v,d,cl])=>`<div class="tile"><div class="t">${k.replace('_',' ')}</div><div class="v ${cl}">${v}</div><div class="d">${d}</div></div>`).join('');
-    const badge=$('monBadge'); const urgent=(j.rows||[]).filter(r=>r.state==='at_entry'||r.state==='approaching').length;
-    badge.style.display=urgent?'':'none'; badge.textContent=urgent;
+      +` · re-evaluates every minute on the server, this page refreshes every 30s · <span class="q">${(j.at||'').replace('T',' ').slice(0,19)}</span>`
+      +` · <span class="q">click a row to expand it · click a section title to fold it</span>`;
+    const rows=j.rows||[];
+    const nAct=rows.filter(r=>r.state==='at_entry').length, nApp=rows.filter(r=>r.state==='approaching').length;
+    tiles.innerHTML=[
+      ['MONITOR',c.MONITOR||0,`${nAct} at entry · ${nApp} approaching`,nAct?'pos':''],
+      ['ENTRY',c.ENTRY||0,'filled / in trade','pos'],
+      ['NO_ENTRY',c.NO_ENTRY||0,'decided: no trade','']]
+      .map(([k,v,d,cl])=>`<div class="tile" style="cursor:pointer" onclick="jumpToPhase('${k}')" title="Jump to ${k.replace('_',' ')}"><div class="t">${k.replace('_',' ')}</div><div class="v ${cl}">${v}</div><div class="d">${d}</div></div>`).join('');
+    const badge=$('monBadge'); badge.style.display=(nAct+nApp)?'':'none'; badge.textContent=nAct+nApp;
 
     const groups={ENTRY:[],MONITOR:[],NO_ENTRY:[]};
-    (j.rows||[]).forEach(r=>(groups[r.phase]||groups.NO_ENTRY).push(r));
-    box.innerHTML=['ENTRY','MONITOR','NO_ENTRY'].map(ph=>{
-      const rows=groups[ph];
-      return `<div class="phase ${ph}"><div class="phase-h">${PHASE_LABEL[ph]}<span class="n">${rows.length} setup${rows.length===1?'':'s'}</span></div>
-        ${rows.length?rows.map(monRow).join(''):`<div class="empty" style="padding:18px">none</div>`}</div>`;
+    rows.forEach(r=>(groups[r.phase]||groups.NO_ENTRY).push(r));
+    box.innerHTML=MON_ORDER.map(ph=>{
+      const rs=groups[ph];
+      return `<div class="phase ${ph}${_monOpenSec[ph]?' open':''}"><div class="phase-h" onclick="toggleMonSec('${ph}')"><span class="arw">▸</span>${PHASE_LABEL[ph]}<span class="n">${rs.length} setup${rs.length===1?'':'s'}</span></div>
+        <div class="phase-b">${rs.length?rs.map(monRow).join(''):`<div class="empty" style="padding:18px">none</div>`}</div></div>`;
     }).join('');
     await loadAlerts();
   }catch(e){ box.innerHTML='<div class="empty">could not load the monitor</div>'; }
 }
+
+// short setup label for the one-line header
+const shortName=n=>String(n||'').replace(/^Demand-zone limit entry — /,'zone: ').replace(/ \((S\d)\)$/,' $1').replace('Liquidity sweep reclaim','sweep reclaim').replace('52-week-high momentum breakout','52w breakout').replace('Volatility-compression breakout','compression').replace('Trend pullback resumption','pullback');
+
 function monRow(r){
-  const z=r.zone||{};
-  const dist = r.dist_pct!=null ? `${fmt(r.dist_pct)}% · ${fmt(r.dist_atr)} ATR above entry` : (r.unrealized_pct!=null?`<b class="${r.unrealized_pct>=0?'pos':'neg'}">${pct(r.unrealized_pct)}</b> unrealized`:'—');
-  const win = r.phase==='MONITOR' ? `${r.sessions_left!=null?r.sessions_left+' session(s) left':'—'}<div class="q">window to ${r.entry_by||'—'}</div>`
-            : r.phase==='ENTRY'  ? `filled ${fmt(r.fill_price)}<div class="q">${r.fill_date||''}${r.broke_zone?' · <span style="color:var(--red)">zone broke</span>':''}</div>`
-            : `<div class="q">${r.updated_at?r.updated_at.replace('T',' ').slice(0,16):''}</div>`;
-  const hist=(r.history||[]).slice(-3).map(h=>`${(h.at||'').slice(5,16).replace('T',' ')} ${h.state}`).join(' → ');
-  return `<div class="mrow ${r.state}">
-    <div><div class="sym">${r.tsym}</div><div class="q">${r.sector||''} · score ${r.score??'—'}</div></div>
-    <div><div><b>${r.setup_name||''}</b> <span class="q">${r.entry_type||''} ${fmt(r.entry)} · stop ${fmt(r.stop)} · T1 ${fmt((r.targets||[])[0])}${z.top?` · zone ${fmt(z.bottom)}–${fmt(z.top)}`:''}</span></div>
-      <div class="why">${r.reason||STATE_HELP[r.state]||''}</div>
-      ${hist?`<div class="hist">${hist}</div>`:''}</div>
-    <div><span class="st ${r.state}">${(r.state||'').replace('_',' ')}</span></div>
-    <div class="mono">${r.ltp!=null?'₹'+fmt(r.ltp):'—'}<div class="q">${dist}</div></div>
-    <div class="mono">${win}</div>
-    <div style="grid-column:1/-1;display:flex;gap:6px;justify-content:flex-end;margin-top:-4px">
-      <button class="dlbtn" onclick="openChart('${r.tsym}')">📈 Chart</button></div>
+  const k=rowKey(r), open=_monOpenRows.has(k), S=r.setup||{}, z=r.zone||S.zone||{}, T=S.targets||r.targets||[];
+  // header cells: live / distance / window depend on phase
+  const live = r.ltp!=null ? `₹${fmt(r.ltp)}` : '—';
+  const dist = r.phase==='MONITOR' ? (r.dist_pct!=null?`<span class="q">${fmt(r.dist_pct)}% · ${fmt(r.dist_atr)} ATR</span>`:'<span class="q">—</span>')
+             : r.phase==='ENTRY'  ? (r.unrealized_pct!=null?`<b class="${r.unrealized_pct>=0?'pos':'neg'}">${pct(r.unrealized_pct)}</b>${r.r_now!=null?` <span class="q">${r.r_now>=0?'+':''}${r.r_now}R</span>`:''}`:'<span class="q">—</span>')
+             : '<span class="q">—</span>';
+  const win  = r.phase==='MONITOR' ? (r.sessions_left!=null?`${r.sessions_left} left <span class="q">to ${r.entry_by||S.entry_by||'—'}</span>`:`<span class="q">to ${r.entry_by||S.entry_by||'—'}</span>`)
+             : r.phase==='ENTRY'  ? `filled ${fmt(r.fill_price)} <span class="q">${r.fill_date||''}</span>${r.broke_zone?' <span style="color:var(--red)">zone broke</span>':''}`
+             : `<span class="q">${(r.updated_at||'').replace('T',' ').slice(5,16)}</span>`;
+  const hist=(r.history||[]).map(h=>`${(h.at||'').slice(5,16).replace('T',' ')} ${h.state}${h.ltp!=null?' @'+fmt(h.ltp):''}`).join(' → ');
+  const ep=S.exit_plan||{};
+  const kv=(k,v,q)=>`<div><div class="k">${k}</div><div class="v">${v==null||v===''?'—':v}${q?` <span class="q">${q}</span>`:''}</div></div>`;
+  return `<div class="mrow ${r.state}${open?' open':''}" data-k="${k}">
+    <div class="mrow-h" onclick="toggleMonRow('${k.replace(/'/g,"\\'")}')">
+      <div><div class="sym">${r.tsym}</div><div class="q">${r.sector||''}${r.score!=null?' · '+r.score:''}</div></div>
+      <div class="short" title="${(r.setup_name||'')}"><b>${shortName(r.setup_name)}</b> <span class="q">${r.entry_type||''} ${fmt(r.entry)} → T1 ${fmt(T[0])}</span></div>
+      <div><span class="st ${r.state}">${(r.state||'').replace('_',' ')}</span></div>
+      <div class="mono">${live}</div>
+      <div class="mono">${dist}<div style="font-size:11px">${win}</div></div>
+      <div class="arw">▸</div>
+    </div>
+    <div class="mrow-b">
+      <div class="xp" style="margin-top:8px">${r.reason||''}</div>
+      ${S.trigger?`<div class="xp"><b>Trigger:</b> ${S.trigger}</div>`:''}
+      <h5>Levels</h5>
+      <div class="kv">
+        ${kv('Entry ('+(r.entry_type||S.entry_type||'')+')',fmt(S.entry??r.entry), S.limit_price?'cap '+fmt(S.limit_price):'')}
+        ${kv('Stop',fmt(S.stop??r.stop), S.risk_per_share?fmt(S.risk_per_share)+'/sh risk':'')}
+        ${kv('Target 1',fmt(T[0]), S.rr_t1?S.rr_t1+'R':'')}
+        ${kv('Target 2',fmt(T[1]), S.rr_final?S.rr_final+'R':'')}
+        ${kv('Size',S.shares_for_risk!=null?S.shares_for_risk+' sh':null, S.risk_rupees?'@ ₹'+S.risk_rupees+' risk':'')}
+        ${z.top?kv('Zone',`${fmt(z.bottom)}–${fmt(z.top)}`, (z.kind||'')+(z.ce?' · CE '+fmt(z.ce):'')):''}
+        ${S.quality?kv('Quality',S.quality, S.source||''):''}
+      </div>
+      <h5>Live</h5>
+      <div class="kv">
+        ${kv('LTP',r.ltp!=null?'₹'+fmt(r.ltp):null, r.last_close?'plan close '+fmt(r.last_close):'')}
+        ${r.phase==='MONITOR'?kv('To entry',r.dist_pct!=null?fmt(r.dist_pct)+'%':null, r.dist_atr!=null?fmt(r.dist_atr)+' ATR':''):''}
+        ${r.phase==='ENTRY'?kv('Unrealized',r.unrealized_pct!=null?pct(r.unrealized_pct):null, r.r_now!=null?(r.r_now>=0?'+':'')+r.r_now+'R':''):''}
+        ${r.phase==='ENTRY'&&r.to_stop_pct!=null?kv('Room to stop',fmt(r.to_stop_pct)+'%',r.px_basis==='last_close'?'below last close':'below LTP'):''}
+        ${r.phase==='ENTRY'&&r.to_t1_pct!=null?kv('To T1',fmt(r.to_t1_pct)+'%',r.px_basis==='last_close'?'above last close':'above LTP'):''}
+        ${r.fill_price?kv('Filled',fmt(r.fill_price), r.fill_date||''):''}
+      </div>
+      <h5>Timing</h5>
+      <div class="kv">
+        ${kv('Entry window',(S.entry_window_sessions||r.window_sessions||'—')+' sessions', 'until '+(S.entry_by||r.entry_by||'—'))}
+        ${r.phase==='MONITOR'?kv('Sessions left',r.sessions_left,''):''}
+        ${kv('Expected hold','~'+(S.expected_hold_sessions??'—')+' sessions', S.expected_exit_date?'≈ '+S.expected_exit_date:'')}
+        ${kv('Hard exit by',S.exit_by_date||r.exit_by, S.time_stop_sessions?S.time_stop_sessions+'-session time stop':'')}
+        ${S.no_progress?kv('No-progress rule',`< +${S.no_progress.min_gain_pct}% after ${S.no_progress.after_sessions}`,'sessions → exit'):''}
+      </div>
+      ${(ep.t1_action||ep.runner_action)?`<h5>Exit plan</h5>
+        ${ep.t1_action?`<div class="xp">▸ ${ep.t1_action}</div>`:''}
+        ${ep.runner_action?`<div class="xp">▸ ${ep.runner_action}</div>`:''}
+        ${(ep.target_basis||[]).map(b=>`<div class="xp">◦ ${b}</div>`).join('')}
+        ${ep.lvn_ahead&&ep.lvn_ahead.length?`<div class="xp">◦ LVN ahead at ${ep.lvn_ahead.map(fmt).join(', ')} — price travels through fast</div>`:''}
+        ${ep.invalidation?`<div class="xp" style="color:var(--red)">✗ ${ep.invalidation}</div>`:''}`:''}
+      ${(S.valid_when||S.skip_when)?`<h5>Rules</h5>
+        ${S.valid_when?`<div class="xp" style="color:var(--green)">✓ ${S.valid_when}</div>`:''}
+        ${S.skip_when?`<div class="xp" style="color:var(--red)">✗ ${S.skip_when}</div>`:''}`:''}
+      ${hist?`<h5>History</h5><div class="hist">${hist}</div>`:''}
+      <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px">
+        <button class="dlbtn" onclick="event.stopPropagation();openChart('${r.tsym}')">📈 Chart</button></div>
+    </div>
   </div>`;
 }
 async function loadAlerts(){
