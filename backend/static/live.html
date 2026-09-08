@@ -113,7 +113,14 @@
   .chart-tools select{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:4px 8px;font-size:11.5px;outline:none;font-family:inherit}
   .ohlc-readout{display:flex;gap:13px;padding:8px 16px;font-family:'JetBrains Mono',monospace;font-size:12px;border-bottom:1px solid var(--border);background:var(--bg-2);flex-wrap:wrap;min-height:35px;align-items:center}
   .ohlc-readout span b{font-weight:600}
-  #proChart{height:685px;width:100%;touch-action:none}  /* touch-action:none → JS gets touch gestures (no page scroll/zoom) */
+  #proChart{height:685px;width:100%;touch-action:none;position:relative}
+  .dpop{position:absolute;z-index:30;background:var(--panel,#111826);border:1px solid var(--border,#20293b);border-radius:10px;padding:8px 10px;
+    box-shadow:0 8px 28px rgba(0,0,0,.45);font-size:11.5px;min-width:210px}
+  .dpop-row{display:flex;gap:6px;align-items:center;margin:4px 0;flex-wrap:wrap}
+  .dpop-row label{display:flex;gap:4px;align-items:center;color:var(--text-2,#9ba6b8)}
+  .dpop .sw{width:16px;height:16px;border-radius:50%;cursor:pointer;border:2px solid transparent}
+  .dpop .sw.on{border-color:#fff}
+  .dpop .ind-chip{padding:2px 8px;font-size:10.5px}  /* touch-action:none → JS gets touch gestures (no page scroll/zoom) */
   .ind-bar{display:flex;align-items:center;gap:6px;padding:8px 16px;border-bottom:1px solid var(--border);background:var(--bg-2);flex-wrap:wrap}
   .ind-label{font-size:10px;color:var(--text-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-right:2px}
   .ind-chip{background:var(--panel-2);border:1px solid var(--border);color:var(--text-3);border-radius:7px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace;transition:.12s}
@@ -301,14 +308,19 @@
         <button class="ind-chip ctrl" id="logBtn" onclick="toggleLogScale()">Log scale: off</button>
         <span class="ind-sep"></span>
         <span class="ind-label">Draw:</span>
-        <button class="ind-chip" id="drawLineBtn" onclick="setDrawMode('line')"
-                title="Trendline — drag from one point to another. Anchored to time+price, so it stays put when you zoom or change timeframe.">╱ Line</button>
-        <button class="ind-chip" id="drawRectBtn" onclick="setDrawMode('rect')"
-                title="Rectangle — drag to box a zone (supply/demand, range).">▭ Rect</button>
-        <button class="ind-chip ctrl" id="drawDelBtn" onclick="deleteSelectedDrawing()"
-                title="Delete the selected drawing (or press Delete)">🗑 Delete</button>
-        <button class="ind-chip ctrl" onclick="clearDrawings()"
-                title="Remove every drawing on this symbol">Clear all</button>
+        <button class="ind-chip" data-dtool="trend" onclick="setDrawMode('trend')" title="Trendline — click-drag, or click · move · click. Double-click a line to extend / recolour / lock it.">╱ Trend</button>
+        <button class="ind-chip" data-dtool="ray"   onclick="setDrawMode('ray')"   title="Ray — a trendline extended to the right edge">↗ Ray</button>
+        <button class="ind-chip" data-dtool="hline" onclick="setDrawMode('hline')" title="Horizontal line — one click places it at that price (price tag on the axis)">━ H-line</button>
+        <button class="ind-chip" data-dtool="vline" onclick="setDrawMode('vline')" title="Vertical line — one click places it at that time">┃ V-line</button>
+        <button class="ind-chip" data-dtool="rect"  onclick="setDrawMode('rect')"  title="Rectangle — box a zone; shows its price range, % and bar count">▭ Rect</button>
+        <button class="ind-chip" data-dtool="fib"   onclick="setDrawMode('fib')"   title="Fibonacci retracement — drag from the swing low to the swing high (or high to low)">𝑓 Fib</button>
+        <span class="ind-sep"></span>
+        <button class="ind-chip on" id="magnetBtn" onclick="toggleMagnet()" title="Magnet — snap points to the nearest open/high/low/close">🧲 Magnet</button>
+        <button class="ind-chip" id="hideDrawBtn" onclick="toggleDrawingsHidden()" title="Hide / show every drawing">👁 Shown</button>
+        <button class="ind-chip ctrl" id="undoDrawBtn" onclick="undoDrawing()" title="Undo (Ctrl+Z)">↶</button>
+        <button class="ind-chip ctrl" id="redoDrawBtn" onclick="redoDrawing()" title="Redo (Ctrl+Y)">↷</button>
+        <button class="ind-chip ctrl" id="drawDelBtn" onclick="deleteSelectedDrawing()" title="Delete the selected drawing (Delete key)">🗑</button>
+        <button class="ind-chip ctrl" onclick="clearDrawings()" title="Remove every drawing on this symbol">Clear <span id="drawCount" class="mono"></span></button>
         <span class="ind-sep"></span>
         <button class="ind-chip ctrl" id="chartRefreshBtn" onclick="refreshChart()"
                 title="Re-fetch this symbol's candles and redraw">↻ Refresh chart</button>
@@ -682,14 +694,15 @@ let logScale=false;
 // pointer handlers that read it — a `const` declared later sits in the temporal
 // dead zone and any pointer event arriving first throws.
 const DRAW = {
-  mode: null,      // null | 'line' | 'rect'   (armed tool)
-  items: [],       // [{id,type,t1,y1,t2,y2,color}]
-  sel: null,       // id of the selected shape
-  drag: null,      // {id, handle:'p1'|'p2'|'move', ...} while dragging
-  live: null,      // the shape being drawn right now
+  mode: null,        // armed tool: trend | ray | hline | vline | rect | fib | null
+  items: [],         // shapes in DATA space: {id,type,p1:{t,y},p2:{t,y},color,width,extL,extR,locked}
+  sel: null, hover: null,
+  drag: null,        // {id, handle:'p1'|'p2'|'move', ...} while dragging
+  live: null,        // the shape being placed right now
+  placing: false,    // click-move-click: waiting for the second click
+  magnet: true, hidden: false,
+  undo: [], redo: [], updated_at: 0,
 };
-const DRAW_COLOR = '#f5c451';
-const DRAW_SEL   = '#5e8eff';
 let lastZoom={start:0,end:100};    // remember user's zoom window across data refreshes
 let zoomReset=false;               // when true, next render snaps zoom to full range
 
@@ -951,250 +964,379 @@ function _resetYAuto(){ chart.setOption({yAxis:[{gridIndex:0,min:null,max:null}]
 })();
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   DRAWING TOOLS — trendline + rectangle
+   DRAWING TOOLS — trendline · ray · horizontal · vertical · rectangle · fib
    ═══════════════════════════════════════════════════════════════════════════
-   Shapes are stored in DATA space as {t, price}, never in pixels, and never as
-   candle indices. Timestamps survive a timeframe switch (a line drawn on the
-   daily still sits on the same prices when you drop to 1h) and survive new
-   candles arriving; indices would not. At paint time each timestamp is mapped
-   to the nearest category slot and converted to pixels.
+   Rendering: a dedicated overlay <canvas> on top of the ECharts canvas. The
+   first version painted through ECharts' `graphic` component and repainted on
+   its `finished` event — but a setOption({graphic}) IS a render, which fires
+   `finished`, which repainted… a tight loop that made the whole chart sluggish
+   and every drag feel broken. Painting on our own canvas costs ECharts nothing,
+   so `finished` becomes a safe (and exactly right) repaint hook: drawings track
+   pan/zoom frame by frame.
 
-   Persisted per symbol in localStorage, so drawings come back on reload.       */
+   Coordinates: shapes live in DATA space as {t, y}. Timestamps survive a
+   timeframe change and new candles arriving; indices would not.
 
-const drawKey = () => 'draw:' + (active || '_');
+   Interaction (TradingView conventions):
+     · click-drag OR click-move-click to place two-point shapes
+     · one click places a horizontal / vertical line
+     · magnet snaps to the nearest O/H/L/C of the candle under the cursor
+     · click a shape to select; drag its handles or body; Delete removes;
+       double-click opens the style popover (colour, width, extend, lock)
+     · Ctrl+Z / Ctrl+Y undo & redo · Esc cancels / deselects
+   Persistence: localStorage immediately, the server (per symbol) shortly after,
+   so drawings follow you between desktop and phone.                          */
+
+const DRAW_COLORS = ['#f5c451','#5e8eff','#2fd08c','#ff5d6c','#a880ff','#e7edf6'];
+const DRAW_SEL    = '#5e8eff';
+const FIB_LEVELS  = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+const HIT = 8;                       // px tolerance for hit-testing
+const TOOLS = {                      // id → {label, title, twoPoint}
+  trend:{label:'╱ Trend', title:'Trendline — click-drag or click, move, click. Double-click it to extend, recolour, lock.', two:true},
+  ray:  {label:'↗ Ray',   title:'Ray — a trendline extended to the right edge', two:true},
+  hline:{label:'━ H-line',title:'Horizontal line — one click places it at that price', two:false},
+  vline:{label:'┃ V-line',title:'Vertical line — one click places it at that time', two:false},
+  rect: {label:'▭ Rect',  title:'Rectangle — box a zone; shows its price range and bar count', two:true},
+  fib:  {label:'𝑓 Fib',   title:'Fibonacci retracement — drag from swing low to swing high (or high to low)', two:true},
+};
+
+const drawKey = () => 'draw2:' + (active || '_');
+let _drawCanvas = null, _drawCtx = null, _saveT = null, _popEl = null;
+
+/* ---- lifecycle ---- */
+function drawLayer(){
+  if(_drawCanvas) return _drawCanvas;
+  const host=document.getElementById('proChart');
+  host.style.position='relative';
+  _drawCanvas=document.createElement('canvas');
+  _drawCanvas.id='drawLayer';
+  _drawCanvas.style.cssText='position:absolute;left:0;top:0;pointer-events:none;z-index:5';
+  host.appendChild(_drawCanvas);
+  _drawCtx=_drawCanvas.getContext('2d');
+  return _drawCanvas;
+}
+function _fitLayer(){
+  const c=drawLayer(), host=document.getElementById('proChart');
+  const w=host.clientWidth, h=host.clientHeight, dpr=window.devicePixelRatio||1;
+  if(c.width!==Math.round(w*dpr)||c.height!==Math.round(h*dpr)){
+    c.width=Math.round(w*dpr); c.height=Math.round(h*dpr);
+    c.style.width=w+'px'; c.style.height=h+'px';
+  }
+  _drawCtx.setTransform(dpr,0,0,dpr,0,0);
+  return {w,h};
+}
 
 function loadDrawings(){
-  try{ DRAW.items = JSON.parse(localStorage.getItem(drawKey()) || '[]') || []; }
-  catch(e){ DRAW.items = []; }
-  DRAW.sel = null; DRAW.live = null;
+  let local=null;
+  try{ local=JSON.parse(localStorage.getItem(drawKey())||'null'); }catch(e){}
+  DRAW.items=(local&&local.items)||[]; DRAW.updated_at=(local&&local.updated_at)||0;
+  DRAW.sel=null; DRAW.live=null; DRAW.placing=false; DRAW.undo=[]; DRAW.redo=[];
   paintDrawings();
+  // server copy wins if it is newer — drawings made on another device
+  const sym=active;
+  fetch('/api/drawings?tsym='+encodeURIComponent(sym)).then(r=>r.json()).then(j=>{
+    if(!j||!j.ok||sym!==active) return;
+    if(j.updated_at && j.updated_at>(DRAW.updated_at||0) && Array.isArray(j.items)){
+      DRAW.items=j.items; DRAW.updated_at=j.updated_at;
+      try{ localStorage.setItem(drawKey(),JSON.stringify({items:DRAW.items,updated_at:DRAW.updated_at})); }catch(e){}
+      paintDrawings();
+    }
+  }).catch(()=>{});
 }
 function saveDrawings(){
-  try{ localStorage.setItem(drawKey(), JSON.stringify(DRAW.items)); }catch(e){}
+  DRAW.updated_at=Date.now();
+  try{ localStorage.setItem(drawKey(),JSON.stringify({items:DRAW.items,updated_at:DRAW.updated_at})); }catch(e){}
+  clearTimeout(_saveT);
+  const sym=active, payload=JSON.stringify({items:DRAW.items,updated_at:DRAW.updated_at});
+  _saveT=setTimeout(()=>{ fetch('/api/drawings?tsym='+encodeURIComponent(sym),{method:'POST',headers:{'Content-Type':'application/json'},body:payload}).catch(()=>{}); },800);
+  refreshDrawToolbar();
 }
+function pushUndo(){ DRAW.undo.push(JSON.stringify(DRAW.items)); if(DRAW.undo.length>60) DRAW.undo.shift(); DRAW.redo=[]; }
+function undoDrawing(){ if(!DRAW.undo.length) return; DRAW.redo.push(JSON.stringify(DRAW.items)); DRAW.items=JSON.parse(DRAW.undo.pop()); DRAW.sel=null; saveDrawings(); paintDrawings(); }
+function redoDrawing(){ if(!DRAW.redo.length) return; DRAW.undo.push(JSON.stringify(DRAW.items)); DRAW.items=JSON.parse(DRAW.redo.pop()); DRAW.sel=null; saveDrawings(); paintDrawings(); }
 
+/* ---- toolbar ---- */
 function setDrawMode(m){
-  DRAW.mode = (DRAW.mode === m) ? null : m;
-  for(const [id,mode] of [['drawLineBtn','line'],['drawRectBtn','rect']]){
-    const b=document.getElementById(id); if(b) b.classList.toggle('on', DRAW.mode===mode);
-  }
-  document.getElementById('proChart').style.cursor = DRAW.mode ? 'crosshair' : '';
+  DRAW.mode = (DRAW.mode===m)?null:m;
+  DRAW.live=null; DRAW.placing=false; closeStylePopover();
+  document.querySelectorAll('[data-dtool]').forEach(b=>b.classList.toggle('on',b.dataset.dtool===DRAW.mode));
+  document.getElementById('proChart').style.cursor = DRAW.mode?'crosshair':'';
+  paintDrawings();
 }
+function toggleMagnet(){ DRAW.magnet=!DRAW.magnet; refreshDrawToolbar(); }
+function toggleDrawingsHidden(){ DRAW.hidden=!DRAW.hidden; refreshDrawToolbar(); paintDrawings(); }
 function deleteSelectedDrawing(){
   if(!DRAW.sel) return;
-  DRAW.items = DRAW.items.filter(d=>d.id!==DRAW.sel);
-  DRAW.sel=null; saveDrawings(); paintDrawings();
+  const it=DRAW.items.find(d=>d.id===DRAW.sel); if(it&&it.locked) return;
+  pushUndo(); DRAW.items=DRAW.items.filter(d=>d.id!==DRAW.sel); DRAW.sel=null; closeStylePopover(); saveDrawings(); paintDrawings();
 }
 function clearDrawings(){
   if(!DRAW.items.length) return;
   if(!confirm(`Remove all ${DRAW.items.length} drawing(s) on ${active}?`)) return;
-  DRAW.items=[]; DRAW.sel=null; saveDrawings(); paintDrawings();
+  pushUndo(); DRAW.items=[]; DRAW.sel=null; closeStylePopover(); saveDrawings(); paintDrawings();
+}
+function refreshDrawToolbar(){
+  const q=id=>document.getElementById(id);
+  if(q('magnetBtn')) q('magnetBtn').classList.toggle('on',DRAW.magnet);
+  if(q('hideDrawBtn')){ q('hideDrawBtn').classList.toggle('on',DRAW.hidden); q('hideDrawBtn').textContent=DRAW.hidden?'🙈 Hidden':'👁 Shown'; }
+  if(q('undoDrawBtn')) q('undoDrawBtn').disabled=!DRAW.undo.length;
+  if(q('redoDrawBtn')) q('redoDrawBtn').disabled=!DRAW.redo.length;
+  if(q('drawDelBtn')) q('drawDelBtn').style.opacity=DRAW.sel?'1':'0.45';
+  if(q('drawCount')) q('drawCount').textContent=DRAW.items.length?`${DRAW.items.length}`:'';
 }
 
 /* ---- data <-> pixel ---- */
-// The x-axis is a CATEGORY axis of timestamp strings, so a timestamp has to be
-// resolved to its slot. Nearest match, and the padded future slots count too —
-// that is what lets a line be drawn out to the right of the last candle.
-function _xCats(){
-  const o=chart.getOption(); const ax=o && o.xAxis && o.xAxis[0];
-  return (ax && ax.data) ? ax.data : [];
-}
+function _xCats(){ const o=chart.getOption(); const ax=o&&o.xAxis&&o.xAxis[0]; return (ax&&ax.data)?ax.data:[]; }
 function tToIndex(t){
   const cats=_xCats(); if(!cats.length) return null;
   const first=+cats[0], last=+cats[cats.length-1];
   if(cats.length>1 && t>=first && t<=last){
-    // uniform spacing → direct estimate, then nudge to the true nearest
     const step=(last-first)/(cats.length-1);
-    let i=Math.round((t-first)/step);
-    i=Math.max(0,Math.min(cats.length-1,i));
+    let i=Math.max(0,Math.min(cats.length-1,Math.round((t-first)/step)));
     let best=i, bd=Math.abs(+cats[i]-t);
-    for(let j=Math.max(0,i-3);j<=Math.min(cats.length-1,i+3);j++){
-      const d=Math.abs(+cats[j]-t); if(d<bd){bd=d;best=j;}
-    }
+    for(let j=Math.max(0,i-3);j<=Math.min(cats.length-1,i+3);j++){ const d=Math.abs(+cats[j]-t); if(d<bd){bd=d;best=j;} }
     return best;
   }
-  return t<first ? 0 : cats.length-1;
+  // beyond the axis: extrapolate so a line can be drawn into the future / past
+  if(cats.length>1){ const step=(last-first)/(cats.length-1); return (t-first)/step; }
+  return t<first?0:cats.length-1;
 }
 function indexToT(i){
   const cats=_xCats(); if(!cats.length) return null;
-  i=Math.max(0,Math.min(cats.length-1,Math.round(i)));
-  return +cats[i];
+  if(cats.length>1){ const first=+cats[0], last=+cats[cats.length-1]; const step=(last-first)/(cats.length-1); return Math.round(first+i*step); }
+  return +cats[0];
 }
-function dataToPx(t, price){
-  const i=tToIndex(t); if(i==null) return null;
-  try{ return chart.convertToPixel({gridIndex:0},[i,price]); }catch(e){ return null; }
-}
-function pxToData(px, py){
-  try{
-    const v=chart.convertFromPixel({gridIndex:0},[px,py]);
-    if(!v) return null;
-    return {t:indexToT(v[0]), y:v[1]};
-  }catch(e){ return null; }
-}
-function inPlot(px,py){
-  try{
-    const r=chart.getModel().getComponent('grid',0).coordinateSystem.getRect();
-    return px>=r.x && px<=r.x+r.width && py>=r.y && py<=r.y+r.height;
-  }catch(e){ return false; }
+function gridRect(){ try{ return chart.getModel().getComponent('grid',0).coordinateSystem.getRect(); }catch(e){ return null; } }
+function dataToPx(t,y){ const i=tToIndex(t); if(i==null) return null; try{ return chart.convertToPixel({gridIndex:0},[i,y]); }catch(e){ return null; } }
+function pxToData(px,py){ try{ const v=chart.convertFromPixel({gridIndex:0},[px,py]); return v?{t:indexToT(v[0]),y:v[1],i:v[0]}:null; }catch(e){ return null; } }
+function inPlot(px,py){ const r=gridRect(); return !!r && px>=r.x && px<=r.x+r.width && py>=r.y && py<=r.y+r.height; }
+
+// magnet: snap to the nearest O/H/L/C of the candle under the cursor
+function snapPoint(px,py){
+  const p=pxToData(px,py); if(!p) return null;
+  if(!DRAW.magnet||!candles.length) return p;
+  const i=Math.round(p.i); if(i<0||i>=candles.length) return p;
+  const c=candles[i]; let best=null, bd=Infinity;
+  for(const v of [c.o,c.h,c.l,c.c]){ const q=dataToPx(c.t,v); if(!q) continue; const d=Math.abs(q[1]-py); if(d<bd){bd=d;best=v;} }
+  return (best!=null && bd<=HIT*1.5) ? {t:c.t,y:best,i,snapped:true} : {t:c.t,y:p.y,i};
 }
 
+/* ---- geometry helpers ---- */
+function _extendToRect(a,b,r,extL,extR){
+  // extend segment a→b to the grid edges on the requested sides
+  let [x1,y1]=a,[x2,y2]=b;
+  const dx=x2-x1, dy=y2-y1;
+  if(Math.abs(dx)<1e-6) return {p1:[x1, extL?r.y:y1], p2:[x2, extR?r.y+r.height:y2]};
+  const m=dy/dx;
+  const atX=x=>[x, y1+m*(x-x1)];
+  const left=x1<=x2, L=left?a:b, R=left?b:a;
+  let P1=[...L], P2=[...R];
+  if((left?extL:extR)) P1=atX(r.x);
+  if((left?extR:extL)) P2=atX(r.x+r.width);
+  return {p1:P1,p2:P2};
+}
+function distToSeg(px,py,x1,y1,x2,y2){
+  const dx=x2-x1, dy=y2-y1, L=dx*dx+dy*dy; if(!L) return Math.hypot(px-x1,py-y1);
+  let t=((px-x1)*dx+(py-y1)*dy)/L; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+}
+function _barsBetween(d){ const a=tToIndex(d.p1.t), b=tToIndex(d.p2.t); return (a==null||b==null)?null:Math.abs(Math.round(b-a)); }
+
 /* ---- paint ---- */
-// Rendered through ECharts' `graphic` component rather than a second canvas, so
-// the shapes sit in the same stacking context and survive resize/redraw.
 function paintDrawings(){
-  const g=[];
+  if(!_drawCtx) drawLayer();
+  const {w,h}=_fitLayer(); const ctx=_drawCtx; ctx.clearRect(0,0,w,h);
+  const r=gridRect(); if(!r||DRAW.hidden) { refreshDrawToolbar(); return; }
   const all=DRAW.items.concat(DRAW.live?[DRAW.live]:[]);
   for(const d of all){
-    const a=dataToPx(d.t1,d.y1), b=dataToPx(d.t2,d.y2);
-    if(!a||!b) continue;
-    const selected=(d.id===DRAW.sel);
-    const col=selected?DRAW_SEL:(d.color||DRAW_COLOR);
-    if(d.type==='line'){
-      g.push({type:'line', id:d.id, z:60, silent:false,
-        shape:{x1:a[0],y1:a[1],x2:b[0],y2:b[1]},
-        style:{stroke:col,lineWidth:selected?2.5:1.8},
-        onclick:()=>selectDrawing(d.id)});
-      // a fat invisible hit-line: a 2px stroke is almost impossible to click
-      g.push({type:'line', z:59, invisible:false,
-        shape:{x1:a[0],y1:a[1],x2:b[0],y2:b[1]},
-        style:{stroke:'rgba(0,0,0,0)',lineWidth:12},
-        onclick:()=>selectDrawing(d.id)});
-    } else {
-      const x=Math.min(a[0],b[0]), y=Math.min(a[1],b[1]);
-      const w=Math.abs(b[0]-a[0]), h=Math.abs(b[1]-a[1]);
-      g.push({type:'rect', id:d.id, z:59,
-        shape:{x,y,width:w,height:h},
-        style:{fill:selected?'rgba(94,142,255,0.12)':'rgba(245,196,81,0.10)',
-               stroke:col,lineWidth:selected?2:1.5},
-        onclick:()=>selectDrawing(d.id)});
+    const a=dataToPx(d.p1.t,d.p1.y), b=dataToPx(d.p2.t,d.p2.y); if(!a||!b) continue;
+    const sel=d.id===DRAW.sel, hov=d.id===DRAW.hover;
+    const col=d.color||DRAW_COLORS[0], lw=(d.width||1.5)+(sel?0.8:hov?0.5:0);
+    ctx.save(); ctx.beginPath(); ctx.rect(r.x,r.y,r.width,r.height); ctx.clip();
+    ctx.strokeStyle=sel?DRAW_SEL:col; ctx.fillStyle=col; ctx.lineWidth=lw; ctx.setLineDash([]);
+    if(d.type==='trend'||d.type==='ray'){
+      const e=_extendToRect(a,b,r,!!d.extL,d.type==='ray'||!!d.extR);
+      ctx.beginPath(); ctx.moveTo(e.p1[0],e.p1[1]); ctx.lineTo(e.p2[0],e.p2[1]); ctx.stroke();
+    } else if(d.type==='hline'){
+      ctx.beginPath(); ctx.moveTo(r.x,a[1]); ctx.lineTo(r.x+r.width,a[1]); ctx.stroke();
+    } else if(d.type==='vline'){
+      ctx.beginPath(); ctx.moveTo(a[0],r.y); ctx.lineTo(a[0],r.y+r.height); ctx.stroke();
+    } else if(d.type==='rect'){
+      const x=Math.min(a[0],b[0]), y=Math.min(a[1],b[1]), W=Math.abs(b[0]-a[0]), H=Math.abs(b[1]-a[1]);
+      ctx.globalAlpha=0.12; ctx.fillRect(x,y,W,H); ctx.globalAlpha=1; ctx.strokeRect(x,y,W,H);
+    } else if(d.type==='fib'){
+      const x1=Math.min(a[0],b[0]), x2=d.extR===false?Math.max(a[0],b[0]):r.x+r.width;
+      const lo=Math.min(d.p1.y,d.p2.y), hi=Math.max(d.p1.y,d.p2.y), up=d.p2.y>d.p1.y;   // drawn low→high = uptrend retracement
+      for(const lv of FIB_LEVELS){
+        const price = up ? hi-(hi-lo)*lv : lo+(hi-lo)*lv;
+        const q=dataToPx(d.p1.t,price); if(!q) continue;
+        ctx.globalAlpha=lv===0||lv===1?0.9:0.6; ctx.beginPath(); ctx.moveTo(x1,q[1]); ctx.lineTo(x2,q[1]); ctx.stroke(); ctx.globalAlpha=1;
+        _tag(ctx, x1+4, q[1]-7, `${lv} (${price.toFixed(2)})`, col, 'left');
+      }
+      ctx.setLineDash([3,3]); ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.stroke(); ctx.setLineDash([]);
     }
-    if(selected){
-      for(const p of [a,b]) g.push({type:'circle', z:61,
-        shape:{cx:p[0],cy:p[1],r:5},
-        style:{fill:'#0f131c',stroke:DRAW_SEL,lineWidth:2}});
-      // price tag on the second point — the number is the reason you drew it
-      g.push({type:'text', z:62, style:{
-        text:' '+(+d.y2).toFixed(2)+' ', x:b[0]+8, y:b[1]-7,
-        fill:'#0f131c', backgroundColor:DRAW_SEL, padding:[2,4], borderRadius:3,
-        font:'600 10px JetBrains Mono, monospace'}});
+    ctx.restore();
+    // labels (outside the clip so axis tags can sit on the axis strips)
+    if(d.type==='hline'){ _tag(ctx, r.x+r.width+2, a[1]-8, d.p1.y.toFixed(2), sel?DRAW_SEL:col,'left',true); }
+    if(d.type==='vline'){ _tag(ctx, a[0]-30, r.y+r.height+3, istHMS?istHMS(d.p1.t,false):String(d.p1.t), sel?DRAW_SEL:col,'left',true); }
+    if(d.type==='rect'&&(sel||hov||d===DRAW.live)){
+      const lo=Math.min(d.p1.y,d.p2.y), hi=Math.max(d.p1.y,d.p2.y), n=_barsBetween(d);
+      const cx=(a[0]+b[0])/2, cy=Math.min(a[1],b[1])-8;
+      _tag(ctx, cx-60, cy-8, `${lo.toFixed(2)} → ${hi.toFixed(2)}  ${((hi-lo)/lo*100).toFixed(2)}%${n!=null?`  ·  ${n} bars`:''}`, sel?DRAW_SEL:col,'left',true);
+    }
+    if((d.type==='trend'||d.type==='ray')&&(sel||hov||d===DRAW.live)){
+      const chg=(d.p2.y-d.p1.y)/d.p1.y*100, n=_barsBetween(d);
+      _tag(ctx, b[0]+8, b[1]-8, `${d.p2.y.toFixed(2)}  ${chg>=0?'+':''}${chg.toFixed(2)}%${n!=null?`  ·  ${n} bars`:''}`, sel?DRAW_SEL:col,'left',true);
+      if(sel) _tag(ctx, a[0]-8, a[1]-8, d.p1.y.toFixed(2), DRAW_SEL,'right',true);
+    }
+    if(sel && !d.locked){
+      for(const p of (d.type==='hline'||d.type==='vline')?[a]:[a,b]){ ctx.beginPath(); ctx.arc(p[0],p[1],5,0,Math.PI*2); ctx.fillStyle='#0f131c'; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle=DRAW_SEL; ctx.stroke(); }
+    }
+    if(sel && d.locked){ _tag(ctx, a[0]+8, a[1]+8, '🔒 locked', DRAW_SEL,'left',true); }
+  }
+  refreshDrawToolbar();
+}
+function _tag(ctx,x,y,text,col,align,solid){
+  ctx.save(); ctx.font='600 10px JetBrains Mono, ui-monospace, monospace';
+  const wd=ctx.measureText(text).width+8, X=align==='right'?x-wd:x;
+  ctx.fillStyle=solid?col:'rgba(15,19,28,0.85)'; ctx.globalAlpha=0.95; ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(X,y,wd,15,3) : ctx.rect(X,y,wd,15); ctx.fill();
+  ctx.fillStyle=solid?'#0f131c':col; ctx.globalAlpha=1; ctx.fillText(text,X+4,y+11); ctx.restore();
+}
+
+/* ---- hit-testing ---- */
+function hitTest(px,py){
+  const r=gridRect(); if(!r||DRAW.hidden) return null;
+  for(let i=DRAW.items.length-1;i>=0;i--){
+    const d=DRAW.items[i]; const a=dataToPx(d.p1.t,d.p1.y), b=dataToPx(d.p2.t,d.p2.y); if(!a||!b) continue;
+    if(!d.locked){
+      if(Math.hypot(px-a[0],py-a[1])<=HIT) return {d,handle:'p1'};
+      if((d.type!=='hline'&&d.type!=='vline') && Math.hypot(px-b[0],py-b[1])<=HIT) return {d,handle:'p2'};
+    }
+    if(d.type==='trend'||d.type==='ray'){ const e=_extendToRect(a,b,r,!!d.extL,d.type==='ray'||!!d.extR); if(distToSeg(px,py,e.p1[0],e.p1[1],e.p2[0],e.p2[1])<=HIT) return {d,handle:'move'}; }
+    else if(d.type==='hline'){ if(Math.abs(py-a[1])<=HIT) return {d,handle:'move'}; }
+    else if(d.type==='vline'){ if(Math.abs(px-a[0])<=HIT) return {d,handle:'move'}; }
+    else if(d.type==='rect'){
+      const x1=Math.min(a[0],b[0]),x2=Math.max(a[0],b[0]),y1=Math.min(a[1],b[1]),y2=Math.max(a[1],b[1]);
+      if(px>=x1-HIT&&px<=x2+HIT&&py>=y1-HIT&&py<=y2+HIT) return {d,handle:'move'};
+    } else if(d.type==='fib'){
+      const lo=Math.min(d.p1.y,d.p2.y), hi=Math.max(d.p1.y,d.p2.y), up=d.p2.y>d.p1.y, x1=Math.min(a[0],b[0]), x2=d.extR===false?Math.max(a[0],b[0]):r.x+r.width;
+      if(px>=x1-HIT&&px<=x2+HIT) for(const lv of FIB_LEVELS){ const q=dataToPx(d.p1.t, up?hi-(hi-lo)*lv:lo+(hi-lo)*lv); if(q&&Math.abs(py-q[1])<=HIT) return {d,handle:'move'}; }
     }
   }
-  chart.setOption({graphic:{elements:g, $action:'replace'}});
-  const del=document.getElementById('drawDelBtn');
-  if(del) del.style.opacity = DRAW.sel ? '1' : '0.45';
+  return null;
 }
-function selectDrawing(id){ DRAW.sel=id; paintDrawings(); }
+
+/* ---- style popover (double-click a shape) ---- */
+function openStylePopover(d,px,py){
+  closeStylePopover();
+  const host=document.getElementById('proChart'); const el=document.createElement('div'); _popEl=el; el.className='dpop';
+  el.style.left=Math.min(px+12, host.clientWidth-230)+'px'; el.style.top=Math.max(4,py-10)+'px';
+  const isLine=d.type==='trend'||d.type==='ray';
+  el.innerHTML=`<div class="dpop-row">${DRAW_COLORS.map(c=>`<span class="sw${d.color===c?' on':''}" style="background:${c}" data-c="${c}"></span>`).join('')}</div>
+    <div class="dpop-row">width ${[1,2,3].map(w=>`<button class="ind-chip${(d.width||1.5)===w?' on':''}" data-w="${w}">${w}</button>`).join('')}</div>
+    ${isLine?`<div class="dpop-row"><label><input type="checkbox" data-ext="L" ${d.extL?'checked':''}> extend left</label><label><input type="checkbox" data-ext="R" ${d.type==='ray'||d.extR?'checked':''} ${d.type==='ray'?'disabled':''}> extend right</label></div>`:''}
+    ${d.type==='fib'?`<div class="dpop-row"><label><input type="checkbox" data-ext="R" ${d.extR!==false?'checked':''}> extend right</label></div>`:''}
+    <div class="dpop-row"><button class="ind-chip${d.locked?' on':''}" data-lock>🔒 ${d.locked?'unlock':'lock'}</button><button class="ind-chip ctrl" data-del>🗑 delete</button><button class="ind-chip ctrl" data-close>✕</button></div>`;
+  host.appendChild(el);
+  el.addEventListener('pointerdown',e=>e.stopPropagation(),true);
+  el.addEventListener('click',e=>{
+    const t=e.target; const save=()=>{ saveDrawings(); paintDrawings(); };
+    if(t.dataset.c){ pushUndo(); d.color=t.dataset.c; save(); openStylePopover(d,px,py); }
+    else if(t.dataset.w){ pushUndo(); d.width=+t.dataset.w; save(); openStylePopover(d,px,py); }
+    else if(t.dataset.ext){ pushUndo(); if(t.dataset.ext==='L') d.extL=t.checked; else d.extR=t.checked; save(); }
+    else if(t.hasAttribute('data-lock')){ pushUndo(); d.locked=!d.locked; save(); openStylePopover(d,px,py); }
+    else if(t.hasAttribute('data-del')){ DRAW.sel=d.id; deleteSelectedDrawing(); }
+    else if(t.hasAttribute('data-close')){ closeStylePopover(); }
+  });
+}
+function closeStylePopover(){ if(_popEl){ _popEl.remove(); _popEl=null; } }
 
 /* ---- pointer handling ---- */
 (function attachDrawing(){
   const el=document.getElementById('proChart');
   const rel=e=>{ const r=el.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; };
-  const HIT=10;   // px
+  const newId=()=>'d'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 
-  function hitTest(px,py){
-    // topmost first, so a shape drawn later wins an overlap
-    for(let i=DRAW.items.length-1;i>=0;i--){
-      const d=DRAW.items[i];
-      const a=dataToPx(d.t1,d.y1), b=dataToPx(d.t2,d.y2);
-      if(!a||!b) continue;
-      if(Math.hypot(px-a[0],py-a[1])<=HIT) return {d,handle:'p1'};
-      if(Math.hypot(px-b[0],py-b[1])<=HIT) return {d,handle:'p2'};
-      if(d.type==='line'){
-        if(distToSeg(px,py,a[0],a[1],b[0],b[1])<=HIT) return {d,handle:'move'};
-      }else{
-        const x1=Math.min(a[0],b[0]),x2=Math.max(a[0],b[0]);
-        const y1=Math.min(a[1],b[1]),y2=Math.max(a[1],b[1]);
-        const onEdge=(px>=x1-HIT&&px<=x2+HIT&&py>=y1-HIT&&py<=y2+HIT) &&
-          (Math.abs(px-x1)<=HIT||Math.abs(px-x2)<=HIT||Math.abs(py-y1)<=HIT||Math.abs(py-y2)<=HIT);
-        if(onEdge) return {d,handle:'move'};
-      }
-    }
-    return null;
+  function finishLive(){
+    const d=DRAW.live; if(!d) return;
+    const a=dataToPx(d.p1.t,d.p1.y), b=dataToPx(d.p2.t,d.p2.y);
+    const two=TOOLS[d.type]&&TOOLS[d.type].two;
+    if(!two || (a&&b&&Math.hypot(b[0]-a[0],b[1]-a[1])>=4)){ pushUndo(); DRAW.items.push(d); DRAW.sel=d.id; saveDrawings(); }
+    DRAW.live=null; DRAW.placing=false; DRAW.drag=null; setDrawMode(null); paintDrawings();
   }
-  function distToSeg(px,py,x1,y1,x2,y2){
-    const dx=x2-x1, dy=y2-y1, L=dx*dx+dy*dy;
-    if(!L) return Math.hypot(px-x1,py-y1);
-    let t=((px-x1)*dx+(py-y1)*dy)/L; t=Math.max(0,Math.min(1,t));
-    return Math.hypot(px-(x1+t*dx), py-(y1+t*dy));
-  }
+
+  // Anything that starts on the style popover belongs to the popover. Without
+  // this, the container's capture-phase handler runs first, closes the popover,
+  // and the swatch you clicked is gone before its own handler can fire.
+  const onPop=e=>!!(e.target&&e.target.closest&&e.target.closest('.dpop'));
 
   el.addEventListener('pointerdown',(e)=>{
-    if(e.button!==0) return;
-    const [px,py]=rel(e);
+    if(e.button!==0||onPop(e)) return;
+    const [px,py]=rel(e); closeStylePopover();
     if(!inPlot(px,py)) return;
-
+    if(DRAW.placing && DRAW.live){                   // second click of click-move-click
+      const p=snapPoint(px,py); if(p){ DRAW.live.p2={t:p.t,y:p.y}; } finishLive(); e.preventDefault(); e.stopPropagation(); return;
+    }
     if(DRAW.mode){                                   // start a new shape
-      const p=pxToData(px,py); if(!p) return;
-      DRAW.live={id:'d'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),
-                 type:DRAW.mode, t1:p.t, y1:p.y, t2:p.t, y2:p.y};
-      DRAW.drag={id:DRAW.live.id, handle:'p2', creating:true};
-      el.setPointerCapture(e.pointerId);
-      e.preventDefault(); e.stopPropagation();
-      return;
+      const p=snapPoint(px,py); if(!p) return;
+      DRAW.live={id:newId(), type:DRAW.mode, p1:{t:p.t,y:p.y}, p2:{t:p.t,y:p.y}, color:DRAW_COLORS[0], width:1.5};
+      if(!TOOLS[DRAW.mode].two){ finishLive(); e.preventDefault(); e.stopPropagation(); return; }   // one-click tools
+      DRAW.drag={id:DRAW.live.id, handle:'p2', creating:true, sx:px, sy:py};
+      el.setPointerCapture(e.pointerId); e.preventDefault(); e.stopPropagation(); return;
     }
-    const h=hitTest(px,py);                           // grab an existing shape
+    const h=hitTest(px,py);                          // grab an existing shape
     if(h){
-      DRAW.sel=h.d.id;
-      const p=pxToData(px,py);
-      DRAW.drag={id:h.d.id, handle:h.handle, grab:p,
-                 orig:{t1:h.d.t1,y1:h.d.y1,t2:h.d.t2,y2:h.d.y2}};
-      el.setPointerCapture(e.pointerId);
-      paintDrawings();
-      e.preventDefault(); e.stopPropagation();
-    } else if(DRAW.sel){
-      DRAW.sel=null; paintDrawings();                 // click away = deselect
-    }
-  }, true);   // capture: run before the pan handler
-
-  el.addEventListener('pointermove',(e)=>{
-    const [px,py]=rel(e);
-    if(!DRAW.drag){
-      if(!DRAW.mode) el.style.cursor = hitTest(px,py) ? 'move' : '';
-      return;
-    }
-    const p=pxToData(px,py); if(!p) return;
-    const d=DRAW.live || DRAW.items.find(x=>x.id===DRAW.drag.id);
-    if(!d) return;
-    if(DRAW.drag.handle==='p1'){ d.t1=p.t; d.y1=p.y; }
-    else if(DRAW.drag.handle==='p2'){ d.t2=p.t; d.y2=p.y; }
-    else {                                            // move the whole shape
-      const o=DRAW.drag.orig, g=DRAW.drag.grab;
-      const dt=p.t-g.t, dy=p.y-g.y;
-      d.t1=o.t1+dt; d.y1=o.y1+dy; d.t2=o.t2+dt; d.y2=o.y2+dy;
-    }
-    paintDrawings();
-    e.preventDefault(); e.stopPropagation();
+      DRAW.sel=h.d.id; const p=pxToData(px,py);
+      if(!h.d.locked) DRAW.drag={id:h.d.id, handle:h.handle, grab:p, orig:{p1:{...h.d.p1},p2:{...h.d.p2}},
+                                 snap:JSON.stringify(DRAW.items), moved:false};   // pre-move snapshot for undo
+      el.setPointerCapture(e.pointerId); paintDrawings(); e.preventDefault(); e.stopPropagation();
+    } else if(DRAW.sel){ DRAW.sel=null; paintDrawings(); }
   }, true);
 
-  function finish(e){
-    if(!DRAW.drag) return;
-    if(DRAW.live){
-      const d=DRAW.live;
-      const a=dataToPx(d.t1,d.y1), b=dataToPx(d.t2,d.y2);
-      // a click without a drag is not a shape — drop it instead of leaving a dot
-      if(a&&b&&Math.hypot(b[0]-a[0],b[1]-a[1])>=6){
-        DRAW.items.push(d); DRAW.sel=d.id; saveDrawings();
-      }
-      DRAW.live=null;
-      setDrawMode(null);                              // one shape per arm
-    } else {
-      saveDrawings();
+  el.addEventListener('pointermove',(e)=>{
+    if(onPop(e)) return;
+    const [px,py]=rel(e);
+    if(DRAW.placing && DRAW.live){ const p=snapPoint(px,py); if(p){ DRAW.live.p2={t:p.t,y:p.y}; paintDrawings(); } return; }
+    if(!DRAW.drag){
+      if(!DRAW.mode){ const h=hitTest(px,py); const id=h?h.d.id:null; if(id!==DRAW.hover){ DRAW.hover=id; paintDrawings(); } el.style.cursor=h?(h.handle==='move'?'move':'pointer'):''; }
+      return;
     }
-    DRAW.drag=null;
-    paintDrawings();
+    const d=DRAW.live||DRAW.items.find(x=>x.id===DRAW.drag.id); if(!d) return;
+    if(DRAW.drag.handle==='p1'||DRAW.drag.handle==='p2'){ const p=snapPoint(px,py); if(p) d[DRAW.drag.handle]={t:p.t,y:p.y}; }
+    else { const p=pxToData(px,py), o=DRAW.drag.orig, g=DRAW.drag.grab; if(p&&g){ const dt=p.t-g.t, dy=p.y-g.y;
+      d.p1={t:o.p1.t+dt,y:o.p1.y+dy}; d.p2={t:o.p2.t+dt,y:o.p2.y+dy}; } }
+    DRAW.drag.moved=true;
+    paintDrawings(); e.preventDefault(); e.stopPropagation();
+  }, true);
+
+  function up(e){
+    if(!DRAW.drag) return;
+    if(DRAW.drag.creating && DRAW.live){
+      const [px,py]=rel(e);
+      if(Math.hypot(px-DRAW.drag.sx,py-DRAW.drag.sy)<4){ DRAW.placing=true; DRAW.drag=null; return; }   // it was a click → wait for the 2nd click
+      finishLive(); return;
+    }
+    if(!DRAW.drag.creating && DRAW.drag.moved){         // a real move: undo goes back to BEFORE it
+      DRAW.undo.push(DRAW.drag.snap); if(DRAW.undo.length>60) DRAW.undo.shift(); DRAW.redo=[]; saveDrawings();
+    }
+    DRAW.drag=null; paintDrawings();
   }
-  el.addEventListener('pointerup',finish,true);
-  el.addEventListener('pointercancel',finish,true);
+  el.addEventListener('pointerup',up,true); el.addEventListener('pointercancel',up,true);
+
+  el.addEventListener('dblclick',(e)=>{ if(onPop(e)) return; const [px,py]=rel(e); const h=hitTest(px,py); if(h){ DRAW.sel=h.d.id; paintDrawings(); openStylePopover(h.d,px,py); e.stopPropagation(); } },true);
 
   window.addEventListener('keydown',(e)=>{
-    const t=e.target.tagName;
-    if(t==='INPUT'||t==='SELECT'||t==='TEXTAREA') return;
-    if((e.key==='Delete'||e.key==='Backspace') && DRAW.sel){ e.preventDefault(); deleteSelectedDrawing(); }
-    if(e.key==='Escape'){ if(DRAW.mode) setDrawMode(null); else if(DRAW.sel){DRAW.sel=null;paintDrawings();} }
+    const t=e.target.tagName; if(t==='INPUT'||t==='SELECT'||t==='TEXTAREA') return;
+    if((e.key==='Delete'||e.key==='Backspace')&&DRAW.sel){ e.preventDefault(); deleteSelectedDrawing(); }
+    else if(e.key==='Escape'){ if(DRAW.live){ DRAW.live=null; DRAW.placing=false; DRAW.drag=null; paintDrawings(); } else if(DRAW.mode) setDrawMode(null); else if(DRAW.sel){ DRAW.sel=null; closeStylePopover(); paintDrawings(); } }
+    else if((e.ctrlKey||e.metaKey)&&!e.shiftKey&&e.key.toLowerCase()==='z'){ e.preventDefault(); undoDrawing(); }
+    else if((e.ctrlKey||e.metaKey)&&(e.key.toLowerCase()==='y'||(e.shiftKey&&e.key.toLowerCase()==='z'))){ e.preventDefault(); redoDrawing(); }
   });
 })();
 
-// Drawings are pinned to data, so every change of the view has to repaint them.
+// Repaint whenever the view changes. Painting our own canvas never triggers an
+// ECharts render, so listening to `finished` here is safe — and it is what makes
+// the drawings ride along with every pan/zoom frame.
 chart.on('dataZoom', paintDrawings);
 chart.on('finished', paintDrawings);
 window.addEventListener('resize', ()=>setTimeout(paintDrawings,60));
@@ -1220,7 +1362,7 @@ function toggleAutoRefresh(){
   }
 }
 
-function rebuildChart(){ chart.setOption(buildChartOption(),true); renderChart(true); }
+function rebuildChart(){ chart.setOption(buildChartOption(),true); renderChart(true); setTimeout(paintDrawings,50); }
 function resetZoom(){ lastZoom={start:0,end:100}; chart.dispatchAction({type:'dataZoom',dataZoomIndex:[0,1],start:0,end:100}); _resetYAuto(); }
 function toggleSidebar(){
   document.querySelector('.app').classList.toggle('nosidebar');
@@ -1996,6 +2138,7 @@ function renderChart(force){
       chart.dispatchAction({type:'dataZoom',dataZoomIndex:[0,1],start:0,end:100}); }
     document.getElementById('ptCount').textContent=candles.length.toLocaleString();
     updateReadout(candles.length-1);
+    paintDrawings();   // categories may have shifted (new candle) — re-project the drawings
   }, force?0:280);
 }
 

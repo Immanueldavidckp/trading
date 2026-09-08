@@ -355,6 +355,7 @@ _ALERT_LEVEL = {
     ("NO_ENTRY", "expired"): "low",
     ("NO_ENTRY", "ran_away"): "warn",
     ("NO_ENTRY", "superseded"): "low",
+    ("NO_ENTRY", "duplicate"): "low",
 }
 _ALERT_TITLE = {
     ("MONITOR", "approaching"): "Approaching entry",
@@ -365,6 +366,7 @@ _ALERT_TITLE = {
     ("NO_ENTRY", "expired"): "No entry — window expired",
     ("NO_ENTRY", "ran_away"): "No entry — missed, ran away",
     ("NO_ENTRY", "superseded"): "No entry — plan superseded",
+    ("NO_ENTRY", "duplicate"): "No entry — one position per stock",
 }
 
 
@@ -438,30 +440,87 @@ def evaluate(plan_date: Optional[str] = None, now: Optional[_dt.datetime] = None
                         f"FROM swing_monitor WHERE plan_date={PH}", [pd_])
             prior = {(r[0], r[1]): {"phase": r[2], "state": r[3], "reason": r[4], "fill_price": r[5],
                                     "fill_date": r[6], "history": r[7]} for r in cur.fetchall()}
+            present = set()          # (tsym, setup_name) pairs the plan still carries
             for plan in _plans_for(pd_):
                 setups = plan.get("setups") or []
                 if not setups:
                     continue
                 tsym = plan["tsym"]
+                for s in setups:
+                    present.add((tsym, s.get("name")))
                 daily = _daily_since(tsym, pdate)
                 live = _live_snapshot(tsym)
+                evaluated = []
                 for s in setups:
+                    # Long only. Retail cannot short delivery in India, and the swing
+                    # engine never emits anything else — this guard makes that a
+                    # guarantee of the monitor too, whatever a future setup does.
+                    if str(s.get("side") or "LONG").upper() != "LONG":
+                        continue
                     pr = prior.get((tsym, s.get("name")))
                     # a superseded plan whose setup already FILLED is still a live
                     # position — keep managing it; only unfilled ones get retired
                     sup = superseded and not (pr and pr.get("phase") == "ENTRY")
                     res = evaluate_setup(s, plan, pdate, pr, daily, live, now, sup)
+                    evaluated.append([s, pr, res])
+                _one_position_per_stock(evaluated, plan)
+                for s, pr, res in evaluated:
                     a = _record(cur, PH, pd_, tsym, res, pr)
                     if a:
                         alerts.append(a)
                     rows.append({"plan_date": pd_, "tsym": tsym, "sector": plan.get("sector"),
                                  "score": plan.get("score"), "conviction": plan.get("conviction"),
                                  **res})
+            # A plan rebuilt for the same date (Build next clicked twice) can drop
+            # a setup. Its monitor row would otherwise dangle in MONITOR forever —
+            # retire it. Filled positions are real and are left alone.
+            for (t, nm), pr in prior.items():
+                if (t, nm) in present or pr.get("phase") != "MONITOR":
+                    continue
+                res = {"setup_name": nm, "phase": "NO_ENTRY", "state": "superseded",
+                       "reason": "this setup is no longer in the plan after a rebuild",
+                       "changed": True}
+                a = _record(cur, PH, pd_, t, res, pr)
+                if a:
+                    alerts.append(a)
         conn.commit(); cur.close()
     finally:
         conn.close()
     return {"ok": True, "evaluated": len(rows), "alerts_raised": len(alerts),
             "alerts": alerts, "at": _now_iso(), "market_open": _market_open_now(now)}
+
+
+_QORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def _one_position_per_stock(evaluated: List[list], plan: Dict) -> None:
+    """A stock's setups are ALTERNATIVE entries — a breakout buy-stop above and a
+    zone limit below are two ways into the same trade, not two trades. The first
+    one to fill takes the position and cancels the others (OCO). Mutates `res`
+    in place.
+
+    Holder = the plan's primary setup if it filled, else the best quality, else
+    the earliest fill. Every other setup that is filled or still watching becomes
+    NO_ENTRY/duplicate. This also corrects rows recorded before the rule existed,
+    where two alternatives on one stock were both marked in_trade."""
+    holders = [x for x in evaluated if x[2].get("phase") == "ENTRY"]
+    if not holders:
+        return
+    prim = plan.get("primary")
+    holders.sort(key=lambda x: (0 if x[0].get("name") == prim else 1,
+                                _QORDER.get(x[0].get("quality"), 3),
+                                x[2].get("fill_date") or (x[1] or {}).get("fill_date") or "9999",
+                                x[0].get("name") or ""))
+    holder = holders[0]
+    h_name = holder[0].get("name")
+    h_fill = holder[2].get("fill_price") or (holder[1] or {}).get("fill_price")
+    for x in evaluated:
+        if x is holder or x[2].get("phase") == "NO_ENTRY":
+            continue
+        x[2] = {**x[2], "phase": "NO_ENTRY", "state": "duplicate", "changed": True,
+                "reason": (f"one position per stock — {h_name} holds it"
+                           + (f" (filled @ {h_fill})" if h_fill else "")
+                           + ". Alternative entries are one-cancels-other.")}
 
 
 def _open_dates(latest: str) -> List[str]:
@@ -484,7 +543,7 @@ def _open_dates(latest: str) -> List[str]:
 
 _PHASE_ORDER = {"ENTRY": 0, "MONITOR": 1, "NO_ENTRY": 2}
 _STATE_ORDER = {"at_entry": 0, "in_trade": 0, "approaching": 1, "watching": 2, "closed": 3,
-                "broken": 4, "ran_away": 5, "expired": 6, "superseded": 7}
+                "broken": 4, "ran_away": 5, "expired": 6, "superseded": 7, "duplicate": 8}
 
 
 def status(plan_date: Optional[str] = None, refresh: bool = True) -> Dict:
@@ -531,14 +590,42 @@ def status(plan_date: Optional[str] = None, refresh: bool = True) -> Dict:
             cur.execute(f"SELECT plan_date,tsym,score,conviction,plan_json FROM swing_plans "
                         f"WHERE plan_date IN ({marks})", dates)
             for pd_, t, sc, cv, pj in cur.fetchall():
-                sec = None
+                sec, setups, last_close, atr = None, {}, None, None
                 try:
-                    sec = json.loads(pj).get("sector")
+                    pl = json.loads(pj)
+                    sec = pl.get("sector"); last_close = pl.get("last_close")
+                    atr = (pl.get("profile") or {}).get("atr14")
+                    setups = {x.get("name"): x for x in (pl.get("setups") or [])}
                 except Exception:
                     pass
-                meta[(pd_, t)] = {"score": sc, "conviction": cv, "sector": sec}
+                meta[(pd_, t)] = {"score": sc, "conviction": cv, "sector": sec,
+                                  "last_close": last_close, "atr14": atr, "_setups": setups}
+        # The monitor row only carries a thin snapshot. The plan's full setup —
+        # targets, R:R, size, window, exit plan, valid/skip rules — is what a
+        # trader needs to act, so attach it by name.
         for r in rows:
-            r.update(meta.get((r["plan_date"], r["tsym"]), {}))
+            m = meta.get((r["plan_date"], r["tsym"]), {})
+            r.update({k: v for k, v in m.items() if not k.startswith("_")})
+            st = (m.get("_setups") or {}).get(r["setup_name"])
+            if st:
+                r["setup"] = st
+                # live distances to stop / T1 for a filled position, in % and R
+                fp, stop = r.get("fill_price"), st.get("stop")
+                t1 = (st.get("targets") or [None])[0]
+                # Outside market hours there is no LTP; the plan's last close is
+                # the honest stand-in. Say which one the numbers are based on.
+                lp = r.get("ltp"); basis = "ltp"
+                if not lp and m.get("last_close"):
+                    lp = m["last_close"]; basis = "last_close"
+                if lp and fp and stop:
+                    R = abs(fp - stop) or 1e-9
+                    r["px_basis"] = basis
+                    r["r_now"] = round((lp - fp) / R, 2)
+                    r["to_stop_pct"] = round((lp - stop) / lp * 100, 2)
+                    if t1:
+                        r["to_t1_pct"] = round((t1 - lp) / lp * 100, 2)
+                    if r.get("unrealized_pct") is None and r.get("phase") == "ENTRY":
+                        r["unrealized_pct"] = round((lp - fp) / fp * 100, 2)
         cur.execute("SELECT COUNT(*) FROM swing_alerts WHERE acked=0")
         unacked = cur.fetchone()[0]
         cur.close()
