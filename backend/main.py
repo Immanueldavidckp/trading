@@ -1164,6 +1164,80 @@ def swing_monitor_evaluate(date: Optional[str] = None):
     return swing_monitor.evaluate(plan_date=date)
 
 
+# ---------- Chart drawings (trendlines / zones / fibs) — synced per symbol ----------
+# The chart keeps drawings in localStorage for instant reload, and mirrors them
+# here so a line drawn on the desktop shows up on the phone. Last-writer-wins on
+# updated_at; the client only adopts the server copy when it is newer.
+
+def _ensure_drawings_table():
+    import db as _db
+    conn = _db.connect()
+    try:
+        cur = conn.cursor()
+        txt = "LONGTEXT" if _db.USE_MYSQL else "TEXT"
+        cur.execute(f"""CREATE TABLE IF NOT EXISTS chart_drawings (
+            tsym        VARCHAR(40) NOT NULL PRIMARY KEY,
+            items_json  {txt},
+            updated_at  BIGINT,
+            saved_at    VARCHAR(32)
+        )""")
+        conn.commit(); cur.close()
+    finally:
+        conn.close()
+
+
+@app.get("/api/drawings")
+def drawings_get(tsym: str):
+    """This symbol's saved drawings: {ok, tsym, items, updated_at}."""
+    import db as _db, json as _json
+    _ensure_drawings_table()
+    conn = _db.connect()
+    try:
+        cur = conn.cursor(); PH = _db.PLACE
+        cur.execute(f"SELECT items_json, updated_at FROM chart_drawings WHERE tsym={PH}", [tsym.upper()])
+        row = cur.fetchone(); cur.close()
+    finally:
+        conn.close()
+    if not row:
+        return {"ok": True, "tsym": tsym.upper(), "items": [], "updated_at": 0}
+    try:
+        items = _json.loads(row[0] or "[]")
+    except Exception:
+        items = []
+    return {"ok": True, "tsym": tsym.upper(), "items": items, "updated_at": row[1] or 0}
+
+
+@app.post("/api/drawings")
+async def drawings_put(tsym: str, request: Request):
+    """Replace this symbol's drawings. Body: {items:[...], updated_at: ms}.
+    An older updated_at than what is stored is refused (stale client)."""
+    import db as _db, json as _json, datetime as _d
+    _ensure_drawings_table()
+    body = await request.json()
+    items = body.get("items") if isinstance(body, dict) else None
+    upd = int((body or {}).get("updated_at") or 0)
+    if not isinstance(items, list) or len(_json.dumps(items)) > 400_000:
+        return {"ok": False, "error": "items must be a list (max ~400KB)"}
+    conn = _db.connect()
+    try:
+        cur = conn.cursor(); PH = _db.PLACE
+        cur.execute(f"SELECT updated_at FROM chart_drawings WHERE tsym={PH}", [tsym.upper()])
+        row = cur.fetchone()
+        if row and (row[0] or 0) > upd:
+            cur.close()
+            return {"ok": False, "error": "stale", "server_updated_at": row[0]}
+        cur.execute(
+            f"""INSERT INTO chart_drawings (tsym, items_json, updated_at, saved_at) VALUES ({PH},{PH},{PH},{PH})
+                ON DUPLICATE KEY UPDATE items_json=VALUES(items_json), updated_at=VALUES(updated_at), saved_at=VALUES(saved_at)"""
+            if _db.USE_MYSQL else
+            f"""INSERT OR REPLACE INTO chart_drawings (tsym, items_json, updated_at, saved_at) VALUES ({PH},{PH},{PH},{PH})""",
+            [tsym.upper(), _json.dumps(items), upd, _d.datetime.now().isoformat(timespec="seconds")])
+        conn.commit(); cur.close()
+    finally:
+        conn.close()
+    return {"ok": True, "tsym": tsym.upper(), "count": len(items), "updated_at": upd}
+
+
 # ---------- Sector classification (groups the 200-name universe on the plan page) ----------
 
 @app.get("/api/sectors/map")
