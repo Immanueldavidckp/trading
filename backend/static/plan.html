@@ -113,7 +113,10 @@
   .st.watching{color:var(--blue);background:var(--blue-bg)}
   .st.closed{color:var(--muted)}
   .st.broken,.st.ran_away{color:var(--red);background:var(--red-bg);border-color:rgba(255,93,108,.4)}
-  .st.expired,.st.superseded{color:var(--faint)}
+  .st.expired,.st.superseded,.st.duplicate{color:var(--faint)}
+  .alt{border:1px dashed var(--border);border-radius:8px;padding:8px 12px;margin-top:10px}
+  .alt-h{display:flex;gap:10px;align-items:center;font-size:12.5px}
+  .altn{font-family:var(--mono);font-size:10px;color:var(--faint);border:1px solid var(--border);border-radius:999px;padding:1px 7px;white-space:nowrap}
   .why{color:var(--muted);font-size:12px;margin-top:3px}
   .hist{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:4px}
   .arow{display:grid;grid-template-columns:150px 1fr;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border);font-size:12.5px}
@@ -646,11 +649,14 @@ function swingCard(p,i){
 // (and how close), filled (and how it is going), or dead (and exactly why).
 let _monT=null, _lastAlertId=0, _alertsSeen=false;
 const PHASE_LABEL={ENTRY:'ENTRY — filled, managing', MONITOR:'MONITOR — window open, watching', NO_ENTRY:'NO ENTRY — decided, do not chase'};
+// entry types are BUY orders; "STOP" alone reads like a sell-stop, so say BUY-STOP
+const entryLabel=t=>{const u=String(t||'').toUpperCase(); return u.startsWith('LIMIT')?'BUY-LIMIT':u.startsWith('STOP')?'BUY-STOP':(u||'');};
 const STATE_HELP={
   watching:'window open, price still above the zone', approaching:'within 0.75 ATR of the entry — get the order in',
   at_entry:'price is at the zone right now', in_trade:'filled — manage stop / T1 / trail', closed:'trade finished',
   broken:'zone was run through before a fill — too late, it is not support', expired:'window ended, price never came back',
-  ran_away:'window ended with price 2+ ATR higher — missed, not wrong', superseded:'a newer plan replaced this one'};
+  ran_away:'window ended with price 2+ ATR higher — missed, not wrong', superseded:'a newer plan replaced this one',
+  duplicate:'another entry on this stock already filled — one position per stock'};
 
 // Sections and rows both fold. Fold state lives in localStorage so the 30s
 // refresh never collapses what you opened. MONITOR comes first: at_entry and
@@ -673,9 +679,12 @@ async function renderMonitor(){
     const c=j.counts||{};
     bar.innerHTML=`Swing setup monitor · ${j.market_open?'<b style="color:var(--green)">● market open — live prices</b>':'<span class="q">○ market closed — last close</span>'}`
       +` · re-evaluates every minute on the server, this page refreshes every 30s · <span class="q">${(j.at||'').replace('T',' ').slice(0,19)}</span>`
+      +` · <b>long-only · one position per stock</b> <span class="q">— a stock's setups are alternative entries; the first to fill cancels the others</span>`
       +` · <span class="q">click a row to expand it · click a section title to fold it</span>`;
     const rows=j.rows||[];
     const nAct=rows.filter(r=>r.state==='at_entry').length, nApp=rows.filter(r=>r.state==='approaching').length;
+    const stockCount=ph=>new Set(rows.filter(r=>r.phase===ph).map(r=>r.plan_date+'|'+r.tsym)).size;
+    c.MONITOR=stockCount('MONITOR'); c.ENTRY=stockCount('ENTRY'); c.NO_ENTRY=stockCount('NO_ENTRY');
     tiles.innerHTML=[
       ['MONITOR',c.MONITOR||0,`${nAct} at entry · ${nApp} approaching`,nAct?'pos':''],
       ['ENTRY',c.ENTRY||0,'filled / in trade','pos'],
@@ -683,12 +692,24 @@ async function renderMonitor(){
       .map(([k,v,d,cl])=>`<div class="tile" style="cursor:pointer" onclick="jumpToPhase('${k}')" title="Jump to ${k.replace('_',' ')}"><div class="t">${k.replace('_',' ')}</div><div class="v ${cl}">${v}</div><div class="d">${d}</div></div>`).join('');
     const badge=$('monBadge'); badge.style.display=(nAct+nApp)?'':'none'; badge.textContent=nAct+nApp;
 
+    // One row per STOCK. Its setups are alternative entries into the same trade,
+    // so the stock sits in the phase of its lead setup (the position holder if
+    // any, else the most advanced watcher) and the rest nest inside as alternatives.
+    const PH_RANK={ENTRY:0,MONITOR:1,NO_ENTRY:2}, ST_RANK={in_trade:0,at_entry:0,approaching:1,watching:2,closed:3,broken:4,ran_away:5,expired:6,superseded:7,duplicate:8};
+    const byStock=new Map();
+    rows.forEach(r=>{const k=r.plan_date+'|'+r.tsym; if(!byStock.has(k)) byStock.set(k,[]); byStock.get(k).push(r);});
+    const stocks=[...byStock.values()].map(list=>{
+      list.sort((a,b)=>(PH_RANK[a.phase]-PH_RANK[b.phase])||((ST_RANK[a.state]??9)-(ST_RANK[b.state]??9)));
+      return {lead:list[0], alts:list.slice(1)};
+    });
     const groups={ENTRY:[],MONITOR:[],NO_ENTRY:[]};
-    rows.forEach(r=>(groups[r.phase]||groups.NO_ENTRY).push(r));
+    stocks.forEach(st=>(groups[st.lead.phase]||groups.NO_ENTRY).push(st));
+    Object.values(groups).forEach(g=>g.sort((a,b)=>((ST_RANK[a.lead.state]??9)-(ST_RANK[b.lead.state]??9))||((a.lead.dist_atr??99)-(b.lead.dist_atr??99))));
     box.innerHTML=MON_ORDER.map(ph=>{
-      const rs=groups[ph];
-      return `<div class="phase ${ph}${_monOpenSec[ph]?' open':''}"><div class="phase-h" onclick="toggleMonSec('${ph}')"><span class="arw">▸</span>${PHASE_LABEL[ph]}<span class="n">${rs.length} setup${rs.length===1?'':'s'}</span></div>
-        <div class="phase-b">${rs.length?rs.map(monRow).join(''):`<div class="empty" style="padding:18px">none</div>`}</div></div>`;
+      const g=groups[ph];
+      const nSet=g.reduce((n,st)=>n+1+st.alts.length,0);
+      return `<div class="phase ${ph}${_monOpenSec[ph]?' open':''}"><div class="phase-h" onclick="toggleMonSec('${ph}')"><span class="arw">▸</span>${PHASE_LABEL[ph]}<span class="n">${g.length} stock${g.length===1?'':'s'}${nSet!==g.length?` · ${nSet} setups`:''}</span></div>
+        <div class="phase-b">${g.length?g.map(st=>monRow(st.lead,st.alts)).join(''):`<div class="empty" style="padding:18px">none</div>`}</div></div>`;
     }).join('');
     await loadAlerts();
   }catch(e){ box.innerHTML='<div class="empty">could not load the monitor</div>'; }
@@ -697,7 +718,8 @@ async function renderMonitor(){
 // short setup label for the one-line header
 const shortName=n=>String(n||'').replace(/^Demand-zone limit entry — /,'zone: ').replace(/ \((S\d)\)$/,' $1').replace('Liquidity sweep reclaim','sweep reclaim').replace('52-week-high momentum breakout','52w breakout').replace('Volatility-compression breakout','compression').replace('Trend pullback resumption','pullback');
 
-function monRow(r){
+function monRow(r, alts){
+  alts=alts||[];
   const k=rowKey(r), open=_monOpenRows.has(k), S=r.setup||{}, z=r.zone||S.zone||{}, T=S.targets||r.targets||[];
   // header cells: live / distance / window depend on phase
   const live = r.ltp!=null ? `₹${fmt(r.ltp)}` : '—';
@@ -707,24 +729,33 @@ function monRow(r){
   const win  = r.phase==='MONITOR' ? (r.sessions_left!=null?`${r.sessions_left} left <span class="q">to ${r.entry_by||S.entry_by||'—'}</span>`:`<span class="q">to ${r.entry_by||S.entry_by||'—'}</span>`)
              : r.phase==='ENTRY'  ? `filled ${fmt(r.fill_price)} <span class="q">${r.fill_date||''}</span>${r.broke_zone?' <span style="color:var(--red)">zone broke</span>':''}`
              : `<span class="q">${(r.updated_at||'').replace('T',' ').slice(5,16)}</span>`;
-  const hist=(r.history||[]).map(h=>`${(h.at||'').slice(5,16).replace('T',' ')} ${h.state}${h.ltp!=null?' @'+fmt(h.ltp):''}`).join(' → ');
-  const ep=S.exit_plan||{};
-  const kv=(k,v,q)=>`<div><div class="k">${k}</div><div class="v">${v==null||v===''?'—':v}${q?` <span class="q">${q}</span>`:''}</div></div>`;
   return `<div class="mrow ${r.state}${open?' open':''}" data-k="${k}">
     <div class="mrow-h" onclick="toggleMonRow('${k.replace(/'/g,"\\'")}')">
       <div><div class="sym">${r.tsym}</div><div class="q">${r.sector||''}${r.score!=null?' · '+r.score:''}</div></div>
-      <div class="short" title="${(r.setup_name||'')}"><b>${shortName(r.setup_name)}</b> <span class="q">${r.entry_type||''} ${fmt(r.entry)} → T1 ${fmt(T[0])}</span></div>
+      <div class="short" title="${(r.setup_name||'')}"><b>${shortName(r.setup_name)}</b> <span class="q">${entryLabel(r.entry_type)} ${fmt(r.entry)} → T1 ${fmt(T[0])}</span>${alts.length?` <span class="altn">+${alts.length} alt entr${alts.length===1?'y':'ies'}</span>`:''}</div>
       <div><span class="st ${r.state}">${(r.state||'').replace('_',' ')}</span></div>
       <div class="mono">${live}</div>
       <div class="mono">${dist}<div style="font-size:11px">${win}</div></div>
       <div class="arw">▸</div>
     </div>
     <div class="mrow-b">
-      <div class="xp" style="margin-top:8px">${r.reason||''}</div>
+      ${monDetail(r)}
+      ${alts.map(a=>`<div class="alt"><div class="alt-h"><span class="altn">alternative entry</span><b>${shortName(a.setup_name)}</b><span class="st ${a.state}">${(a.state||'').replace('_',' ')}</span><span class="q">${entryLabel(a.entry_type)} ${fmt(a.entry)} → T1 ${fmt((a.targets||(a.setup||{}).targets||[])[0])}</span></div>${monDetail(a)}</div>`).join('')}
+      <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px">
+        <button class="dlbtn" onclick="event.stopPropagation();openChart('${r.tsym}')">📈 Chart</button></div>
+    </div>
+  </div>`;
+}
+function monDetail(r){
+  const S=r.setup||{}, z=r.zone||S.zone||{}, T=S.targets||r.targets||[];
+  const hist=(r.history||[]).map(h=>`${(h.at||'').slice(5,16).replace('T',' ')} ${h.state}${h.ltp!=null?' @'+fmt(h.ltp):''}`).join(' → ');
+  const ep=S.exit_plan||{};
+  const kv=(k,v,q)=>`<div><div class="k">${k}</div><div class="v">${v==null||v===''?'—':v}${q?` <span class="q">${q}</span>`:''}</div></div>`;
+  return `<div class="xp" style="margin-top:8px">${r.reason||''}</div>
       ${S.trigger?`<div class="xp"><b>Trigger:</b> ${S.trigger}</div>`:''}
       <h5>Levels</h5>
       <div class="kv">
-        ${kv('Entry ('+(r.entry_type||S.entry_type||'')+')',fmt(S.entry??r.entry), S.limit_price?'cap '+fmt(S.limit_price):'')}
+        ${kv('Entry ('+entryLabel(r.entry_type||S.entry_type)+')',fmt(S.entry??r.entry), S.limit_price?'cap '+fmt(S.limit_price):'')}
         ${kv('Stop',fmt(S.stop??r.stop), S.risk_per_share?fmt(S.risk_per_share)+'/sh risk':'')}
         ${kv('Target 1',fmt(T[0]), S.rr_t1?S.rr_t1+'R':'')}
         ${kv('Target 2',fmt(T[1]), S.rr_final?S.rr_final+'R':'')}
@@ -758,11 +789,7 @@ function monRow(r){
       ${(S.valid_when||S.skip_when)?`<h5>Rules</h5>
         ${S.valid_when?`<div class="xp" style="color:var(--green)">✓ ${S.valid_when}</div>`:''}
         ${S.skip_when?`<div class="xp" style="color:var(--red)">✗ ${S.skip_when}</div>`:''}`:''}
-      ${hist?`<h5>History</h5><div class="hist">${hist}</div>`:''}
-      <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px">
-        <button class="dlbtn" onclick="event.stopPropagation();openChart('${r.tsym}')">📈 Chart</button></div>
-    </div>
-  </div>`;
+      ${hist?`<h5>History</h5><div class="hist">${hist}</div>`:''}`;
 }
 async function loadAlerts(){
   const box=$('monAlerts');

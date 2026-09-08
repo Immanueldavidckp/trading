@@ -355,6 +355,7 @@ _ALERT_LEVEL = {
     ("NO_ENTRY", "expired"): "low",
     ("NO_ENTRY", "ran_away"): "warn",
     ("NO_ENTRY", "superseded"): "low",
+    ("NO_ENTRY", "duplicate"): "low",
 }
 _ALERT_TITLE = {
     ("MONITOR", "approaching"): "Approaching entry",
@@ -365,6 +366,7 @@ _ALERT_TITLE = {
     ("NO_ENTRY", "expired"): "No entry — window expired",
     ("NO_ENTRY", "ran_away"): "No entry — missed, ran away",
     ("NO_ENTRY", "superseded"): "No entry — plan superseded",
+    ("NO_ENTRY", "duplicate"): "No entry — one position per stock",
 }
 
 
@@ -448,12 +450,21 @@ def evaluate(plan_date: Optional[str] = None, now: Optional[_dt.datetime] = None
                     present.add((tsym, s.get("name")))
                 daily = _daily_since(tsym, pdate)
                 live = _live_snapshot(tsym)
+                evaluated = []
                 for s in setups:
+                    # Long only. Retail cannot short delivery in India, and the swing
+                    # engine never emits anything else — this guard makes that a
+                    # guarantee of the monitor too, whatever a future setup does.
+                    if str(s.get("side") or "LONG").upper() != "LONG":
+                        continue
                     pr = prior.get((tsym, s.get("name")))
                     # a superseded plan whose setup already FILLED is still a live
                     # position — keep managing it; only unfilled ones get retired
                     sup = superseded and not (pr and pr.get("phase") == "ENTRY")
                     res = evaluate_setup(s, plan, pdate, pr, daily, live, now, sup)
+                    evaluated.append([s, pr, res])
+                _one_position_per_stock(evaluated, plan)
+                for s, pr, res in evaluated:
                     a = _record(cur, PH, pd_, tsym, res, pr)
                     if a:
                         alerts.append(a)
@@ -479,6 +490,39 @@ def evaluate(plan_date: Optional[str] = None, now: Optional[_dt.datetime] = None
             "alerts": alerts, "at": _now_iso(), "market_open": _market_open_now(now)}
 
 
+_QORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def _one_position_per_stock(evaluated: List[list], plan: Dict) -> None:
+    """A stock's setups are ALTERNATIVE entries — a breakout buy-stop above and a
+    zone limit below are two ways into the same trade, not two trades. The first
+    one to fill takes the position and cancels the others (OCO). Mutates `res`
+    in place.
+
+    Holder = the plan's primary setup if it filled, else the best quality, else
+    the earliest fill. Every other setup that is filled or still watching becomes
+    NO_ENTRY/duplicate. This also corrects rows recorded before the rule existed,
+    where two alternatives on one stock were both marked in_trade."""
+    holders = [x for x in evaluated if x[2].get("phase") == "ENTRY"]
+    if not holders:
+        return
+    prim = plan.get("primary")
+    holders.sort(key=lambda x: (0 if x[0].get("name") == prim else 1,
+                                _QORDER.get(x[0].get("quality"), 3),
+                                x[2].get("fill_date") or (x[1] or {}).get("fill_date") or "9999",
+                                x[0].get("name") or ""))
+    holder = holders[0]
+    h_name = holder[0].get("name")
+    h_fill = holder[2].get("fill_price") or (holder[1] or {}).get("fill_price")
+    for x in evaluated:
+        if x is holder or x[2].get("phase") == "NO_ENTRY":
+            continue
+        x[2] = {**x[2], "phase": "NO_ENTRY", "state": "duplicate", "changed": True,
+                "reason": (f"one position per stock — {h_name} holds it"
+                           + (f" (filled @ {h_fill})" if h_fill else "")
+                           + ". Alternative entries are one-cancels-other.")}
+
+
 def _open_dates(latest: str) -> List[str]:
     """Plan dates that still have something to watch: the latest plan, plus any
     older date with a setup still in MONITOR or in an open ENTRY."""
@@ -499,7 +543,7 @@ def _open_dates(latest: str) -> List[str]:
 
 _PHASE_ORDER = {"ENTRY": 0, "MONITOR": 1, "NO_ENTRY": 2}
 _STATE_ORDER = {"at_entry": 0, "in_trade": 0, "approaching": 1, "watching": 2, "closed": 3,
-                "broken": 4, "ran_away": 5, "expired": 6, "superseded": 7}
+                "broken": 4, "ran_away": 5, "expired": 6, "superseded": 7, "duplicate": 8}
 
 
 def status(plan_date: Optional[str] = None, refresh: bool = True) -> Dict:
