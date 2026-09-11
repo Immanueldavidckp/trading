@@ -1580,7 +1580,22 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 if not os.path.exists(static_dir):
     os.makedirs(static_dir)
 
-app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+class _AppFiles(StaticFiles):
+    """The HTML/JS/CSS *is* the application, so a deploy has to be visible on the
+    next reload. Starlette sends only ETag/Last-Modified, and with no
+    Cache-Control a browser is free to reuse a cached page without asking the
+    server — which is how a shipped change can stay invisible for hours.
+    no-cache forces a revalidation; the ETag keeps it a cheap 304. Images and
+    fonts keep the default (they are content-addressed or rarely change)."""
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        if str(getattr(resp, "path", "")).endswith((".html", ".js", ".css")):
+            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
+
+app.mount("/", _AppFiles(directory=static_dir, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
