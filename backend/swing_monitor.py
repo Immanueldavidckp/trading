@@ -49,6 +49,7 @@ import trading_calendar as cal
 IST = cal.IST
 
 APPROACH_ATR = 0.75        # within this many ATR of the entry → "approaching"
+COMPLETED_KEEP_DAYS = 60   # finished trades stay on the board this long
 RUN_AWAY_ATR = 2.0         # closed this far ABOVE entry, window over → "ran away"
 TICK_SECONDS = 60
 MARKET_OPEN = _dt.time(9, 10)
@@ -217,23 +218,32 @@ def evaluate_setup(setup: Dict, plan: Dict, plan_date: _dt.date, prior: Optional
         lo_today = (live or {}).get("day_low"); hi_today = (live or {}).get("day_high")
         reason = f"in trade from {prior.get('fill_date')} @ {fill}"
         state = "in_trade"
-        # stop / target on completed bars after the fill date, then today's live bar
+        fill_date = prior.get("fill_date")
+        exit_by = setup.get("exit_by_date")
+        held = 0
+        # stop / target on completed bars after the fill date, then today's live bar.
+        # Every close carries the exit price so the COMPLETED board can show the
+        # realised result, not just a sentence.
         for b in daily:
             bdate = _dt.datetime.fromtimestamp(b["t"] / 1000, IST).date().isoformat()
-            if prior.get("fill_date") and bdate <= prior["fill_date"]:
+            if fill_date and bdate <= fill_date:
                 continue
+            held += 1
             if stop is not None and b["l"] <= stop:
-                return {**out, "phase": "ENTRY", "state": "closed", "fill_price": fill,
-                        "reason": f"stopped out @ {stop} on {bdate}", "changed": True}
+                return _close(out, fill, fill_date, stop, bdate, "stop", held, stop, tgts,
+                              f"stopped out @ {stop} on {bdate}")
             if tgts and b["h"] >= tgts[0]:
-                return {**out, "phase": "ENTRY", "state": "closed", "fill_price": fill,
-                        "reason": f"T1 {tgts[0]} reached on {bdate}", "changed": True}
+                return _close(out, fill, fill_date, tgts[0], bdate, "target", held, stop, tgts,
+                              f"T1 {tgts[0]} reached on {bdate}")
+            if exit_by and bdate >= exit_by:
+                return _close(out, fill, fill_date, b["c"], bdate, "time", held, stop, tgts,
+                              f"time stop — hard exit date {exit_by} reached, closed {b['c']} on {bdate}")
         if today_is_session and lo_today is not None and stop is not None and lo_today <= stop:
-            return {**out, "phase": "ENTRY", "state": "closed", "fill_price": fill,
-                    "reason": f"stop {stop} hit today (low {lo_today})", "changed": True}
+            return _close(out, fill, fill_date, stop, today.isoformat(), "stop", held + 1, stop, tgts,
+                          f"stop {stop} hit today (low {lo_today})")
         if today_is_session and hi_today is not None and tgts and hi_today >= tgts[0]:
-            return {**out, "phase": "ENTRY", "state": "closed", "fill_price": fill,
-                    "reason": f"T1 {tgts[0]} reached today (high {hi_today})", "changed": True}
+            return _close(out, fill, fill_date, tgts[0], today.isoformat(), "target", held + 1, stop, tgts,
+                          f"T1 {tgts[0]} reached today (high {hi_today})")
         unreal = ((px - fill) / fill * 100) if (px and fill) else None
         return {**out, "phase": "ENTRY", "state": state, "fill_price": fill,
                 "ltp": px, "unrealized_pct": round(unreal, 2) if unreal is not None else None,
@@ -254,12 +264,11 @@ def evaluate_setup(setup: Dict, plan: Dict, plan_date: _dt.date, prior: Optional
                 # a fill on a bar that also closed below the stop is a broken zone,
                 # but it IS a fill — the position exists and was stopped
                 if stop is not None and b["c"] < stop:
-                    return {**out, "phase": "ENTRY", "state": "closed", "fill_price": round(fp, 2),
-                            "fill_date": bdate, "broke_zone": True,
-                            "reason": f"filled @ {round(fp,2)} then closed below stop {stop} the same "
-                                      f"session ({bdate}) — zone broke. A resting limit cannot be "
-                                      "skipped through: this is a -1R loss, not a no-entry.",
-                            "changed": True}
+                    return {**_close(out, round(fp, 2), bdate, stop, bdate, "stop", 0, stop, tgts,
+                                     f"filled @ {round(fp,2)} then closed below stop {stop} the same "
+                                     f"session ({bdate}) — zone broke. A resting limit cannot be "
+                                     "skipped through: this is a -1R loss, not a no-entry."),
+                            "broke_zone": True}
                 return {**out, "phase": "ENTRY", "state": "in_trade", "fill_price": round(fp, 2),
                         "fill_date": bdate,
                         "reason": (f"LIMIT filled @ {round(fp,2)} on {bdate}" if _is_limit(setup)
@@ -344,6 +353,26 @@ def evaluate_setup(setup: Dict, plan: Dict, plan_date: _dt.date, prior: Optional
             "changed": False}
 
 
+def _close(out: Dict, fill, fill_date, exit_price, exit_date: str, kind: str, held: int,
+           stop, tgts, reason: str) -> Dict:
+    """A finished trade. kind ∈ target | stop | time. Realised result in % and R
+    (R = fill − stop) is computed here once so every board reads the same numbers."""
+    fill = float(fill) if fill is not None else None
+    xp = round(float(exit_price), 2) if exit_price is not None else None
+    realized_pct = round((xp - fill) / fill * 100, 2) if (xp is not None and fill) else None
+    risk = abs(fill - float(stop)) if (fill is not None and stop is not None) else None
+    realized_r = round((xp - fill) / risk, 2) if (realized_pct is not None and risk) else None
+    tail = ""
+    if realized_pct is not None:
+        tail = f" → {'+' if realized_pct >= 0 else ''}{realized_pct}%"
+        if realized_r is not None:
+            tail += f" ({'+' if realized_r >= 0 else ''}{realized_r}R)"
+    return {**out, "phase": "ENTRY", "state": "closed", "fill_price": fill, "fill_date": fill_date,
+            "exit_price": xp, "exit_date": exit_date, "exit_kind": kind, "held_sessions": held,
+            "realized_pct": realized_pct, "realized_r": realized_r,
+            "reason": reason + tail, "changed": True}
+
+
 # ── alerts ──────────────────────────────────────────────────────────────────
 
 _ALERT_LEVEL = {
@@ -361,13 +390,16 @@ _ALERT_TITLE = {
     ("MONITOR", "approaching"): "Approaching entry",
     ("MONITOR", "at_entry"): "AT ENTRY — act now",
     ("ENTRY", "in_trade"): "FILLED",
-    ("ENTRY", "closed"): "Trade closed",
+    ("ENTRY", "closed"): "Trade completed",
     ("NO_ENTRY", "broken"): "No entry — zone broken",
     ("NO_ENTRY", "expired"): "No entry — window expired",
     ("NO_ENTRY", "ran_away"): "No entry — missed, ran away",
     ("NO_ENTRY", "superseded"): "No entry — plan superseded",
     ("NO_ENTRY", "duplicate"): "No entry — one position per stock",
 }
+
+
+_EXIT_KEYS = ("exit_price", "exit_date", "exit_kind", "held_sessions", "realized_pct", "realized_r", "broke_zone")
 
 
 def _record(cur, PH, plan_date: str, tsym: str, res: Dict, prior: Optional[Dict]) -> Optional[Dict]:
@@ -396,9 +428,21 @@ def _record(cur, PH, plan_date: str, tsym: str, res: Dict, prior: Optional[Dict]
                     VALUES ({PH},{PH},{PH},{PH},{PH},{PH},{PH},{PH},{PH},0)""",
                 [alert["at"], plan_date, tsym, alert["setup_name"], alert["phase"], alert["state"],
                  alert["level"], alert["title"], alert["body"]])
+    # A finished trade is never re-evaluated, so its result lives only in the
+    # snapshot it was closed with. Carry those fields forward on every pass or
+    # the next refresh would blank the COMPLETED board.
+    if res["state"] == "closed" and res.get("exit_price") is None and prior and prior.get("snapshot"):
+        try:
+            ps = json.loads(prior["snapshot"] or "{}")
+            for k in _EXIT_KEYS:
+                if res.get(k) is None and ps.get(k) is not None:
+                    res[k] = ps[k]
+        except Exception:
+            pass
     snap = {k: res.get(k) for k in ("ltp", "dist_pct", "dist_atr", "sessions_left", "unrealized_pct",
                                     "entry", "stop", "targets", "entry_type", "zone", "entry_by", "exit_by",
-                                    "broke_zone")}
+                                    "broke_zone", "exit_price", "exit_date", "exit_kind",
+                                    "held_sessions", "realized_pct", "realized_r")}
     fill_price = res.get("fill_price", (prior or {}).get("fill_price"))
     fill_date = res.get("fill_date", (prior or {}).get("fill_date"))
     cur.execute(
@@ -436,10 +480,10 @@ def evaluate(plan_date: Optional[str] = None, now: Optional[_dt.datetime] = None
         for pd_ in dates:
             pdate = _dt.date.fromisoformat(pd_)
             superseded = pd_ < latest
-            cur.execute(f"SELECT tsym,setup_name,phase,state,reason,fill_price,fill_date,history "
+            cur.execute(f"SELECT tsym,setup_name,phase,state,reason,fill_price,fill_date,history,snapshot "
                         f"FROM swing_monitor WHERE plan_date={PH}", [pd_])
             prior = {(r[0], r[1]): {"phase": r[2], "state": r[3], "reason": r[4], "fill_price": r[5],
-                                    "fill_date": r[6], "history": r[7]} for r in cur.fetchall()}
+                                    "fill_date": r[6], "history": r[7], "snapshot": r[8]} for r in cur.fetchall()}
             present = set()          # (tsym, setup_name) pairs the plan still carries
             for plan in _plans_for(pd_):
                 setups = plan.get("setups") or []
@@ -541,7 +585,7 @@ def _open_dates(latest: str) -> List[str]:
 
 # ── read API ────────────────────────────────────────────────────────────────
 
-_PHASE_ORDER = {"ENTRY": 0, "MONITOR": 1, "NO_ENTRY": 2}
+_PHASE_ORDER = {"ENTRY": 0, "MONITOR": 1, "COMPLETED": 2, "NO_ENTRY": 3}
 _STATE_ORDER = {"at_entry": 0, "in_trade": 0, "approaching": 1, "watching": 2, "closed": 3,
                 "broken": 4, "ran_away": 5, "expired": 6, "superseded": 7, "duplicate": 8}
 
@@ -562,10 +606,13 @@ def status(plan_date: Optional[str] = None, refresh: bool = True) -> Dict:
                                    snapshot,history,updated_at FROM swing_monitor WHERE plan_date={PH}""",
                         [plan_date])
         else:
-            cur.execute("""SELECT plan_date,tsym,setup_name,phase,state,reason,fill_price,fill_date,
-                                  snapshot,history,updated_at FROM swing_monitor
-                           WHERE plan_date >= (SELECT MAX(plan_date) FROM swing_plans)
-                              OR phase='MONITOR' OR (phase='ENTRY' AND state='in_trade')""")
+            keep_from = (_dt.datetime.now(IST).date() - _dt.timedelta(days=COMPLETED_KEEP_DAYS)).isoformat()
+            cur.execute(f"""SELECT plan_date,tsym,setup_name,phase,state,reason,fill_price,fill_date,
+                                   snapshot,history,updated_at FROM swing_monitor
+                            WHERE plan_date >= (SELECT MAX(plan_date) FROM swing_plans)
+                               OR phase='MONITOR' OR (phase='ENTRY' AND state='in_trade')
+                               OR (phase='ENTRY' AND state='closed' AND updated_at >= {PH})""",
+                        [keep_from])
         rows = []
         for r in cur.fetchall():
             snap = {}
@@ -631,14 +678,75 @@ def status(plan_date: Optional[str] = None, refresh: bool = True) -> Dict:
         cur.close()
     finally:
         conn.close()
+    # A closed trade is not "in ENTRY" any more: it is done. The board shows it
+    # under COMPLETED with the realised result. (Stored as ENTRY/closed — the
+    # state machine and the alert tables are unchanged; this is presentation.)
+    for x in rows:
+        if x["phase"] == "ENTRY" and x["state"] == "closed":
+            _backfill_exit(x)
+            x["phase"] = "COMPLETED"
+    rows.sort(key=lambda x: x.get("exit_date") or "", reverse=True)     # newest exit first…
     rows.sort(key=lambda x: (_PHASE_ORDER.get(x["phase"], 9), _STATE_ORDER.get(x["state"], 9),
-                             x.get("dist_atr") if x.get("dist_atr") is not None else 99))
-    counts = {"ENTRY": 0, "MONITOR": 0, "NO_ENTRY": 0}
+                             x.get("dist_atr") if x.get("dist_atr") is not None else 99))  # …within phase/state
+    counts = {"ENTRY": 0, "MONITOR": 0, "COMPLETED": 0, "NO_ENTRY": 0}
     for x in rows:
         counts[x["phase"]] = counts.get(x["phase"], 0) + 1
     return {"ok": True, "at": _now_iso(), "market_open": _market_open_now(),
             "counts": counts, "unacked_alerts": unacked, "rows": rows,
-            "rules": {"approach_atr": APPROACH_ATR, "run_away_atr": RUN_AWAY_ATR}}
+            "completed": _completed_summary([x for x in rows if x["phase"] == "COMPLETED"]),
+            "rules": {"approach_atr": APPROACH_ATR, "run_away_atr": RUN_AWAY_ATR,
+                      "completed_keep_days": COMPLETED_KEEP_DAYS}}
+
+
+def _backfill_exit(x: Dict) -> None:
+    """Rows closed before exit fields existed only have a sentence. Read the
+    exit off the setup: 'T1 … reached' → target, 'stop' → stop, so the
+    COMPLETED board can still show a result for them."""
+    if x.get("exit_price") is not None:
+        return
+    st = x.get("setup") or {}
+    fill, stop = x.get("fill_price"), x.get("stop") if x.get("stop") is not None else st.get("stop")
+    t1 = (x.get("targets") or st.get("targets") or [None])[0]
+    reason = (x.get("reason") or "").lower()
+    kind, xp = None, None
+    if "t1" in reason and "reached" in reason and t1 is not None:
+        kind, xp = "target", t1
+    elif "time stop" in reason or "hard exit" in reason:
+        kind, xp = "time", x.get("ltp") or x.get("last_close")
+    elif "stop" in reason and stop is not None:
+        kind, xp = "stop", stop
+    if kind is None:
+        return
+    x["exit_kind"] = kind
+    x["exit_price"] = round(float(xp), 2) if xp is not None else None
+    # the exit date is the last state change to closed
+    for h in reversed(x.get("history") or []):
+        if h.get("state") == "closed":
+            x["exit_date"] = (h.get("at") or "")[:10]
+            break
+    if x.get("exit_date") is None:
+        x["exit_date"] = (x.get("updated_at") or "")[:10]
+    if fill and x["exit_price"] is not None:
+        x["realized_pct"] = round((x["exit_price"] - fill) / fill * 100, 2)
+        if stop is not None and abs(fill - stop) > 0:
+            x["realized_r"] = round((x["exit_price"] - fill) / abs(fill - stop), 2)
+
+
+def _completed_summary(rows) -> Dict:
+    """Wins / losses / net for the COMPLETED tile."""
+    res = [r.get("realized_pct") for r in rows if r.get("realized_pct") is not None]
+    rr = [r.get("realized_r") for r in rows if r.get("realized_r") is not None]
+    wins = sum(1 for v in res if v > 0); losses = sum(1 for v in res if v <= 0)
+    by_kind = {}
+    for r in rows:
+        by_kind[r.get("exit_kind") or "other"] = by_kind.get(r.get("exit_kind") or "other", 0) + 1
+    return {"n": len(rows), "wins": wins, "losses": losses,
+            "hit_rate": round(wins / len(res) * 100, 1) if res else None,
+            "net_pct": round(sum(res), 2) if res else None,
+            "avg_pct": round(sum(res) / len(res), 2) if res else None,
+            "net_r": round(sum(rr), 2) if rr else None,
+            "avg_r": round(sum(rr) / len(rr), 2) if rr else None,
+            "by_kind": by_kind}
 
 
 def alerts(since_id: int = 0, limit: int = 50, unacked_only: bool = False) -> Dict:

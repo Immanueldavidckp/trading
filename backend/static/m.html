@@ -2231,9 +2231,11 @@ async function loadLive(){
 }
 /* Swing monitor — each setup's phase: MONITOR (window open) / ENTRY (filled) /
    NO ENTRY (decided). Same data as the desktop Monitor tab. */
-const M_PH={ENTRY:['g','ENTRY — filled'],MONITOR:['b','MONITOR — watching'],NO_ENTRY:['n','NO ENTRY']};
+const M_PH={ENTRY:['g','ENTRY — filled'],MONITOR:['b','MONITOR — watching'],COMPLETED:['p','COMPLETED — closed'],NO_ENTRY:['n','NO ENTRY']};
+const M_EXIT={target:['g','target hit'],stop:['r','stopped out'],time:['y','time exit']};
+const mSt=r=>r.state==='closed'?(M_EXIT[r.exit_kind]||['n','closed']):[M_ST[r.state]||'n',(r.state||'').replace('_',' ')];
 const M_ST={at_entry:'g',in_trade:'g',approaching:'y',watching:'b',closed:'n',broken:'r',ran_away:'r',expired:'n',superseded:'n',duplicate:'n'};
-const M_PHR={ENTRY:0,MONITOR:1,NO_ENTRY:2}, M_STR={in_trade:0,at_entry:0,approaching:1,watching:2,closed:3,broken:4,ran_away:5,expired:6,superseded:7,duplicate:8};
+const M_PHR={ENTRY:0,MONITOR:1,COMPLETED:2,NO_ENTRY:3}, M_STR={in_trade:0,at_entry:0,approaching:1,watching:2,closed:3,broken:4,ran_away:5,expired:6,superseded:7,duplicate:8};
 const mEntry=t=>{const u=String(t||'').toUpperCase(); return u.startsWith('LIMIT')?'BUY-LIMIT':u.startsWith('STOP')?'BUY-STOP':(u||'');};
 async function loadSwingMonitor(){
   try{
@@ -2243,11 +2245,13 @@ async function loadSwingMonitor(){
     // one card per STOCK: its setups are alternative entries (first fill cancels the rest)
     const byS=new Map(); (j.rows||[]).forEach(r=>{const k=r.plan_date+'|'+r.tsym; if(!byS.has(k)) byS.set(k,[]); byS.get(k).push(r);});
     const stocks=[...byS.values()].map(l=>{l.sort((a,b)=>(M_PHR[a.phase]-M_PHR[b.phase])||((M_STR[a.state]??9)-(M_STR[b.state]??9))); return {lead:l[0],alts:l.slice(1)};});
-    const g={ENTRY:[],MONITOR:[],NO_ENTRY:[]}; stocks.forEach(st=>(g[st.lead.phase]||g.NO_ENTRY).push(st));
+    const g={ENTRY:[],MONITOR:[],COMPLETED:[],NO_ENTRY:[]}; stocks.forEach(st=>(g[st.lead.phase]||g.NO_ENTRY).push(st));
     Object.values(g).forEach(a=>a.sort((x,y)=>((M_STR[x.lead.state]??9)-(M_STR[y.lead.state]??9))));
+    g.COMPLETED.sort((x,y)=>String(y.lead.exit_date||'').localeCompare(String(x.lead.exit_date||'')));
+    const cs=j.completed||{};
     $('#lpmHd').innerHTML=`Swing monitor · ${j.market_open?'<span class="g">● live</span>':'<span class="d">○ closed</span>'} · `
-      +`<span class="g">${g.ENTRY.length} entry</span> · <span class="b">${g.MONITOR.length} watching</span> · <span class="d">${g.NO_ENTRY.length} no entry</span> · long-only · 1 position/stock · ${ist(Date.now())}`;
-    $('#lpmList').innerHTML=['MONITOR','ENTRY','NO_ENTRY'].map(ph=>{
+      +`<span class="g">${g.ENTRY.length} entry</span> · <span class="b">${g.MONITOR.length} watching</span> · <span style="color:var(--purple)">${g.COMPLETED.length} done${cs.n?` (${cs.wins||0}W/${cs.losses||0}L${cs.net_pct!=null?' '+pct(cs.net_pct):''})`:''}</span> · <span class="d">${g.NO_ENTRY.length} no entry</span> · long-only · 1 position/stock · ${ist(Date.now())}`;
+    $('#lpmList').innerHTML=['MONITOR','ENTRY','COMPLETED','NO_ENTRY'].map(ph=>{
       const rows=g[ph].map(st=>({...st.lead,_alts:st.alts})); if(!rows.length) return '';
       return `<div class="hint" style="margin:10px 0 6px;font-weight:700"><span class="pill ${M_PH[ph][0]}">${M_PH[ph][1]}</span> <span class="d">${rows.length}</span></div>`
         + rows.map(r=>{
@@ -2255,12 +2259,13 @@ async function loadSwingMonitor(){
           const k=`${r.plan_date}|${r.tsym}|${r.setup_name}`, open=_mOpen.has(k);
           const line = r.phase==='MONITOR' ? `${nf(r.dist_pct,2)}% · ${nf(r.dist_atr,2)} ATR above entry${r.sessions_left!=null?` · ${r.sessions_left} left`:''}`
                      : r.phase==='ENTRY'  ? `filled ${nf(r.fill_price)}${r.unrealized_pct!=null?` · <b class="${cls(r.unrealized_pct)}">${pct(r.unrealized_pct)}</b>`:''}${r.r_now!=null?` (${r.r_now>=0?'+':''}${r.r_now}R)`:''}${r.broke_zone?' · <span class="r">zone broke</span>':''}`
+                     : r.phase==='COMPLETED' ? `${nf(r.fill_price)} → ${nf(r.exit_price)}${r.realized_pct!=null?` · <b class="${cls(r.realized_pct)}">${pct(r.realized_pct)}</b>`:''}${r.realized_r!=null?` (${r.realized_r>=0?'+':''}${r.realized_r}R)`:''}${r.exit_date?` · ${r.exit_date.slice(5)}`:''}${r.held_sessions!=null?` · ${r.held_sessions} sess`:''}`
                      : '';
           const kv=(a,b)=>b==null||b===''?'':`<div class="tile"><span>${a}</span><b class="mono">${b}</b></div>`;
           return `<div class="lpm${(r.state==='at_entry'||r.state==='in_trade')?' prio':''}" data-k="${esc(k)}">
             <div onclick="mToggle('${esc(k)}')">
               <div class="between"><span style="font-weight:700">${esc(r.tsym)} <span class="d" style="font-weight:400;font-size:var(--fs-micro)">${esc(r.sector||'')}</span></span>
-                <span><span class="mono">${r.ltp!=null?rs(r.ltp):'—'}</span> <span class="pill ${M_ST[r.state]||'n'}">${esc((r.state||'').replace('_',' '))}</span> <span class="d">${open?'▾':'▸'}</span></span></div>
+                <span><span class="mono">${r.ltp!=null?rs(r.ltp):'—'}</span> <span class="pill ${mSt(r)[0]}">${esc(mSt(r)[1])}</span> <span class="d">${open?'▾':'▸'}</span></span></div>
               <div class="hint" style="margin-top:4px">${esc(r.setup_name||'')} · ${mEntry(r.entry_type)} ${nf(r.entry)} → T1 ${nf(T[0])}${(r._alts||[]).length?` · <span class="pill n">+${r._alts.length} alt</span>`:''}</div>
               ${line?`<div class="hint mono" style="margin-top:3px">${line}</div>`:''}
             </div>
@@ -2274,6 +2279,7 @@ async function loadSwingMonitor(){
                 ${z.top?kv('Zone',nf(z.bottom)+'–'+nf(z.top)):''}
                 ${kv('Window',(S.entry_window_sessions||r.window_sessions)+' sessions → '+(S.entry_by||r.entry_by||'—'))}
                 ${kv('Hard exit by',S.exit_by_date||r.exit_by)}
+                ${r.state==='closed'?kv('Exit',nf(r.exit_price)+(r.exit_date?' · '+r.exit_date:''))+kv('Result',r.realized_pct!=null?pct(r.realized_pct)+(r.realized_r!=null?' · '+(r.realized_r>=0?'+':'')+r.realized_r+'R':''):null)+kv('Held',r.held_sessions!=null?r.held_sessions+' sessions':null)+(S.shares_for_risk!=null&&r.fill_price&&r.exit_price?kv('P&L @ plan size','₹'+nf((r.exit_price-r.fill_price)*S.shares_for_risk,0)):''):''}
                 ${r.phase==='ENTRY'&&r.to_stop_pct!=null?kv('Room to stop'+(r.px_basis==='last_close'?' (vs close)':''),nf(r.to_stop_pct,2)+'%'):''}
                 ${r.phase==='ENTRY'&&r.to_t1_pct!=null?kv('To T1'+(r.px_basis==='last_close'?' (vs close)':''),nf(r.to_t1_pct,2)+'%'):''}
               </div>
@@ -2284,7 +2290,7 @@ async function loadSwingMonitor(){
               ${S.skip_when?`<div class="hint r">✗ ${esc(S.skip_when)}</div>`:''}
               ${(r.history||[]).length?`<div class="hint mono d" style="margin-top:6px">${r.history.map(h=>(h.at||'').slice(5,16).replace('T',' ')+' '+h.state).join(' → ')}</div>`:''}
               ${(r._alts||[]).map(a=>{const AS=a.setup||{}, AT=AS.targets||a.targets||[]; return `<div style="margin-top:10px;border:1px dashed var(--border);border-radius:8px;padding:8px">
-                <div class="between"><span class="hint"><span class="pill n">alternative</span> ${esc(a.setup_name||'')}</span><span class="pill ${M_ST[a.state]||'n'}">${esc((a.state||'').replace('_',' '))}</span></div>
+                <div class="between"><span class="hint"><span class="pill n">alternative</span> ${esc(a.setup_name||'')}</span><span class="pill ${mSt(a)[0]}">${esc(mSt(a)[1])}</span></div>
                 <div class="hint mono" style="margin-top:4px">${mEntry(a.entry_type)} ${nf(AS.entry??a.entry)} · stop ${nf(AS.stop??a.stop)} · T1 ${nf(AT[0])}${AT[1]!=null?' · T2 '+nf(AT[1]):''}</div>
                 <div class="hint" style="margin-top:3px">${esc(a.reason||'')}</div></div>`;}).join('')}
               <button class="chip sm" style="margin-top:8px" onclick="openChart('${esc(r.tsym)}')">📈 Chart</button>
