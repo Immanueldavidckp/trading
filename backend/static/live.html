@@ -88,7 +88,17 @@
   .conn.on{color:var(--green)}
   .btn{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 11px;font-size:11.5px;cursor:pointer;font-family:inherit;font-weight:500;transition:.15s}
   /* account menu */
+  /* the topbar is space-between, so a lone button drifts away from the toggle;
+     these two belong together as one unit */
+  .topleft{display:flex;align-items:center;gap:7px;flex:0 0 auto}
   .acct{position:relative}
+  .acct-btn{color:var(--text-2)}
+  .acct-btn:hover{color:var(--red);border-color:rgba(255,86,119,.5)}
+  .acct-btn svg{display:block}
+  /* the id stays in the accessibility tree (and the tooltip) without taking
+     header width, which is tight once the order buttons are in */
+  .sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+      clip:rect(0 0 0 0);white-space:nowrap;border:0}
   .acct-menu{position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:215px;background:var(--panel);
     border:1px solid var(--border-bright);border-radius:10px;padding:11px;box-shadow:0 14px 34px rgba(0,0,0,.5)}
   .acct-menu .who{font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em}
@@ -207,7 +217,23 @@
   <!-- MAIN -->
   <main class="main">
     <div class="topbar">
+      <div class="topleft">
       <button class="side-toggle" id="sideToggle" onclick="toggleSidebar()" title="Hide / show watchlist">☰</button>
+      <div class="acct">
+        <button class="side-toggle acct-btn" id="acctBtn" onclick="acctToggle(event)" title="Account — sign out" aria-label="Account">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+          </svg><span class="sr" id="acctWho">account</span>
+        </button>
+        <div class="acct-menu" id="acctMenu" hidden onclick="event.stopPropagation()">
+          <div class="who">signed in as</div>
+          <div class="whoid" id="acctId">—</div>
+          <div class="whorole" id="acctRole"></div>
+          <button class="acct-out" id="acctOut" onclick="doLogout()">Sign out</button>
+        </div>
+      </div>
+      </div>
       <div class="crumb"><h1 id="hdrSym">—</h1><span class="sub" id="hdrName"></span></div>
       <div class="mode-switch" id="modeSwitch">
         <button class="mode-btn active" data-mode="normal" onclick="setMode('normal')">Normal</button>
@@ -221,15 +247,6 @@
       <div class="ctrls">
         <div class="conn" id="conn"><span class="conn-dot"></span><span id="connText">connecting…</span></div>
         <button class="btn" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
-        <div class="acct">
-          <button class="btn" id="acctBtn" onclick="acctToggle(event)" title="Account">👤 <span id="acctWho">…</span> ▾</button>
-          <div class="acct-menu" id="acctMenu" hidden onclick="event.stopPropagation()">
-            <div class="who">signed in as</div>
-            <div class="whoid" id="acctId">—</div>
-            <div class="whorole" id="acctRole"></div>
-            <button class="acct-out" id="acctOut" onclick="doLogout()">Sign out</button>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -2926,6 +2943,8 @@ async function acctLoad(){
     if(!j || !j.ok) return;
     const w=document.getElementById('acctWho'), i=document.getElementById('acctId'), o=document.getElementById('acctRole');
     if(w) w.textContent=_acctShort(j.id);
+    const b=document.getElementById('acctBtn');
+    if(b && j.id) b.title='Signed in as '+j.id+' — sign out';
     if(i) i.textContent=j.id||'—';
     if(o) o.textContent=String(j.role||'').replace(/_/g,' ');
   }catch(e){}
