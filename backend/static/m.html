@@ -105,6 +105,9 @@ header#hdr{
 #hPrice{text-align:right;flex:0 0 auto;line-height:1.15}
 #hLtp{font-weight:700;font-size:15px}
 #hChg{font-size:var(--fs-xs);font-weight:600}
+#acctBtn{flex:0 0 auto;width:30px;height:30px;border-radius:50%;background:var(--panel-2);
+  border:1px solid var(--border);color:var(--text-2);font-weight:700;font-size:12px;display:grid;place-items:center}
+#acctBtn:active{background:var(--panel);color:var(--text)}
 #connDot{width:8px;height:8px;border-radius:50%;background:var(--text-3);flex:0 0 auto;transition:background .3s}
 #connDot.live{background:var(--green);box-shadow:0 0 8px rgba(0,214,143,.7)}
 #connDot.closed{background:var(--yellow)}
@@ -371,6 +374,7 @@ canvas.cv{width:100%;display:block;border-radius:var(--r-sm);touch-action:pan-y}
       <div id="hLtp" class="mono">—</div>
       <div id="hChg" class="mono d">—</div>
     </div>
+    <button id="acctBtn" aria-label="Account"><span id="acctInitial">·</span></button>
   </header>
 
   <div id="views">
@@ -556,6 +560,8 @@ function sheet(title,html,onOpen){
 }
 function sheetClose(){ $('#sh').classList.remove('on'); $('#shBd').classList.remove('on'); }
 $('#shX').onclick = sheetClose;
+$('#acctBtn').onclick = acctSheet;
+acctInit();
 $('#shBd').onclick = sheetClose;
 
 /* ── header ─────────────────────────────────────────────────────────────── */
@@ -656,7 +662,34 @@ async function loadFeed(){
 async function d30start(){ await api('/api/upstox/depth30/start'); loadFeed(); }
 async function instRefresh(){ msg('refreshing instruments…'); const r=await api('/api/instruments/refresh'); msg(r.ok?`✓ ${r.instruments} instruments`:'refresh failed'); }
 async function upstoxLogin(){ const r=await api('/api/upstox/login_url?redirect=0'); if(r.login_url) location.href=r.login_url; }
-async function logout(){ await post('/api/auth/logout'); location.href='/login.html'; }
+/* Account sheet: who is signed in, and the way out. Reachable from the
+   header on every tab, not buried in the feed card. */
+async function acctWho(){
+  try{ const j=await api('/api/auth/me'); if(j&&j.ok) return j; }catch(e){}
+  return null;
+}
+async function acctSheet(){
+  const j=await acctWho();
+  const who=j?j.id:'—', role=j?String(j.role||'').replace(/_/g,' '):'';
+  sheet('Account', `
+    <div class="hint">signed in as</div>
+    <div style="font-weight:700;font-size:15px;word-break:break-all;margin-top:3px">${esc(who)}</div>
+    ${role?`<div class="hint" style="margin-top:2px">${esc(role)}</div>`:''}
+    <button class="chip sm" style="margin-top:14px" onclick="location.href='/live.html'">🖥 Desktop site</button>
+    <button class="chip" id="acctOut" style="width:100%;margin-top:10px;justify-content:center;color:var(--red);border-color:rgba(255,86,119,.45)" onclick="logout()">Sign out</button>`);
+}
+async function acctInit(){
+  const j=await acctWho();
+  if(j) $('#acctInitial').textContent=String(j.id||'?').trim().charAt(0).toUpperCase();
+}
+// Leave for the login page even if the request fails: a user who asked to sign
+// out must never be left sitting inside the app.
+async function logout(){
+  const b=$('#acctOut'); if(b){ b.disabled=true; b.textContent='Signing out…'; }
+  try{ await post('/api/auth/logout'); }catch(e){}
+  try{ localStorage.removeItem('mon:rows:m'); }catch(e){}
+  location.replace('/login.html');
+}
 
 function msg(t){ const m=$('#qMsg'); m.textContent=t; if(t) setTimeout(()=>{ if(m.textContent===t) m.textContent=''; },4000); }
 

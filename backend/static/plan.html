@@ -29,6 +29,16 @@
   .ewin{background:rgba(168,128,255,.10);border:1px solid rgba(168,128,255,.35);border-radius:8px;padding:8px 12px;font-size:12.5px;margin-top:10px}
   .spacer{flex:1}
   select,button.act{background:var(--panel2);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-family:var(--mono);font-size:12px;cursor:pointer}
+  .acct{position:relative}
+  .acct-menu{position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:215px;background:var(--panel);
+    border:1px solid var(--border);border-radius:10px;padding:11px;box-shadow:0 14px 34px rgba(0,0,0,.5);font-family:var(--sans,inherit)}
+  .acct-menu .who{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em}
+  .acct-menu .whoid{font-size:13px;font-weight:700;color:var(--ink);margin:3px 0 1px;word-break:break-all}
+  .acct-menu .whorole{font-size:11.5px;color:var(--muted);margin-bottom:10px}
+  .acct-out{width:100%;background:var(--red-bg);border:1px solid rgba(255,93,108,.45);color:var(--red);
+    border-radius:8px;padding:8px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer}
+  .acct-out:hover{background:var(--red);color:#0b0f17}
+  .acct-out:disabled{opacity:.6;cursor:default}
   button.act:hover{border-color:var(--blue)}
   .wrap{max-width:1280px;margin:0 auto;padding:18px}
   .disc{background:var(--amber-bg);border:1px solid rgba(232,178,74,.35);color:var(--amber);border-radius:10px;padding:9px 14px;font-size:12.5px;margin-bottom:16px}
@@ -204,6 +214,15 @@
   <button class="act" id="buildBtn" onclick="runBuild()" title="Build the plan for the next session (heavy)">⚙ Build next</button>
   <button class="act" id="scoreBtn" onclick="runScore()" title="Score the selected date vs actual candles">✓ Score date</button>
   <a class="act" href="/live.html" style="text-decoration:none">← Chart</a>
+  <div class="acct">
+    <button class="act" id="acctBtn" onclick="acctToggle(event)" title="Account">👤 <span id="acctWho">…</span> ▾</button>
+    <div class="acct-menu" id="acctMenu" hidden onclick="event.stopPropagation()">
+      <div class="who">signed in as</div>
+      <div class="whoid" id="acctId">—</div>
+      <div class="whorole" id="acctRole"></div>
+      <button class="acct-out" id="acctOut" onclick="doLogout()">Sign out</button>
+    </div>
+  </div>
 </header>
 
 <div class="wrap">
@@ -1382,6 +1401,57 @@ reload();
 resumeBuildIfRunning();
 loadAutoStatus();
 setInterval(loadAutoStatus, 120000);
+
+/* ---------- account: who is signed in, and signing out ----------
+   The session is a cookie the server sets at login. Signing out asks the
+   server to clear it and then leaves for the login page with replace(), so
+   the browser Back button cannot land back on a page that is no longer
+   authorised. */
+const _acctShort = id => String(id||'').split('@')[0].slice(0,16) || 'account';
+async function acctLoad(){
+  try{
+    const r = await fetch('/api/auth/me');
+    if(!r.ok) return;                                  // 401 -> middleware sends us to login anyway
+    const j = await r.json();
+    if(!j || !j.ok) return;
+    const w=document.getElementById('acctWho'), i=document.getElementById('acctId'), o=document.getElementById('acctRole');
+    if(w) w.textContent=_acctShort(j.id);
+    if(i) i.textContent=j.id||'—';
+    if(o) o.textContent=String(j.role||'').replace(/_/g,' ');
+  }catch(e){}
+}
+function acctOpen(){
+  const m=document.getElementById('acctMenu'), b=document.getElementById('acctBtn');
+  if(!m||!b) return;
+  // The header uses backdrop-filter, which makes it the containing block for a
+  // positioned child — the menu would be measured against the header, not the
+  // window, and get clipped once the header wraps. Move it to <body> and place
+  // it against the viewport, clamped so it can never run off an edge.
+  if(m.parentNode!==document.body) document.body.appendChild(m);
+  m.hidden=false;
+  const r=b.getBoundingClientRect(), w=m.offsetWidth||215;
+  m.style.position='fixed';
+  m.style.top=Math.round(r.bottom+7)+'px';
+  m.style.left=Math.round(Math.max(8, Math.min(r.right-w, window.innerWidth-w-8)))+'px';
+  m.style.right='auto';
+}
+function acctToggle(e){ if(e) e.stopPropagation(); const m=document.getElementById('acctMenu');
+  if(m){ if(m.hidden) acctOpen(); else acctClose(); } }
+function acctClose(){ const m=document.getElementById('acctMenu'); if(m) m.hidden=true; }
+window.addEventListener('resize', acctClose);
+async function doLogout(){
+  const b=document.getElementById('acctOut');
+  if(b){ b.disabled=true; b.textContent='Signing out…'; }
+  // Leave for the login page even if the request fails: a user who asked to
+  // sign out must never be left sitting inside the app.
+  try{ await fetch('/api/auth/logout',{method:'POST'}); }catch(e){}
+  try{ localStorage.removeItem('mon:rows'); localStorage.removeItem('mon:rows:m'); }catch(e){}
+  location.replace('/login.html');
+}
+document.addEventListener('click', acctClose);
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') acctClose(); });
+acctLoad();
+
 </script>
 </body>
 </html>
