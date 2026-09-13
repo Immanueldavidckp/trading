@@ -79,8 +79,11 @@ def auth_login(body: LoginModel):
 
 @app.post("/api/auth/logout")
 def auth_logout():
+    """End the session. A cookie is only removed when the deletion carries the
+    same path/samesite it was set with — otherwise the browser treats it as a
+    different cookie, keeps the original, and the user stays signed in."""
     resp = JSONResponse({"ok": True})
-    resp.delete_cookie(auth.SESSION_COOKIE)
+    resp.delete_cookie(auth.SESSION_COOKIE, path="/", httponly=True, samesite="lax")
     return resp
 
 
