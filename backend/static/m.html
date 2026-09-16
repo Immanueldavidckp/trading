@@ -2269,6 +2269,17 @@ const M_EXIT={target:['g','target hit'],stop:['r','stopped out'],time:['y','time
 const mSt=r=>r.state==='closed'?(M_EXIT[r.exit_kind]||['n','closed']):[M_ST[r.state]||'n',(r.state||'').replace('_',' ')];
 const M_ST={at_entry:'g',in_trade:'g',approaching:'y',watching:'b',closed:'n',broken:'r',ran_away:'r',expired:'n',superseded:'n',duplicate:'n'};
 const M_PHR={ENTRY:0,MONITOR:1,COMPLETED:2,NO_ENTRY:3}, M_STR={in_trade:0,at_entry:0,approaching:1,watching:2,closed:3,broken:4,ran_away:5,expired:6,superseded:7,duplicate:8};
+// Money for a whole group. Rupees are at the plan's own position size — the
+// only figure that adds across trades; the percent is an average, not a sum.
+const mRs=v=>(v<0?'−₹':'₹')+Math.abs(Math.round(v)).toLocaleString('en-IN');
+function mPnl(p){
+  if(!p||!p.n||p.kind==='none') return '';
+  if(p.kind==='at_risk') return p.rupees==null?'':`<span class="d" style="font-weight:500">${mRs(p.rupees)} at risk</span>`;
+  const b=[];
+  if(p.rupees!=null) b.push(`<span class="${cls(p.rupees)}">${p.rupees>=0?'+':''}${mRs(p.rupees)}</span>`);
+  if(p.r!=null) b.push(`<span class="${cls(p.r)}">${p.r>=0?'+':''}${p.r}R</span>`);
+  return b.join(' ')+`<span class="d" style="font-weight:500"> ${p.kind==='booked'?'booked':'open'}</span>`;
+}
 const mEntry=t=>{const u=String(t||'').toUpperCase(); return u.startsWith('LIMIT')?'BUY-LIMIT':u.startsWith('STOP')?'BUY-STOP':(u||'');};
 async function loadSwingMonitor(){
   try{
@@ -2281,12 +2292,12 @@ async function loadSwingMonitor(){
     const g={ENTRY:[],MONITOR:[],COMPLETED:[],NO_ENTRY:[]}; stocks.forEach(st=>(g[st.lead.phase]||g.NO_ENTRY).push(st));
     Object.values(g).forEach(a=>a.sort((x,y)=>((M_STR[x.lead.state]??9)-(M_STR[y.lead.state]??9))));
     g.COMPLETED.sort((x,y)=>String(y.lead.exit_date||'').localeCompare(String(x.lead.exit_date||'')));
-    const cs=j.completed||{};
+    const cs=j.completed||{}, PN=j.pnl||{};
     $('#lpmHd').innerHTML=`Swing monitor · ${j.market_open?'<span class="g">● live</span>':'<span class="d">○ closed</span>'} · `
-      +`<span class="g">${g.ENTRY.length} entry</span> · <span class="b">${g.MONITOR.length} watching</span> · <span style="color:var(--purple)">${g.COMPLETED.length} done${cs.n?` (${cs.wins||0}W/${cs.losses||0}L${cs.net_pct!=null?' '+pct(cs.net_pct):''})`:''}</span> · <span class="d">${g.NO_ENTRY.length} no entry</span> · long-only · 1 position/stock · ${ist(Date.now())}`;
+      +`<span class="g">${g.ENTRY.length} entry</span> · <span class="b">${g.MONITOR.length} watching</span> · <span style="color:var(--purple)">${g.COMPLETED.length} done${cs.n?` (${cs.wins||0}W/${cs.losses||0}L${(PN.COMPLETED||{}).rupees!=null?' '+((PN.COMPLETED.rupees>=0?'+':'')+mRs(PN.COMPLETED.rupees)):''})`:''}</span> · <span class="d">${g.NO_ENTRY.length} no entry</span> · long-only · 1 position/stock · ${ist(Date.now())}`;
     $('#lpmList').innerHTML=['MONITOR','ENTRY','COMPLETED','NO_ENTRY'].map(ph=>{
       const rows=g[ph].map(st=>({...st.lead,_alts:st.alts})); if(!rows.length) return '';
-      return `<div class="hint" style="margin:10px 0 6px;font-weight:700"><span class="pill ${M_PH[ph][0]}">${M_PH[ph][1]}</span> <span class="d">${rows.length}</span></div>`
+      return `<div class="hint" style="margin:10px 0 6px;font-weight:700"><span class="pill ${M_PH[ph][0]}">${M_PH[ph][1]}</span> <span class="d">${rows.length}</span> ${mPnl(PN[ph])}</div>`
         + rows.map(r=>{
           const S=r.setup||{}, z=r.zone||S.zone||{}, T=S.targets||r.targets||[], ep=S.exit_plan||{};
           const k=`${r.plan_date}|${r.tsym}|${r.setup_name}`, open=_mOpen.has(k);

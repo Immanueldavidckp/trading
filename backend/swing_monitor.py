@@ -195,6 +195,7 @@ def evaluate_setup(setup: Dict, plan: Dict, plan_date: _dt.date, prior: Optional
     out = {"setup_name": name, "entry": entry, "stop": stop, "targets": tgts,
            "entry_type": "LIMIT" if _is_limit(setup) else "STOP",
            "zone": setup.get("zone"), "window_sessions": window,
+           "shares": setup.get("shares_for_risk"),
            "entry_by": setup.get("entry_by"), "exit_by": setup.get("exit_by_date")}
 
     # terminal states are final — never re-evaluate a decided setup
@@ -362,6 +363,11 @@ def _close(out: Dict, fill, fill_date, exit_price, exit_date: str, kind: str, he
     realized_pct = round((xp - fill) / fill * 100, 2) if (xp is not None and fill) else None
     risk = abs(fill - float(stop)) if (fill is not None and stop is not None) else None
     realized_r = round((xp - fill) / risk, 2) if (realized_pct is not None and risk) else None
+    # A finished trade's money must be settled here, not recomputed later from
+    # whatever the plan says today. A rebuild can resize the setup, and a closed
+    # trade's result would then silently change.
+    sh = out.get("shares")
+    realized_rupees = round((xp - fill) * int(sh)) if (sh and xp is not None and fill) else None
     tail = ""
     if realized_pct is not None:
         tail = f" → {'+' if realized_pct >= 0 else ''}{realized_pct}%"
@@ -370,6 +376,7 @@ def _close(out: Dict, fill, fill_date, exit_price, exit_date: str, kind: str, he
     return {**out, "phase": "ENTRY", "state": "closed", "fill_price": fill, "fill_date": fill_date,
             "exit_price": xp, "exit_date": exit_date, "exit_kind": kind, "held_sessions": held,
             "realized_pct": realized_pct, "realized_r": realized_r,
+            "realized_rupees": realized_rupees,
             "reason": reason + tail, "changed": True}
 
 
@@ -399,7 +406,8 @@ _ALERT_TITLE = {
 }
 
 
-_EXIT_KEYS = ("exit_price", "exit_date", "exit_kind", "held_sessions", "realized_pct", "realized_r", "broke_zone")
+_EXIT_KEYS = ("exit_price", "exit_date", "exit_kind", "held_sessions", "realized_pct", "realized_r",
+              "realized_rupees", "shares", "broke_zone")
 
 
 def _record(cur, PH, plan_date: str, tsym: str, res: Dict, prior: Optional[Dict]) -> Optional[Dict]:
@@ -439,10 +447,20 @@ def _record(cur, PH, plan_date: str, tsym: str, res: Dict, prior: Optional[Dict]
                     res[k] = ps[k]
         except Exception:
             pass
+    # Once a position exists it keeps the size it was taken at. A plan rebuilt
+    # mid-trade must not restate what an open or finished trade is worth.
+    if res.get("fill_price") and prior and prior.get("snapshot"):
+        try:
+            ps = json.loads(prior["snapshot"] or "{}")
+            if ps.get("shares"):
+                res["shares"] = ps["shares"]
+        except Exception:
+            pass
     snap = {k: res.get(k) for k in ("ltp", "dist_pct", "dist_atr", "sessions_left", "unrealized_pct",
                                     "entry", "stop", "targets", "entry_type", "zone", "entry_by", "exit_by",
                                     "broke_zone", "exit_price", "exit_date", "exit_kind",
-                                    "held_sessions", "realized_pct", "realized_r")}
+                                    "held_sessions", "realized_pct", "realized_r",
+                                    "realized_rupees", "shares")}
     fill_price = res.get("fill_price", (prior or {}).get("fill_price"))
     fill_date = res.get("fill_date", (prior or {}).get("fill_date"))
     cur.execute(
@@ -694,6 +712,8 @@ def status(plan_date: Optional[str] = None, refresh: bool = True) -> Dict:
     return {"ok": True, "at": _now_iso(), "market_open": _market_open_now(),
             "counts": counts, "unacked_alerts": unacked, "rows": rows,
             "completed": _completed_summary([x for x in rows if x["phase"] == "COMPLETED"]),
+            "pnl": {ph: _phase_pnl([x for x in rows if x["phase"] == ph], ph)
+                    for ph in ("MONITOR", "ENTRY", "COMPLETED", "NO_ENTRY")},
             "rules": {"approach_atr": APPROACH_ATR, "run_away_atr": RUN_AWAY_ATR,
                       "completed_keep_days": COMPLETED_KEEP_DAYS}}
 
@@ -730,6 +750,74 @@ def _backfill_exit(x: Dict) -> None:
         x["realized_pct"] = round((x["exit_price"] - fill) / fill * 100, 2)
         if stop is not None and abs(fill - stop) > 0:
             x["realized_r"] = round((x["exit_price"] - fill) / abs(fill - stop), 2)
+
+
+def _row_shares(r: Dict) -> Optional[int]:
+    """The size this position was taken at, falling back to today's plan for a
+    row that predates the frozen figure."""
+    n = r.get("shares") or (r.get("setup") or {}).get("shares_for_risk")
+    try:
+        return int(n) if n else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_pnl(r: Dict, phase: str):
+    """(percent, R, rupees) for one row, or None where there is no position."""
+    if phase == "COMPLETED":
+        pct, rr, fill, px = r.get("realized_pct"), r.get("realized_r"), r.get("fill_price"), r.get("exit_price")
+        if pct is not None and r.get("realized_rupees") is not None:
+            return pct, rr, float(r["realized_rupees"])          # settled at the close
+    elif phase == "ENTRY":
+        pct, rr, fill = r.get("unrealized_pct"), r.get("r_now"), r.get("fill_price")
+        px = r.get("ltp") or r.get("last_close")
+    else:
+        return None
+    if pct is None:
+        return None
+    sh = _row_shares(r)
+    rup = (px - fill) * sh if (sh and fill and px is not None) else None
+    return pct, rr, rup
+
+
+def _phase_pnl(rows: List[Dict], phase: str) -> Dict:
+    """What one section of the board is worth right now.
+
+    Percentages are not additive across trades — a 5% gain on a small position
+    and a 5% loss on a large one do not cancel — so the headline number is
+    rupees at the size the plan specified, with total R beside it. The average
+    percent is reported separately, never a sum.
+    """
+    n = len(rows)
+    if phase == "MONITOR":
+        # nothing is filled, so there is no profit or loss. What matters here is
+        # what these setups would put at risk if every one of them filled.
+        risk, priced = 0.0, 0
+        for r in rows:
+            st = r.get("setup") or {}
+            sh = _row_shares(r)
+            entry = st.get("entry", r.get("entry"))
+            stop = st.get("stop", r.get("stop"))
+            if sh and entry is not None and stop is not None:
+                risk += abs(entry - stop) * sh
+                priced += 1
+        return {"n": n, "kind": "at_risk", "priced": priced,
+                "rupees": round(risk) if priced else None}
+    if phase == "NO_ENTRY":
+        return {"n": n, "kind": "none", "priced": 0}
+
+    vals = [v for v in (_row_pnl(r, phase) for r in rows) if v]
+    pcts = [v[0] for v in vals]
+    rs = [v[1] for v in vals if v[1] is not None]
+    rup = [v[2] for v in vals if v[2] is not None]
+    wins = sum(1 for p in pcts if p > 0)
+    return {"n": n, "kind": "booked" if phase == "COMPLETED" else "open",
+            "priced": len(pcts), "sized": len(rup),
+            "wins": wins, "losses": len(pcts) - wins,
+            "hit_rate": round(wins / len(pcts) * 100, 1) if pcts else None,
+            "rupees": round(sum(rup)) if rup else None,
+            "r": round(sum(rs), 2) if rs else None,
+            "avg_pct": round(sum(pcts) / len(pcts), 2) if pcts else None}
 
 
 def _completed_summary(rows) -> Dict:
