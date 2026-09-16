@@ -88,6 +88,10 @@
   .phase{border:1px solid var(--border);border-radius:12px;margin-bottom:14px;overflow:hidden;background:var(--panel2)}
   .phase-h{display:flex;align-items:center;gap:10px;padding:10px 16px;font-weight:800;border-bottom:1px solid var(--border)}
   .phase-h .n{font-family:var(--mono);font-weight:500;color:var(--faint);font-size:12px}
+  /* money for the whole section, right next to its count */
+  .phase-h .pnl{display:flex;align-items:baseline;gap:8px;font-family:var(--mono);font-size:12px;font-weight:700}
+  .phase-h .pnl .sub{font-weight:500;font-size:11px;color:var(--faint)}
+  .phase-h .pnl .flat{color:var(--muted);font-weight:500}
   .phase.ENTRY .phase-h{color:var(--green);background:rgba(47,208,140,.08)}
   .phase.MONITOR .phase-h{color:var(--blue);background:rgba(94,142,255,.08)}
   .phase.COMPLETED .phase-h{color:var(--violet);background:rgba(168,128,255,.08)}
@@ -689,6 +693,24 @@ const STATE_HELP={
 // refresh never collapses what you opened. MONITOR comes first: at_entry and
 // approaching are the things you must act on in the next few minutes.
 const MON_ORDER=['MONITOR','ENTRY','COMPLETED','NO_ENTRY'];
+// Money for a whole section. Rupees are at the plan's own position size, which
+// is the only figure that adds up across trades — percentages do not, so the
+// percent shown is an average and is labelled as one.
+const rupee=v=>(v<0?'−₹':'₹')+Math.abs(Math.round(v)).toLocaleString('en-IN');
+function phasePnl(p){
+  if(!p) return '';
+  if(p.kind==='none'||!p.n) return `<span class="pnl"><span class="flat">no money at stake</span></span>`;
+  if(p.kind==='at_risk') return p.rupees==null ? '' :
+    `<span class="pnl"><span class="flat">${rupee(p.rupees)} at risk if all fill</span></span>`;
+  const bits=[];
+  if(p.rupees!=null) bits.push(`<b class="${p.rupees>=0?'pos':'neg'}">${p.rupees>=0?'+':''}${rupee(p.rupees)}</b>`);
+  if(p.r!=null) bits.push(`<span class="${p.r>=0?'pos':'neg'}">${p.r>=0?'+':''}${p.r}R</span>`);
+  const tail=[];
+  if(p.avg_pct!=null) tail.push(`avg ${pct(p.avg_pct)}/trade`);
+  if(p.kind==='booked'&&p.hit_rate!=null) tail.push(`${fmt(p.hit_rate,0)}% hit`);
+  tail.push(p.kind==='booked'?'booked':'open');
+  return `<span class="pnl">${bits.join(' ')}<span class="sub">${tail.join(' · ')}</span></span>`;
+}
 const _monOpenRows=new Set(JSON.parse(localStorage.getItem('mon:rows')||'[]'));
 const _monOpenSec=Object.assign({MONITOR:true,ENTRY:true,COMPLETED:true,NO_ENTRY:false}, JSON.parse(localStorage.getItem('mon:sec')||'{}'));
 const rowKey=r=>`${r.plan_date}|${r.tsym}|${r.setup_name}`;
@@ -712,11 +734,11 @@ async function renderMonitor(){
     const nAct=rows.filter(r=>r.state==='at_entry').length, nApp=rows.filter(r=>r.state==='approaching').length;
     const stockCount=ph=>new Set(rows.filter(r=>r.phase===ph).map(r=>r.plan_date+'|'+r.tsym)).size;
     c.MONITOR=stockCount('MONITOR'); c.ENTRY=stockCount('ENTRY'); c.COMPLETED=stockCount('COMPLETED'); c.NO_ENTRY=stockCount('NO_ENTRY');
-    const cs=j.completed||{};
+    const cs=j.completed||{}, cp=(j.pnl||{}).COMPLETED||{}, op=(j.pnl||{}).ENTRY||{};
     tiles.innerHTML=[
       ['MONITOR',c.MONITOR||0,`${nAct} at entry · ${nApp} approaching`,nAct?'pos':''],
-      ['ENTRY',c.ENTRY||0,'filled / in trade','pos'],
-      ['COMPLETED',c.COMPLETED||0,cs.n?`${cs.wins||0}W · ${cs.losses||0}L${cs.hit_rate!=null?` · ${fmt(cs.hit_rate,0)}% hit`:''}${cs.net_pct!=null?` · net ${pct(cs.net_pct)}`:''}${cs.net_r!=null?` (${cs.net_r>=0?'+':''}${cs.net_r}R)`:''}`:'closed trades, last 60 days', cs.net_pct>0?'pos':cs.net_pct<0?'neg':''],
+      ['ENTRY',c.ENTRY||0,op.rupees!=null?`open ${op.rupees>=0?'+':''}${rupee(op.rupees)}${op.r!=null?` (${op.r>=0?'+':''}${op.r}R)`:''}`:'filled / in trade', op.rupees>0?'pos':op.rupees<0?'neg':''],
+      ['COMPLETED',c.COMPLETED||0,cs.n?`${cs.wins||0}W · ${cs.losses||0}L${cs.hit_rate!=null?` · ${fmt(cs.hit_rate,0)}% hit`:''}${cp.rupees!=null?` · ${cp.rupees>=0?'+':''}${rupee(cp.rupees)}`:''}${cp.r!=null?` (${cp.r>=0?'+':''}${cp.r}R)`:''}`:'closed trades, last 60 days', cp.rupees>0?'pos':cp.rupees<0?'neg':''],
       ['NO_ENTRY',c.NO_ENTRY||0,'decided: no trade','']]
       .map(([k,v,d,cl])=>`<div class="tile" style="cursor:pointer" onclick="jumpToPhase('${k}')" title="Jump to ${k.replace('_',' ')}"><div class="t">${k.replace('_',' ')}</div><div class="v ${cl}">${v}</div><div class="d">${d}</div></div>`).join('');
     const badge=$('monBadge'); badge.style.display=(nAct+nApp)?'':'none'; badge.textContent=nAct+nApp;
@@ -738,7 +760,7 @@ async function renderMonitor(){
     box.innerHTML=MON_ORDER.map(ph=>{
       const g=groups[ph];
       const nSet=g.reduce((n,st)=>n+1+st.alts.length,0);
-      return `<div class="phase ${ph}${_monOpenSec[ph]?' open':''}"><div class="phase-h" onclick="toggleMonSec('${ph}')"><span class="arw">▸</span>${PHASE_LABEL[ph]}<span class="n">${g.length} stock${g.length===1?'':'s'}${nSet!==g.length?` · ${nSet} setups`:''}</span></div>
+      return `<div class="phase ${ph}${_monOpenSec[ph]?' open':''}"><div class="phase-h" onclick="toggleMonSec('${ph}')"><span class="arw">▸</span>${PHASE_LABEL[ph]}<span class="n">${g.length} stock${g.length===1?'':'s'}${nSet!==g.length?` · ${nSet} setups`:''}</span>${phasePnl((j.pnl||{})[ph])}</div>
         <div class="phase-b">${g.length?g.map(st=>monRow(st.lead,st.alts)).join(''):`<div class="empty" style="padding:18px">none</div>`}</div></div>`;
     }).join('');
     await loadAlerts();
