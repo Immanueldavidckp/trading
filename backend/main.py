@@ -1144,6 +1144,19 @@ def swing_monitor_status(date: Optional[str] = None, refresh: bool = True):
     return swing_monitor.status(plan_date=date, refresh=refresh)
 
 
+@app.get("/api/swing/review")
+def swing_review(days: int = 60, candles: bool = True):
+    """Post-mortem of finished swings: which lost, what the plan thought of them,
+    and what the numbers say to stop doing. `candles=1` also checks whether a
+    stopped stock came back to entry/T1 afterwards (the stop-too-tight test)."""
+    import swing_review, traceback
+    try:
+        return swing_review.review(days=max(1, min(int(days), 365)), with_candles=bool(candles))
+    except Exception as e:
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/swing/monitor/alerts")
 def swing_monitor_alerts(since_id: int = 0, limit: int = 50, unacked: bool = False):
     """Transition alerts, newest first. Poll with `since_id` = the last id you
