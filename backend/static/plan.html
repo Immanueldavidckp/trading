@@ -92,6 +92,21 @@
   .phase-h .pnl{display:flex;align-items:baseline;gap:8px;font-family:var(--mono);font-size:12px;font-weight:700}
   .phase-h .pnl .sub{font-weight:500;font-size:11px;color:var(--faint)}
   .phase-h .pnl .flat{color:var(--muted);font-weight:500}
+  /* post-mortem panel at the top of COMPLETED */
+  .rev{margin:10px 12px 6px;border:1px solid var(--border);border-radius:10px;background:var(--panel);overflow:hidden}
+  .rev-h{display:flex;align-items:center;gap:10px;padding:9px 14px;font-weight:800;cursor:pointer;user-select:none;color:var(--violet);flex-wrap:wrap}
+  .rev-h .q{font-weight:500;color:var(--faint);font-family:var(--mono);font-size:11.5px}
+  .rev-b{display:none;padding:0 14px 12px} .rev.open .rev-b{display:block}
+  .rev h6{margin:12px 0 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+  .fnd{border-left:3px solid var(--border);padding:6px 10px;margin:6px 0;border-radius:0 8px 8px 0;background:var(--panel2)}
+  .fnd.high{border-color:var(--red)} .fnd.med{border-color:var(--amber)} .fnd.info{border-color:var(--blue)}
+  .fnd b{display:block;font-size:13px} .fnd .d{color:var(--muted);font-size:12.5px;margin-top:2px} .fnd .fx{color:var(--green);font-size:12.5px;margin-top:3px}
+  .rev table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:11.5px}
+  .rev th,.rev td{padding:4px 8px;text-align:right;border-bottom:1px solid var(--border);white-space:nowrap}
+  .rev th{color:var(--faint);font-weight:600;text-transform:uppercase;font-size:10.5px;letter-spacing:.04em}
+  .rev td:first-child,.rev th:first-child{text-align:left}
+  .rev tr.small{opacity:.55}
+  .rev .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
   .phase.ENTRY .phase-h{color:var(--green);background:rgba(47,208,140,.08)}
   .phase.MONITOR .phase-h{color:var(--blue);background:rgba(94,142,255,.08)}
   .phase.COMPLETED .phase-h{color:var(--violet);background:rgba(168,128,255,.08)}
@@ -764,7 +779,67 @@ async function renderMonitor(){
         <div class="phase-b">${g.length?g.map(st=>monRow(st.lead,st.alts)).join(''):`<div class="empty" style="padding:18px">none</div>`}</div></div>`;
     }).join('');
     await loadAlerts();
+    // the post-mortem is fetched after the board is up so a slow candle read never delays it
+    loadReview().then(d=>{ const host=document.querySelector('.phase.COMPLETED .phase-b'); if(host&&d){ const old=host.querySelector('.rev'); const html=reviewPanel(d); if(old) old.outerHTML=html; else host.insertAdjacentHTML('afterbegin',html); } });
   }catch(e){ box.innerHTML='<div class="empty">could not load the monitor</div>'; }
+}
+
+// ---- post-mortem: why the losses (rendered at the top of COMPLETED) ----
+// Heavier than the board (it reads candles to see whether a stopped stock came
+// back), so it refreshes every 5 minutes, not every 30 s.
+let _rev=null, _revAt=0, _revOpen=localStorage.getItem('mon:rev')!=='0';
+function toggleRev(){ _revOpen=!_revOpen; localStorage.setItem('mon:rev',_revOpen?'1':'0'); const el=document.querySelector('.rev'); if(el){ el.classList.toggle('open',_revOpen); const a=el.querySelector('.rev-h .arw'); if(a) a.style.transform=`rotate(${_revOpen?90:0}deg)`; } }
+async function loadReview(){
+  if(_rev && Date.now()-_revAt<300000) return _rev;
+  try{ const j=await fetch('/api/swing/review?days=60').then(r=>r.json()); if(j.ok){ _rev=j; _revAt=Date.now(); } }catch(e){}
+  return _rev;
+}
+const rf=(v,d=2)=>v==null?'—':Number(v).toFixed(d);
+const rR=v=>v==null?'—':(v>=0?'+':'')+Number(v).toFixed(2)+'R';
+function bucketTable(title, rows, minN){
+  if(!rows||!rows.length) return '';
+  return `<div><h6>${title}</h6><table><tr><th>bucket</th><th>n</th><th>W</th><th>L</th><th>hit</th><th>exp R</th><th>sum R</th><th>₹</th></tr>
+    ${rows.map(b=>`<tr class="${b.priced<minN?'small':''}"><td>${b.bucket}</td><td>${b.priced}</td><td>${b.wins}</td><td>${b.losses}</td>
+      <td class="${b.hit>=50?'pos':b.hit!=null?'neg':''}">${b.hit==null?'—':rf(b.hit,0)+'%'}</td>
+      <td class="${b.exp_r>0?'pos':b.exp_r<0?'neg':''}">${b.exp_r==null?'—':rR(b.exp_r)}</td>
+      <td>${b.sum_r==null?'—':rR(b.sum_r)}</td><td>${b.rupees==null?'—':rupee(b.rupees)}</td></tr>`).join('')}</table></div>`;
+}
+function reviewPanel(d){
+  if(!d||!d.ok) return '';
+  const t=d.totals||{};
+  if(!t.n) return '';
+  const stops=d.stopped||[];
+  const back=x=>x.recovered_entry==null?'<span class="q" title="no daily candles stored for this stock after the exit">no data</span>':x.recovered_t1?'<span class="pos">reached T1</span>':x.recovered_entry?'<span class="pos">back to entry</span>':'no';
+  return `<div class="rev${_revOpen?' open':''}">
+    <div class="rev-h" onclick="toggleRev()"><span class="arw" style="display:inline-block;width:12px;transform:rotate(${_revOpen?90:0}deg)">▸</span>
+      Why the losses — post-mortem of ${t.n} finished trades
+      <span class="q">hit ${rf(t.hit,0)}% vs break-even ${rf(t.breakeven_hit,0)}% · avg win ${rR(t.avg_win_r)} · avg loss ${rR(t.avg_loss_r)} · ${rR(t.exp_r)}/trade · peak ${d.peak_concurrent} open at once</span></div>
+    <div class="rev-b">
+      ${(d.findings||[]).map(f=>`<div class="fnd ${f.severity}"><b>${f.title}</b><div class="d">${f.detail}</div>${f.fix?`<div class="fx">→ ${f.fix}</div>`:''}</div>`).join('')}
+      <h6>Stopped out — worst first · what the plan said on the evening it was built</h6>
+      <div style="overflow-x:auto"><table>
+        <tr><th>stock</th><th>score</th><th>conv</th><th>setup</th><th>quality</th><th>stop %</th><th>stop ATR</th><th>filled</th><th>exit</th><th>R</th><th>₹</th><th>gap thru</th><th>came back?</th></tr>
+        ${stops.map(x=>`<tr><td><b>${x.tsym}</b>${x.broke_zone?' <span class="neg" title="filled and closed below the stop the same session">zone broke</span>':''}</td>
+          <td>${x.score??'—'}</td><td>${x.conviction||'—'}</td><td title="${(x.setup||'')}">${x.type}</td><td>${x.quality||'—'}</td>
+          <td>${rf(x.stop_pct)}%</td><td>${rf(x.stop_atr)}</td><td>${x.fill_lag!=null?'day '+x.fill_lag:'—'} <span class="q">${(x.fill_date||'').slice(5)}</span></td>
+          <td>${(x.exit_date||'').slice(5)}</td><td class="neg">${rR(x.r)}</td><td class="neg">${x.rupees==null?'—':rupee(x.rupees)}</td>
+          <td>${x.gap_through_pct==null?'—':rf(x.gap_through_pct)+'%'}</td><td>${back(x)}</td></tr>`).join('')}
+      </table></div>
+      ${(d.clusters||[]).length?`<h6>Loss days — stops per exit date</h6><table>${d.clusters.map(c=>`<tr><td>${c.date}</td><td>${c.stops} stops</td><td style="text-align:left;white-space:normal" class="q">${c.names.join(', ')}</td></tr>`).join('')}</table>`:''}
+      <div class="grid2">
+        ${bucketTable('How trades ended',d.by.exit_kind,d.min_n)}
+        ${bucketTable('By setup type',d.by.type,d.min_n)}
+        ${bucketTable('By conviction',d.by.conviction,d.min_n)}
+        ${bucketTable('By plan score',d.by.score,d.min_n)}
+        ${bucketTable('By stop distance',d.by.stop_atr,d.min_n)}
+        ${bucketTable('By fill day',d.by.fill_lag,d.min_n)}
+        ${bucketTable('By quality',d.by.quality,d.min_n)}
+        ${bucketTable('By entry type',d.by.entry_type,d.min_n)}
+        ${bucketTable('By zone kind',d.by.zone_kind,d.min_n)}
+        ${bucketTable('By sector',d.by.sector,d.min_n)}
+      </div>
+      <div class="q" style="margin-top:8px">Rows marked faint have fewer than ${d.min_n} trades and are not used for any finding. Costs assumed ${d.cost_pct}% of notional per round trip.</div>
+    </div></div>`;
 }
 
 // short setup label for the one-line header
