@@ -304,7 +304,7 @@ def score_swing_plans(plan_date: str) -> Dict:
 
 # ── read APIs ───────────────────────────────────────────────────────────────
 
-def get_swing_report(plan_date: str) -> Dict:
+def get_swing_report(plan_date: str, summary: bool = False) -> Dict:
     ensure_tables()
     conn = _db.connect()
     try:
@@ -315,10 +315,31 @@ def get_swing_report(plan_date: str) -> Dict:
         cur.close()
     finally:
         conn.close()
-    from plan_pipeline import _backfill_sectors, _sector_counts
+    from plan_pipeline import _backfill_sectors, _sector_counts, summarize_plan
     _backfill_sectors(plans)
-    return {"ok": True, "plan_date": plan_date, "count": len(plans),
-            "sectors": _sector_counts(plans), "plans": plans}
+    out = [summarize_plan(x, "swing") for x in plans] if summary else plans
+    return {"ok": True, "plan_date": plan_date, "count": len(plans), "summary": bool(summary),
+            "sectors": _sector_counts(plans), "plans": out}
+
+
+def get_swing_one(plan_date: str, tsym: str) -> Dict:
+    """The full swing plan for one stock — fetched when its row is opened."""
+    ensure_tables()
+    conn = _db.connect()
+    try:
+        cur = conn.cursor(); PH = _db.PLACE
+        cur.execute(f"SELECT plan_json FROM swing_plans WHERE plan_date={PH} AND tsym={PH}",
+                    [plan_date, tsym.upper()])
+        row = cur.fetchone()
+        cur.close()
+    finally:
+        conn.close()
+    if not row:
+        return {"ok": False, "error": f"no swing plan for {tsym} on {plan_date}"}
+    from plan_pipeline import _backfill_sectors
+    plan = json.loads(row[0])
+    _backfill_sectors([plan])
+    return {"ok": True, "plan": plan}
 
 
 def get_swing_scorecard(plan_date: str) -> Dict:

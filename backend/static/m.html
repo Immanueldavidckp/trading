@@ -1786,7 +1786,8 @@ async function loadPlanData(){
   out.innerHTML='<div class="empty"><span class="spin"></span></div>';
   try{
     if(S.planSub==='plan'){
-      const d=await api(`${P.api().report}?date=${S.planDate}`);
+      // summaries only: a stock's full plan loads the first time its card opens
+      const d=await api(`${P.api().report}?summary=1&date=${S.planDate}`);
       // sort once — this order drives the cards, the sector groups and the TXT
       d.plans=(d.plans||[]).slice().sort(pByPriority);
       P.data=d;
@@ -1827,7 +1828,30 @@ async function loadPlanData(){
     }
   }catch(e){ out.innerHTML='<div class="empty">could not load</div>'; }
 }
-function wireCards(){ $$('.pc-h').forEach(h=>h.onclick=()=>h.parentElement.classList.toggle('open')); }
+async function pEnsureFull(i){
+  const list=(P.data&&P.data.plans)||[]; const p=list[i];
+  if(!p||!p._summary) return p;
+  const one=S.planMode==='swing'?'/api/swing/one':'/api/plan/one';
+  const j=await api(`${one}?date=${encodeURIComponent(S.planDate)}&tsym=${encodeURIComponent(p.tsym)}`);
+  if(!j.ok||!j.plan) throw new Error(j.error||'no plan');
+  list[i]=Object.assign(j.plan,{sector:j.plan.sector||p.sector});
+  return list[i];
+}
+function wireCards(){ $$('.pc-h').forEach(h=>h.onclick=async()=>{
+  const card=h.parentElement;
+  if(!card.querySelector('.lazy')){ card.classList.toggle('open'); return; }
+  if(card.dataset.loading) return;
+  card.dataset.loading='1'; card.classList.add('open');
+  const i=+String(card.id||'').replace('card','');
+  try{
+    await pEnsureFull(i);
+    card.outerHTML=planCardFor(P.data.plans[i],i);
+    const fresh=$('#card'+i); if(fresh){ fresh.classList.add('open'); const fh=fresh.querySelector('.pc-h'); if(fh) fh.onclick=()=>fresh.classList.toggle('open'); }
+  }catch(e){
+    delete card.dataset.loading; card.classList.remove('open');
+    const b=card.querySelector('.lazy'); if(b) b.textContent='could not load details — tap to try again';
+  }
+}); }
 
 const planCardFor=(p,i)=>S.planMode==='swing'?swingCard(p,i):dayCard(p,i);
 
@@ -1944,7 +1968,7 @@ function dayCard(p,i){
         <div class="hint" style="margin-top:4px">${p.num_setups||0} setups · max ${p.max_trades||0} trades · ₹${nf(p.turnover_cr,0)}cr</div>
       </div>
     </div>
-    <div class="pc-b">
+    <div class="pc-b">${p._summary?'<div class="empty lazy" style="padding:14px">loading details…</div>':`
       <h4>Today's read</h4>
       <div class="scen">🎯 ${esc(h.read||'—')}${h.primary_play?`<br><br>▶ <b>${esc(h.primary_play)}</b>`:''}</div>
       ${ul(h.if_then)}
@@ -1975,6 +1999,7 @@ function dayCard(p,i){
         <button class="chip sm" onclick="event.stopPropagation();openChart('${esc(p.tsym)}')">📈 Chart</button>
         <button class="chip sm" onclick="event.stopPropagation();dlOne(${i})">⬇ TXT</button>
       </div>
+`}
     </div></div>`;
 }
 function swingCard(p,i){
@@ -1996,7 +2021,7 @@ function swingCard(p,i){
         <div class="hint" style="margin-top:4px">${p.num_setups||0} setup(s) · RS ${nf(t.momentum_percentile,0)} pctile · template ${t.template_passes||0}/7 · ATR ${nf(pr.atr_pct,1)}%/d</div>
       </div>
     </div>
-    <div class="pc-b">
+    <div class="pc-b">${p._summary?'<div class="empty lazy" style="padding:14px">loading details…</div>':`
       <h4>The read</h4>
       <div class="scen">🎯 ${esc(h.read||'—')}${h.primary_play?`<br><br>▶ <b>${esc(h.primary_play)}</b>`:''}</div>
       ${(p.score_parts||[]).length?`<div class="hint">score: ${esc((p.score_parts||[]).join(' · '))}</div>`:''}
@@ -2034,6 +2059,7 @@ function swingCard(p,i){
         <button class="chip sm" onclick="event.stopPropagation();openChart('${esc(p.tsym)}')">📈 Chart</button>
         <button class="chip sm" onclick="event.stopPropagation();dlOne(${i})">⬇ TXT</button>
       </div>
+`}
     </div></div>`;
 }
 /* the engines report rates as fractions (hit_rate 1 == 100%) but percentage
@@ -2196,14 +2222,22 @@ function planToTxt(p){
   W('');
   return ln.join('\n');
 }
-function dlOne(i){
-  const p=(P.data&&P.data.plans||[])[i]; if(!p) return;
+async function dlOne(i){
+  let p=(P.data&&P.data.plans||[])[i]; if(!p) return;
+  try{ p=await pEnsureFull(i); }catch(e){ return pStatus('Could not load '+p.tsym+' to save it.','err'); }
   dl(`${S.planMode==='swing'?'swing':'plan'}_${p.tsym}_${S.planDate}.txt`,planToTxt(p));
 }
-function downloadPlanTxt(){
+async function downloadPlanTxt(){
   if(!S.planDate) return pStatus('Pick a date first.','err');
   if(S.planSub==='plan'){
-    const plans=(P.data&&P.data.plans)||[];
+    let plans=(P.data&&P.data.plans)||[];
+    // the list holds summaries; a full export needs every full plan
+    if(plans.some(p=>p._summary)){
+      pStatus('Preparing the full plan…');
+      try{ const full=await api(`${P.api().report}?date=${S.planDate}`); plans=(full.plans||[]).slice().sort(pByPriority); }
+      catch(e){ return pStatus('Could not load the full plan.','err'); }
+      pStatus('');
+    }
     if(!plans.length) return pStatus('No plans stored for '+S.planDate+'.','err');
     const head=[S.planMode==='swing'?'SWING PLAN (2-15 day delivery holds)':'DAILY PLAN',
       `${S.planDate} · ${plans.length} stocks (top volume leaders <= ₹300)`,
@@ -2283,7 +2317,7 @@ function mPnl(p){
 const mEntry=t=>{const u=String(t||'').toUpperCase(); return u.startsWith('LIMIT')?'BUY-LIMIT':u.startsWith('STOP')?'BUY-STOP':(u||'');};
 async function loadSwingMonitor(){
   try{
-    const j=await api('/api/swing/monitor');
+    const j=await api('/api/swing/monitor?refresh=0');
     if(!j.ok){ $('#lpmList').innerHTML=`<div class="empty">${esc(j.error||'no swing plan to monitor')}</div>`; $('#lpmHd').textContent=''; return; }
     const c=j.counts||{};
     // one card per STOCK: its setups are alternative entries (first fill cancels the rest)
