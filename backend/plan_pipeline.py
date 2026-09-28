@@ -323,7 +323,34 @@ def score_daily_plans(plan_date: str) -> Dict:
 
 # ── read APIs (for the report endpoints) ────────────────────────────────────
 
-def get_plan_report(plan_date: str) -> Dict:
+# What a collapsed row needs: identity, ranking, the one-line read, and the
+# chips. Everything else — levels, setups, order blocks, volume profile — is
+# only drawn when a stock is opened, and is fetched then.
+_SUMMARY_KEYS = ("tsym", "plan_date", "sector", "score", "conviction", "bias", "stage",
+                 "universe_rank", "last_close", "turnover_cr", "num_setups", "max_trades")
+
+
+def summarize_plan(p: Dict, kind: str = "day") -> Dict:
+    s = {k: p.get(k) for k in _SUMMARY_KEYS if k in p}
+    if s.get("num_setups") is None:
+        s["num_setups"] = len(p.get("setups") or [])
+    h = p.get("headline")
+    s["headline"] = {"read": h.get("read")} if isinstance(h, dict) else h
+    if not isinstance(s.get("num_setups"), int):
+        s["num_setups"] = len(p.get("setups") or []) if isinstance(p.get("setups"), list) else 0
+    if kind == "swing":
+        # Older and no-trade plans can store these as plain text; the card
+        # header then shows a dash rather than the whole list failing.
+        T = p.get("trend") if isinstance(p.get("trend"), dict) else {}
+        pr = p.get("profile") if isinstance(p.get("profile"), dict) else {}
+        s["trend"] = {"momentum_percentile": T.get("momentum_percentile"),
+                      "template_passes": T.get("template_passes")}
+        s["profile"] = {"atr_pct": pr.get("atr_pct")}
+    s["_summary"] = True
+    return s
+
+
+def get_plan_report(plan_date: str, summary: bool = False) -> Dict:
     ensure_tables()
     conn = _db.connect()
     try:
@@ -336,8 +363,28 @@ def get_plan_report(plan_date: str) -> Dict:
     finally:
         conn.close()
     _backfill_sectors(plans)
-    return {"ok": True, "plan_date": plan_date, "count": len(plans),
-            "sectors": _sector_counts(plans), "plans": plans}
+    out = [summarize_plan(x, "day") for x in plans] if summary else plans
+    return {"ok": True, "plan_date": plan_date, "count": len(plans), "summary": bool(summary),
+            "sectors": _sector_counts(plans), "plans": out}
+
+
+def get_plan_one(plan_date: str, tsym: str) -> Dict:
+    """The full plan for one stock — fetched when its row is opened."""
+    ensure_tables()
+    conn = _db.connect()
+    try:
+        cur = conn.cursor(); PH = _db.PLACE
+        cur.execute(f"SELECT plan_json FROM daily_plans WHERE plan_date={PH} AND tsym={PH}",
+                    [plan_date, tsym.upper()])
+        row = cur.fetchone()
+        cur.close()
+    finally:
+        conn.close()
+    if not row:
+        return {"ok": False, "error": f"no plan for {tsym} on {plan_date}"}
+    plan = json.loads(row[0])
+    _backfill_sectors([plan])
+    return {"ok": True, "plan": plan}
 
 
 def _backfill_sectors(plans: List[Dict]) -> None:

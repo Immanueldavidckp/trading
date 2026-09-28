@@ -1020,15 +1020,23 @@ def plan_score_ep(plan_date: str):
 
 
 @app.get("/api/plan/report")
-def plan_report(date: Optional[str] = None):
-    """The evening plan report for a target session (default: latest built)."""
+def plan_report(date: Optional[str] = None, summary: bool = False):
+    """The evening plan report for a target session (default: latest built).
+    `summary=1` returns only what a collapsed row shows; open a stock with
+    /api/plan/one for its full plan."""
     import plan_pipeline
     if not date:
         d = plan_pipeline.list_plan_dates().get("plan_dates") or []
         if not d:
             return {"ok": False, "error": "no plans built yet"}
         date = d[0]
-    return plan_pipeline.get_plan_report(date)
+    return plan_pipeline.get_plan_report(date, summary=summary)
+
+
+@app.get("/api/plan/one")
+def plan_one(date: str, tsym: str):
+    import plan_pipeline
+    return plan_pipeline.get_plan_one(date, tsym)
 
 
 @app.get("/api/plan/scorecard")
@@ -1103,15 +1111,22 @@ def swing_score_ep(plan_date: str):
 
 
 @app.get("/api/swing/report")
-def swing_report(date: Optional[str] = None):
-    """The evening swing plan report (default: latest built)."""
+def swing_report(date: Optional[str] = None, summary: bool = False):
+    """The evening swing plan report (default: latest built). `summary=1`
+    returns only what a collapsed row shows; /api/swing/one gives one stock."""
     import swing_pipeline
     if not date:
         d = swing_pipeline.list_swing_dates().get("plan_dates") or []
         if not d:
             return {"ok": False, "error": "no swing plans built yet"}
         date = d[0]
-    return swing_pipeline.get_swing_report(date)
+    return swing_pipeline.get_swing_report(date, summary=summary)
+
+
+@app.get("/api/swing/one")
+def swing_one(date: str, tsym: str):
+    import swing_pipeline
+    return swing_pipeline.get_swing_one(date, tsym)
 
 
 @app.get("/api/swing/scorecard")

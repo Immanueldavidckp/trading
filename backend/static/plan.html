@@ -287,6 +287,9 @@ const todayIST=()=>new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata
 const api={
   dates:   () =>MODE==='day'?'/api/plan/dates':'/api/swing/dates',
   report:  d =>(MODE==='day'?'/api/plan/report?date=':'/api/swing/report?date=')+d,
+  // the list only needs each stock's header; its full plan loads when opened
+  summary: d =>(MODE==='day'?'/api/plan/report?summary=1&date=':'/api/swing/report?summary=1&date=')+d,
+  one:     (d,t)=>(MODE==='day'?'/api/plan/one?date=':'/api/swing/one?date=')+d+'&tsym='+encodeURIComponent(t),
   scorecard:d=>(MODE==='day'?'/api/plan/scorecard?date=':'/api/swing/scorecard?date=')+d,
   build:   () =>MODE==='day'?'/api/plan/build':'/api/swing/build',
   score:   d =>(MODE==='day'?'/api/plan/score?plan_date=':'/api/swing/score?plan_date=')+d,
@@ -416,7 +419,7 @@ async function renderPlan(date){
   $('expandBtn').style.display = VIEW==='sector' ? '' : 'none';
   if(!date){ ubar.innerHTML=''; cards.innerHTML='<div class="empty">No '+(MODE==='swing'?'swing':'day')+' plan built yet. Click <b>⚙ Build next</b> to generate it for the top-200 stocks under ₹300.</div>'; return; }
   cards.innerHTML='<div class="empty">loading…</div>';
-  const j=await fetch(api.report(date)).then(r=>r.json());
+  const j=await fetch(api.summary(date)).then(r=>r.json());
   if(!j.ok||!j.plans.length){ cards.innerHTML='<div class="empty">No '+(MODE==='swing'?'swing ':'')+'plans for '+date+'.</div>'; ubar.innerHTML=''; PLANS=[]; return; }
   // Sort ONCE here: PLANS is the priority order everywhere after this — the
   // cards, the sector groups and the TXT exports all index into it.
@@ -441,6 +444,31 @@ async function renderPlan(date){
 }
 
 const cardFor=(p,i)=>MODE==='swing'?swingCard(p,i):planCard(p,i);
+// The list arrives as summaries. The first time a card is opened its full plan
+// is fetched and the card redrawn in place; after that it opens instantly.
+async function ensureFull(i){
+  const p=PLANS[i]; if(!p||!p._summary) return p;
+  const j=await fetch(api.one(p.plan_date||PLAN_DATE,p.tsym)).then(r=>r.json());
+  if(!j.ok||!j.plan) throw new Error(j.error||'no plan');
+  PLANS[i]=Object.assign(j.plan,{sector:j.plan.sector||p.sector});
+  return PLANS[i];
+}
+async function openCard(i){
+  const el=$('card'+i); if(!el) return;
+  const p=PLANS[i];
+  if(!p||!p._summary){ el.classList.toggle('open'); return; }
+  if(el.dataset.loading) return;
+  el.dataset.loading='1'; el.classList.add('open');
+  try{
+    await ensureFull(i);
+    const now=$('card'+i);
+    if(now){ now.outerHTML=cardFor(PLANS[i],i); const again=$('card'+i); if(again) again.classList.add('open'); }
+  }catch(e){
+    delete el.dataset.loading;
+    const b=el.querySelector('.lazy'); if(b) b.textContent='could not load details — click the row to try again';
+    el.classList.remove('open');
+  }
+}
 
 function renderCards(){
   const cards=$('cards');
@@ -518,14 +546,14 @@ function planCard(p,i){
   const zline=arr=>(arr||[]).map(x=>`${x.kind} ${fmt(x.bottom)}–${fmt(x.top)}`).join(' · ')||'—';
   const sw=p.swing_outlook||{};
   return `<div class="card${hasEntry(p)?' hasentry':''}" id="card${i}">
-    <div class="chead" onclick="document.getElementById('card${i}').classList.toggle('open')">
+    <div class="chead" onclick="openCard(${i})">
       <div class="rankn">${p.universe_rank||i+1}</div>
       <div><div class="sym">${p.tsym} <span class="csub">₹${fmt(p.last_close)} · ${p.day_type_hint?'':''}</span></div>
         <div class="csub">${h.read||''}</div>
         <div class="csub">${p.num_setups} setups · take max ${p.max_trades} · ${p.turnover_cr?('₹'+p.turnover_cr+'cr turnover'):''}</div></div>
       <div class="chips">${metaChips(p)}<button class="dlbtn" onclick="event.stopPropagation();openChart('${p.tsym}')" title="Open ${p.tsym} on the chart">📈 Chart</button><button class="dlbtn" onclick="event.stopPropagation();downloadOne(${i})" title="Save ${p.tsym}'s plan as a text file">⬇ TXT</button>${biasChip(p.bias)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
     </div>
-    <div class="cbody">
+    <div class="cbody">${p._summary?'<div class="empty lazy" style="padding:16px">loading details…</div>':`
       <div class="headline">
         <div class="hl-read">🎯 ${h.read||p.day_type_hint||''}</div>
         ${h.primary_play?`<div class="hl-play"><b>▶ Primary play —</b> ${h.primary_play}</div>`:''}
@@ -555,6 +583,7 @@ function planCard(p,i){
       <ul class="rules no">${(p.no_trade||[]).map(r=>`<li>${r}</li>`).join('')}</ul>
       <h4>Risk rules</h4>
       <ul class="rules">${(p.risk_rules||[]).map(r=>`<li>${r}</li>`).join('')}</ul>
+`}
     </div></div>`;
 }
 
@@ -633,14 +662,14 @@ function swingCard(p,i){
   const scoreParts=Object.entries(sp).map(([k,v])=>`${k.replace(/_/g,' ')} ${v}`).join(' · ');
   const flags=[pr.nr7?'NR7':null,pr.inside_nr4?'inside+NR4':null,pr.bbw_126_low?'BB-squeeze':null,pr.atr_contracting?'ATR↓':null].filter(Boolean).join(' · ')||'none';
   return `<div class="card${hasEntry(p)?' hasentry':''}" id="card${i}">
-    <div class="chead" onclick="document.getElementById('card${i}').classList.toggle('open')">
+    <div class="chead" onclick="openCard(${i})">
       <div class="rankn">${p.universe_rank||i+1}</div>
       <div><div class="sym">${p.tsym} <span class="csub">₹${fmt(p.last_close)}</span></div>
         <div class="csub">${p.headline||''}</div>
         <div class="csub">${p.num_setups} setup(s) · RS ${T.momentum_percentile!=null?T.momentum_percentile+' pctile':'—'} · template ${T.template_passes??'—'}/7 · ATR ${fmt(pr.atr_pct)}%/d${p.turnover_cr?(' · ₹'+p.turnover_cr+'cr turnover'):''}</div></div>
       <div class="chips">${metaChips(p)}<button class="dlbtn" onclick="event.stopPropagation();openChart('${p.tsym}')" title="Open ${p.tsym} on the chart">📈 Chart</button><button class="dlbtn" onclick="event.stopPropagation();downloadOne(${i})" title="Save ${p.tsym}'s swing plan as a text file">⬇ TXT</button>${biasChip(p.bias)}${stageChip(p.stage)}<span class="chip ${p.conviction}">${p.conviction}</span><span class="chip score">score ${p.score}</span></div>
     </div>
-    <div class="cbody">
+    <div class="cbody">${p._summary?'<div class="empty lazy" style="padding:16px">loading details…</div>':`
       <div class="headline">
         <div class="hl-read">🎯 ${p.headline||''}</div>
         <div class="csub mono">score: ${scoreParts}</div>
@@ -683,6 +712,7 @@ function swingCard(p,i){
       <h4>Risk rules</h4>
       <ul class="rules">${(p.risk_rules||[]).map(r=>`<li>${r}</li>`).join('')}</ul>
       <div class="csub" style="margin-top:10px">${p.cost_note||''}</div>
+`}
     </div></div>`;
 }
 
@@ -738,7 +768,10 @@ function jumpToPhase(ph){ _monOpenSec[ph]=true; saveMon(); const el=document.que
 async function renderMonitor(){
   const bar=$('monBar'), tiles=$('monTiles'), box=$('monPhases');
   try{
-    const j=await fetch('/api/swing/monitor').then(r=>r.json());
+    // refresh=0: the server's own ticker re-evaluates every minute. Asking it to
+    // re-run the whole evaluation on every 30 s page refresh is what made the
+    // tab slow under load.
+    const j=await fetch('/api/swing/monitor?refresh=0').then(r=>r.json());
     if(!j.ok){ box.innerHTML=`<div class="empty">${j.error||'no swing plans to monitor'}</div>`; bar.innerHTML=''; return; }
     const c=j.counts||{};
     bar.innerHTML=`Swing setup monitor · ${j.market_open?'<b style="color:var(--green)">● market open — live prices</b>':'<span class="q">○ market closed — last close</span>'}`
@@ -779,16 +812,32 @@ async function renderMonitor(){
         <div class="phase-b">${g.length?g.map(st=>monRow(st.lead,st.alts)).join(''):`<div class="empty" style="padding:18px">none</div>`}</div></div>`;
     }).join('');
     await loadAlerts();
-    // the post-mortem is fetched after the board is up so a slow candle read never delays it
-    loadReview().then(d=>{ const host=document.querySelector('.phase.COMPLETED .phase-b'); if(host&&d){ const old=host.querySelector('.rev'); const html=reviewPanel(d); if(old) old.outerHTML=html; else host.insertAdjacentHTML('afterbegin',html); } });
+    // the post-mortem is a stub until clicked; once loaded it is redrawn from cache
+    paintRev();
   }catch(e){ box.innerHTML='<div class="empty">could not load the monitor</div>'; }
 }
 
 // ---- post-mortem: why the losses (rendered at the top of COMPLETED) ----
 // Heavier than the board (it reads candles to see whether a stopped stock came
 // back), so it refreshes every 5 minutes, not every 30 s.
-let _rev=null, _revAt=0, _revOpen=localStorage.getItem('mon:rev')!=='0';
-function toggleRev(){ _revOpen=!_revOpen; localStorage.setItem('mon:rev',_revOpen?'1':'0'); const el=document.querySelector('.rev'); if(el){ el.classList.toggle('open',_revOpen); const a=el.querySelector('.rev-h .arw'); if(a) a.style.transform=`rotate(${_revOpen?90:0}deg)`; } }
+// Nothing is fetched until the panel is opened: the analysis reads candles for
+// every stopped trade and is the heaviest request on the page.
+let _rev=null, _revAt=0, _revOpen=false, _revBusy=false;
+function revHost(){ return document.querySelector('.phase.COMPLETED .phase-b'); }
+function revStub(){
+  return `<div class="rev"><div class="rev-h" onclick="toggleRev()"><span class="arw" style="display:inline-block;width:12px">▸</span>
+    Why the losses — post-mortem<span class="q">${_revBusy?'analysing finished trades…':'click to analyse the finished trades'}</span></div></div>`;
+}
+function paintRev(){
+  const host=revHost(); if(!host) return;
+  const html=(_rev&&_revOpen)?reviewPanel(_rev):(_rev&&!_revOpen)?reviewPanel(_rev).replace('<div class="rev open">','<div class="rev">'):revStub();
+  const old=host.querySelector('.rev'); if(old) old.outerHTML=html; else host.insertAdjacentHTML('afterbegin',html);
+}
+async function toggleRev(){
+  _revOpen=!_revOpen;
+  if(_revOpen && !_rev){ _revBusy=true; paintRev(); await loadReview(); _revBusy=false; }
+  paintRev();
+}
 async function loadReview(){
   if(_rev && Date.now()-_revAt<300000) return _rev;
   try{ const j=await fetch('/api/swing/review?days=60').then(r=>r.json()); if(j.ok){ _rev=j; _revAt=Date.now(); } }catch(e){}
@@ -810,7 +859,7 @@ function reviewPanel(d){
   if(!t.n) return '';
   const stops=d.stopped||[];
   const back=x=>x.recovered_entry==null?'<span class="q" title="no daily candles stored for this stock after the exit">no data</span>':x.recovered_t1?'<span class="pos">reached T1</span>':x.recovered_entry?'<span class="pos">back to entry</span>':'no';
-  return `<div class="rev${_revOpen?' open':''}">
+  return `<div class="rev open">
     <div class="rev-h" onclick="toggleRev()"><span class="arw" style="display:inline-block;width:12px;transform:rotate(${_revOpen?90:0}deg)">▸</span>
       Why the losses — post-mortem of ${t.n} finished trades
       <span class="q">hit ${rf(t.hit,0)}% vs break-even ${rf(t.breakeven_hit,0)}% · avg win ${rR(t.avg_win_r)} · avg loss ${rR(t.avg_loss_r)} · ${rR(t.exp_r)}/trade · peak ${d.peak_concurrent} open at once</span></div>
@@ -1211,8 +1260,9 @@ function downloadText(name, text){
   document.body.appendChild(a); a.click();
   setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},500);
 }
-function downloadOne(i){
-  const p=PLANS[i]; if(!p) return;
+async function downloadOne(i){
+  let p=PLANS[i]; if(!p) return;
+  try{ p=await ensureFull(i); }catch(e){ setStatus('Could not load '+p.tsym+' to save it.'); return; }
   const toText = MODE==='swing' ? swingToText : planToText;
   downloadText(`${MODE==='swing'?'swing':'plan'}_${p.tsym}_${p.plan_date||PLAN_DATE}.txt`, toText(p));
 }
@@ -1222,7 +1272,8 @@ async function downloadAll(){
   if(TAB==='score') return downloadScorecardTxt();
   const date=$('dateSel').value; if(!date){ setStatus('Pick a date first.'); return; }
   let plans=PLANS, d=PLAN_DATE;
-  if(!plans.length || d!==date){
+  // the list holds summaries; a full export needs every full plan
+  if(!plans.length || d!==date || plans.some(p=>p._summary)){
     const j=await fetch(api.report(date)).then(r=>r.json());
     if(!j.ok||!j.plans.length){ setStatus('No plans stored for '+date+'.'); return; }
     plans=(j.plans||[]).slice().sort(byPriority); d=date;

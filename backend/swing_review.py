@@ -366,7 +366,9 @@ def review(days: int = 60, with_candles: bool = True) -> Dict:
     return {"ok": True, "at": M._now_iso(), "days": days, "with_candles": with_candles,
             "totals": t, "by": by, "clusters": clusters[:6], "peak_concurrent": peak,
             "stopped": stops, "trades": rows,
-            "findings": _findings(t, rows, stops, by, clusters),
+            # most severe first; within a level keep the order they were found in
+            "findings": sorted(_findings(t, rows, stops, by, clusters),
+                               key=lambda f: {"high": 0, "med": 1, "info": 2}.get(f["severity"], 3)),
             "min_n": MIN_N, "cost_pct": SWING_ROUND_TRIP_COST_PCT}
 
 

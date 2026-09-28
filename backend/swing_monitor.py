@@ -650,11 +650,22 @@ def status(plan_date: Optional[str] = None, refresh: bool = True) -> Dict:
         # the board reads like the plan page does
         meta = {}
         if rows:
-            dates = sorted({r["plan_date"] for r in rows})
-            marks = ",".join([PH] * len(dates))
-            cur.execute(f"SELECT plan_date,tsym,score,conviction,plan_json FROM swing_plans "
-                        f"WHERE plan_date IN ({marks})", dates)
-            for pd_, t, sc, cv, pj in cur.fetchall():
+            # Only the plans the board actually shows. Reading every plan of the
+            # date meant parsing ~200 large JSON blobs on each refresh to decorate
+            # a few dozen rows.
+            need: Dict[str, set] = {}
+            for r in rows:
+                need.setdefault(r["plan_date"], set()).add(r["tsym"])
+            got = []
+            for pd_, syms in need.items():
+                syms = sorted(syms)
+                for k in range(0, len(syms), 200):
+                    chunk = syms[k:k + 200]
+                    marks = ",".join([PH] * len(chunk))
+                    cur.execute(f"SELECT plan_date,tsym,score,conviction,plan_json FROM swing_plans "
+                                f"WHERE plan_date={PH} AND tsym IN ({marks})", [pd_] + chunk)
+                    got.extend(cur.fetchall())
+            for pd_, t, sc, cv, pj in got:
                 sec, setups, last_close, atr = None, {}, None, None
                 try:
                     pl = json.loads(pj)
