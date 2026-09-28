@@ -179,6 +179,15 @@ def startup_event():
     except Exception as e:
         print(f"Swing monitor failed to start: {e}")
 
+    # Tick-table retention: market_depth / price_changes grow every time a
+    # watched quote moves and had never been pruned — they filled the disk.
+    # Keeps the last TICK_RETENTION_DAYS (default 5), pruned every 6 h.
+    try:
+        import db_retention
+        print(f"Tick retention: {db_retention.start()}")
+    except Exception as e:
+        print(f"Tick retention failed to start: {e}")
+
 # ---------- Watchlist + live quotes (Upstox feed) ----------
 def _feed() -> UpstoxQuoteFeed:
     global feed
@@ -1157,6 +1166,16 @@ def swing_monitor_status(date: Optional[str] = None, refresh: bool = True):
     first. `refresh=true` re-evaluates against live prices before answering."""
     import swing_monitor
     return swing_monitor.status(plan_date=date, refresh=refresh)
+
+
+@app.get("/api/admin/retention")
+def admin_retention():
+    """Tick-table retention: what is kept, when it last ran, and table sizes."""
+    import db_retention
+    try:
+        return {"ok": True, **db_retention.status(), "report": db_retention.report()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/api/swing/review")
